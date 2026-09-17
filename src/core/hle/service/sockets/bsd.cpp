@@ -352,7 +352,14 @@ void BSD_USA::SetSockOpt(HLERequestContext& ctx) {
     LOG_DEBUG(Service, "called. fd={} level={} optname={:#x} optlen={}", fd, level,
               static_cast<u32>(optname), optval.size());
 
-    BuildErrnoResponse(ctx, SetSockOptImpl(fd, level, optname, optval));
+    const Errno bsd_errno = SetSockOptImpl(fd, level, optname, optval);
+    if (bsd_errno != Errno::SUCCESS) {
+        // Named, because a bare "not supported" says nothing about whether it matters: the one
+        // that cost a detour elsewhere was SO_NOSIGPIPE, which is harmless.
+        LOG_WARNING(Service, "setsockopt fd={} level={:#x} optname={:#x} ({} bytes) failed: {}", fd,
+                    level, static_cast<u32>(optname), optval.size(), bsd_errno);
+    }
+    BuildErrnoResponse(ctx, bsd_errno);
 }
 
 void BSD_USA::Shutdown(HLERequestContext& ctx) {
