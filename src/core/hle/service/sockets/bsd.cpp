@@ -561,7 +561,20 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
         descriptor.socket = std::make_shared<Network::Socket>();
     }
 
-    descriptor.socket->Initialize(Translate(domain), Translate(type), Translate(protocol));
+    // [OpenPak] Initialize's Errno must not be dropped. A guest that tests `fd < 0` reads the
+    // descriptor we would otherwise hand back as a perfectly good socket, then calls methods on one
+    // that was never opened. Measured on Ryujinx with Risk of Rain 2 (2026-09-26), which asks for
+    // socket type 0x10000000 -- SOCK_CLOEXEC over a base type of 0: the host rejects it, and
+    // ~100 ms after the emulator reported success the title dereferenced null and died. Eden and
+    // Citron both reached the same end by a shorter road, never having looked at the result.
+    const Network::Errno init_errno =
+        descriptor.socket->Initialize(Translate(domain), Translate(type), Translate(protocol));
+    if (init_errno != Network::Errno::SUCCESS) {
+        LOG_ERROR(Service, "Socket creation failed for fd={} domain={} type={} protocol={}", fd,
+                  domain, type, protocol);
+        file_descriptors[fd].reset();
+        return {-1, Translate(init_errno)};
+    }
     descriptor.is_connection_based = IsConnectionBased(type);
 
     if (Settings::values.airplane_mode.GetValue() && descriptor.is_connection_based) {
