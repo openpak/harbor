@@ -55,6 +55,9 @@ Result IDeliveryCacheDirectoryService::Open(const DirectoryName& dir_name_raw) {
     const auto dir = root->GetSubdirectory(dir_name);
     R_UNLESS(dir != nullptr, ResultFailedOpenEntity);
 
+    // [OpenPak] Kept, or Read and GetCount answer "no open entry" for a directory that did open.
+    current_dir = dir;
+
     R_SUCCEED();
 }
 

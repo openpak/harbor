@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 
@@ -14,15 +15,18 @@
 
 namespace Service::BCAT {
 
-// For a name to be valid it must be non-empty, must have a null terminating character as the final
-// char, can only contain numbers, letters, underscores and a hyphen if directory and a period if
-// file.
+// For a name to be valid it must be non-empty, must contain a null terminating character
+// somewhere in the buffer, and everything before that null can only contain numbers, letters,
+// underscores and a hyphen if directory and a period if file. [OpenPak] Bytes after the null are
+// not part of the name: real callers do not always zero the rest of the buffer.
 constexpr Result VerifyNameValidInternal(std::array<char, 0x20> name, char match_char) {
-    const auto null_chars = std::count(name.begin(), name.end(), 0);
-    const auto bad_chars = std::count_if(name.begin(), name.end(), [match_char](char c) {
-        return !std::isalnum(static_cast<u8>(c)) && c != '_' && c != match_char && c != '\0';
-    });
-    if (null_chars == 0x20 || null_chars == 0 || bad_chars != 0 || name[0x1F] != '\0') {
+    const auto null_pos = std::find(name.begin(), name.end(), '\0');
+    const bool bad_chars =
+        null_pos == name.begin() ||
+        std::any_of(name.begin(), null_pos, [match_char](char c) {
+            return !std::isalnum(static_cast<u8>(c)) && c != '_' && c != match_char;
+        });
+    if (null_pos == name.end() || bad_chars) {
         LOG_ERROR(Service_BCAT, "Name passed was invalid!");
         return ResultInvalidArgument;
     }
