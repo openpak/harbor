@@ -36,6 +36,13 @@ void NetConnect::ExecuteInteractive() {
 void NetConnect::Execute() {
     if (complete)
         return;
+
+    // [OpenPak] Nothing to show: answer and exit as a stubbed applet does, or the title waits on
+    // this applet forever.
+    PushOutData(std::make_shared<IStorage>(system, std::vector<u8>(0x1000)));
+    PushInteractiveOutData(std::make_shared<IStorage>(system, std::vector<u8>(0x1000)));
+    complete = true;
+    Exit();
 }
 
 Result NetConnect::RequestExit() {

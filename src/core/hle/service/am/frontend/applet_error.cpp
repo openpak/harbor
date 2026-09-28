@@ -22,10 +22,11 @@ struct ErrorCode {
     u32 error_category{};
     u32 error_number{};
 
+    // nn::err::ErrorCode is { u32 module; u32 description; }: module is the low word.
     static constexpr ErrorCode FromU64(u64 error_code) {
         return {
-            .error_category{static_cast<u32>(error_code >> 32)},
-            .error_number{static_cast<u32>(error_code & 0xFFFFFFFF)},
+            .error_category{static_cast<u32>(error_code & 0xFFFFFFFF)},
+            .error_number{static_cast<u32>(error_code >> 32)},
         };
     }
 
