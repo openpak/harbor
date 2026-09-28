@@ -391,6 +391,7 @@ private:
         if (state == RequestState::NotSubmitted || state == RequestState::OnHold) {
             const auto has_connection = Network::GetHostIPv4Address().has_value() &&
                                         !Settings::values.airplane_mode.GetValue();
+            awaiting_connection = !has_connection;
             UpdateState(has_connection ? RequestState::Accepted : RequestState::OnHold);
         }
 
@@ -400,6 +401,8 @@ private:
 
     void GetRequestState(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
+
+        AcceptIfConnected();
 
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
@@ -432,6 +435,8 @@ private:
 
     void GetResult(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
+
+        AcceptIfConnected();
 
         const auto result = [this] {
             const auto has_connection = Network::GetHostIPv4Address().has_value() &&
@@ -492,6 +497,18 @@ private:
         rb.Push<u32>(0);
     }
 
+    // [OpenPak] A request submitted while the host had no address is accepted once the host has
+    // one, without the title submitting again: a title that waits on the events or polls the
+    // state has no reason to.
+    void AcceptIfConnected() {
+        if (!awaiting_connection || !Network::GetHostIPv4Address().has_value() ||
+            Settings::values.airplane_mode.GetValue()) {
+            return;
+        }
+        awaiting_connection = false;
+        UpdateState(RequestState::Accepted);
+    }
+
     void UpdateState(RequestState new_state) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
         state = new_state;
@@ -526,6 +543,8 @@ private:
     KernelHelpers::ServiceContext service_context;
 
     RequestState state;
+    // [OpenPak] Submitted with no host address, and not accepted since.
+    bool awaiting_connection = false;
 
     Kernel::KEvent* event1;
     Kernel::KEvent* event2;
