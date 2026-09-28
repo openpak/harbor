@@ -79,9 +79,9 @@ public:
             {155, nullptr, "CreateTokenAsyncWithApplicationId"},
             {156, nullptr, "CreateTokenWithNameAsync"}, // 18.0.0+
             {161, C<&INpnsSystem::GetRequestChangeStateCancelEvent>, "GetRequestChangeStateCancelEvent"}, // 10.0.0+
-            {162, nullptr, "RequestChangeStateForceTimedWithCancelEvent"},
-            {201, nullptr, "RequestChangeStateForceTimed"},
-            {202, nullptr, "RequestChangeStateForceAsync"},
+            {162, C<&INpnsSystem::RequestChangeStateForceTimedWithCancelEvent>, "RequestChangeStateForceTimedWithCancelEvent"},
+            {201, C<&INpnsSystem::RequestChangeStateForceTimed>, "RequestChangeStateForceTimed"},
+            {202, C<&INpnsSystem::RequestChangeStateForceAsync>, "RequestChangeStateForceAsync"},
             {301, nullptr, "GetPassword"}, // 18.0.0+
             {302, nullptr, "GetAllImmigration"}, // 18.0.0+
             {303, nullptr, "GetNotificationHistories"}, // 18.0.0+
@@ -140,6 +140,23 @@ private:
         R_SUCCEED();
     }
 
+    // [OpenPak] QLaunch's "Update" button on the Friends viewer calls these to force a push
+    // state refresh; unimplemented, pressing it threw a fatal (2010-0212).
+    Result RequestChangeStateForceTimedWithCancelEvent() {
+        LOG_WARNING(Service_NPNS, "(STUBBED) called");
+        R_SUCCEED();
+    }
+
+    Result RequestChangeStateForceTimed() {
+        LOG_WARNING(Service_NPNS, "(STUBBED) called");
+        R_SUCCEED();
+    }
+
+    Result RequestChangeStateForceAsync() {
+        LOG_WARNING(Service_NPNS, "(STUBBED) called");
+        R_SUCCEED();
+    }
+
     KernelHelpers::ServiceContext service_context;
     Event get_receive_event;
     Event get_request_change_state_cancel_event;
@@ -158,13 +175,13 @@ public:
             {5, C<&INpnsUser::GetReceiveEvent>, "GetReceiveEvent"},
             {7, nullptr, "GetStateChangeEvent"},
             {8, C<&INpnsUser::ListenToByName>, "ListenToByName"}, // 18.0.0+
-            {21, nullptr, "CreateToken"},
+            {21, C<&INpnsUser::CreateToken>, "CreateToken"},
             {23, nullptr, "DestroyToken"},
             {25, nullptr, "QueryIsTokenValid"},
             {26, nullptr, "ListenToMyApplicationId"},
             {101, nullptr, "Suspend"},
             {102, nullptr, "Resume"},
-            {103, nullptr, "GetState"},
+            {103, C<&INpnsUser::GetState>, "GetState"},
             {104, nullptr, "GetStatistics"},
             {111, nullptr, "GetJid"},
             {120, nullptr, "CreateNotificationReceiver"},
@@ -192,6 +209,17 @@ private:
         LOG_DEBUG(Service_NPNS, "called");
 
         *out_event = get_receive_event.GetHandle();
+        R_SUCCEED();
+    }
+
+    Result CreateToken() {
+        LOG_WARNING(Service_NPNS, "(STUBBED) called");
+        R_SUCCEED();
+    }
+
+    Result GetState(Out<u32> out_state) {
+        LOG_WARNING(Service_NPNS, "(STUBBED) called");
+        *out_state = 0;
         R_SUCCEED();
     }
 

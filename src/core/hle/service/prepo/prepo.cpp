@@ -35,6 +35,7 @@ public:
             {10200, &PlayReport::RequestImmediateTransmission, "RequestImmediateTransmission"},
             {10300, &PlayReport::GetTransmissionStatus, "GetTransmissionStatus"},
             {10400, &PlayReport::GetSystemSessionId, "GetSystemSessionId"},
+            {10500, &PlayReport::SaveReportWithUser<Core::Reporter::PlayReportType::New>, "SendReportWithUser"},
             {20100, &PlayReport::SaveSystemReportOld, "SaveSystemReport"},
             {20101, &PlayReport::SaveSystemReportWithUserOld, "SaveSystemReportWithUser"},
             {20102, &PlayReport::SaveSystemReport, "SaveSystemReport"},
