@@ -102,6 +102,8 @@ private:
     KAddressArbiter m_address_arbiter;
     std::array<u64, 4> m_entropy{};
     u32 m_pointer_buffer_size = 0x8000;  // Default pointer buffer size (can be game-specific later)
+    // [OpenPak] The size above is one the process set itself, not the loader's estimate.
+    bool m_pointer_buffer_size_set_by_guest = false;
     std::array<char, 13> m_name{};
     Svc::CreateProcessFlag m_flags{};
     KMemoryManager::Pool m_memory_pool{};
@@ -265,6 +267,15 @@ public:
 
     void SetPointerBufferSize(u32 size) {
         m_pointer_buffer_size = size;
+    }
+
+    bool IsPointerBufferSizeSetByGuest() const {
+        return m_pointer_buffer_size_set_by_guest;
+    }
+
+    void SetPointerBufferSizeByGuest(u32 size) {
+        m_pointer_buffer_size = size;
+        m_pointer_buffer_size_set_by_guest = true;
     }
 
     Result Terminate(KernelCore& kernel);
