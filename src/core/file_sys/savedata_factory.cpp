@@ -17,7 +17,10 @@ namespace FileSys {
 namespace {
 
 bool ShouldSaveDataBeAutomaticallyCreated(SaveDataSpaceId space, const SaveDataAttribute& attr) {
+    // [OpenPak] A console provisions a title's BCAT delivery cache itself. Splatoon 3 opens it
+    // at startup and, refused, retried every ~500 ms forever.
     return attr.type == SaveDataType::Cache || attr.type == SaveDataType::Temporary ||
+           attr.type == SaveDataType::Bcat ||
            (space == SaveDataSpaceId::User && ///< Normal Save Data -- Current Title & User
             (attr.type == SaveDataType::Account || attr.type == SaveDataType::Device) &&
             attr.program_id == 0 && attr.system_save_data_id == 0);
@@ -137,6 +140,8 @@ std::string SaveDataFactory::GetFullPath(ProgramId program_id, VirtualDir dir,
                            title_id);
     case SaveDataType::Cache:
         return fmt::format("{}save/cache/{:016X}", out, title_id);
+    case SaveDataType::Bcat:
+        return fmt::format("{}save/bcat/{:016X}", out, title_id);
     default:
         ASSERT_MSG(false, "Unrecognized SaveDataType: {:02X}", static_cast<u8>(type));
         return fmt::format("{}save/unknown_{:X}/{:016X}", out, static_cast<u8>(type), title_id);

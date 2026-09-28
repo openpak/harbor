@@ -166,6 +166,20 @@ Result IApplicationFunctions::EnsureSaveData(Out<u64> out_size, Common::UUID use
     R_TRY(system.GetFileSystemController().OpenSaveDataController()->CreateSaveData(
         &save_data, FileSys::SaveDataSpaceId::User, attribute));
 
+    // [OpenPak] A console provisions the title's BCAT delivery cache here too. Splatoon 3 asks
+    // for it at startup and, refused, retried every ~500 ms forever. Titles whose NACP declares
+    // no delivery cache are unaffected.
+    const auto metadata = GetApplicationMetadata(system, m_applet->program_id);
+    if (metadata.first != nullptr && metadata.first->GetBCATDeliveryCacheStorageSize() > 0) {
+        FileSys::SaveDataAttribute bcat_attribute{};
+        bcat_attribute.program_id = m_applet->program_id;
+        bcat_attribute.type = FileSys::SaveDataType::Bcat;
+
+        FileSys::VirtualDir bcat_save_data{};
+        system.GetFileSystemController().OpenSaveDataController()->CreateSaveData(
+            &bcat_save_data, FileSys::SaveDataSpaceId::User, bcat_attribute);
+    }
+
     *out_size = 0;
     R_SUCCEED();
 }

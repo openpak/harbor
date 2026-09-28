@@ -287,6 +287,7 @@ public:
     [[nodiscard]] std::vector<u8> GetRawBytes() const;
     [[nodiscard]] bool GetUserAccountSwitchLock() const;
     [[nodiscard]] u64 GetDeviceSaveDataSize() const;
+    [[nodiscard]] u64 GetBCATDeliveryCacheStorageSize() const;
     [[nodiscard]] u32 GetParentalControlFlag() const;
     [[nodiscard]] const std::array<u8, 0x20>& GetRatingAge() const;
 
