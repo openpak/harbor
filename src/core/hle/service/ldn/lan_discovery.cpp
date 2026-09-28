@@ -490,6 +490,10 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
     case Network::LDNPacketType::ScanResp: {
         LOG_INFO(Frontend, "ScanResp packet received!");
 
+        if (packet.data.size() < sizeof(NetworkInfo)) {
+            break;
+        }
+
         NetworkInfo info{};
         std::memcpy(&info, packet.data.data(), sizeof(NetworkInfo));
         scan_results.insert({info.common.bssid, info});
@@ -498,6 +502,10 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
     }
     case Network::LDNPacketType::Connect: {
         LOG_INFO(Frontend, "Connect packet received!");
+
+        if (packet.data.size() < sizeof(NodeInfo)) {
+            break;
+        }
 
         NodeInfo info{};
         std::memcpy(&info, packet.data.data(), sizeof(NodeInfo));
@@ -523,6 +531,10 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
             std::remove(connected_clients.begin(), connected_clients.end(), packet.local_ip),
             connected_clients.end());
 
+        if (packet.data.size() < sizeof(NodeInfo)) {
+            break;
+        }
+
         NodeInfo info{};
         std::memcpy(&info, packet.data.data(), sizeof(NodeInfo));
 
@@ -543,10 +555,20 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
     }
     case Network::LDNPacketType::SyncNetwork: {
         if (state == State::StationOpened || state == State::StationConnected) {
-            LOG_INFO(Frontend, "SyncNetwork packet received!");
+            if (packet.data.size() < sizeof(NetworkInfo)) {
+                break;
+            }
+
             NetworkInfo info{};
             std::memcpy(&info, packet.data.data(), sizeof(NetworkInfo));
 
+            // A connected station only follows the session it joined.
+            if (state == State::StationConnected &&
+                info.network_id.session_id != network_info.network_id.session_id) {
+                break;
+            }
+
+            LOG_INFO(Frontend, "SyncNetwork packet received!");
             OnSyncNetwork(info);
         } else {
             LOG_INFO(Frontend, "SyncNetwork packet received but in wrong State!");
