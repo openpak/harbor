@@ -348,26 +348,26 @@ public:
             {2, &IRequest::GetSystemEventReadableHandles, "GetSystemEventReadableHandles"},
             {3, &IRequest::Cancel, "Cancel"},
             {4, &IRequest::Submit, "Submit"},
-            {5, nullptr, "SetRequirement"},
+            {5, &IRequest::StubSuccess, "SetRequirement"},
             {6, &IRequest::SetRequirementPreset, "SetRequirementPreset"},
-            {8, nullptr, "SetPriority"},
+            {8, &IRequest::StubSuccess, "SetPriority"},
             {9, &IRequest::SetNetworkProfileId, "SetNetworkProfileId"},
-            {10, nullptr, "SetRejectable"},
+            {10, &IRequest::StubSuccess, "SetRejectable"},
             {11, &IRequest::SetConnectionConfirmationOption, "SetConnectionConfirmationOption"},
-            {12, nullptr, "SetPersistent"},
-            {13, nullptr, "SetInstant"},
-            {14, nullptr, "SetSustainable"},
-            {15, nullptr, "SetRawPriority"},
-            {16, nullptr, "SetGreedy"},
-            {17, nullptr, "SetSharable"},
-            {18, nullptr, "SetRequirementByRevision"},
-            {19, nullptr, "GetRequirement"},
-            {20, nullptr, "GetRevision"},
+            {12, &IRequest::StubSuccess, "SetPersistent"},
+            {13, &IRequest::StubSuccess, "SetInstant"},
+            {14, &IRequest::StubSuccess, "SetSustainable"},
+            {15, &IRequest::StubSuccess, "SetRawPriority"},
+            {16, &IRequest::StubSuccess, "SetGreedy"},
+            {17, &IRequest::StubSuccess, "SetSharable"},
+            {18, &IRequest::StubSuccess, "SetRequirementByRevision"},
+            {19, &IRequest::StubSuccess, "GetRequirement"},
+            {20, &IRequest::GetRevision, "GetRevision"},
             {21, &IRequest::GetAppletInfo, "GetAppletInfo"},
-            {22, nullptr, "GetAdditionalInfo"},
-            {23, nullptr, "SetKeptInSleep"},
-            {24, nullptr, "RegisterSocketDescriptor"},
-            {25, nullptr, "UnregisterSocketDescriptor"},
+            {22, &IRequest::GetAdditionalInfo, "GetAdditionalInfo"},
+            {23, &IRequest::StubSuccess, "SetKeptInSleep"},
+            {24, &IRequest::StubSuccess, "RegisterSocketDescriptor"},
+            {25, &IRequest::StubSuccess, "UnregisterSocketDescriptor"},
             {26, nullptr, "GetNetworkAccessStatus"}, //21.0.0+
         };
         RegisterHandlers(functions);
@@ -386,8 +386,12 @@ private:
     void Submit(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
 
-        if (state == RequestState::NotSubmitted) {
-            UpdateState(RequestState::OnHold);
+        // [OpenPak] Resolve at once when the host is online. Nothing else moves the request out
+        // of OnHold, so a title that waits on the event or polls the state hung there.
+        if (state == RequestState::NotSubmitted || state == RequestState::OnHold) {
+            const auto has_connection = Network::GetHostIPv4Address().has_value() &&
+                                        !Settings::values.airplane_mode.GetValue();
+            UpdateState(has_connection ? RequestState::Accepted : RequestState::OnHold);
         }
 
         IPC::ResponseBuilder rb{ctx, 2};
@@ -492,6 +496,31 @@ private:
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
         state = new_state;
         event1->Signal(system.Kernel());
+        // [OpenPak] Splatoon 3's NPLN readiness thread waits on the second event.
+        event2->Signal(system.Kernel());
+    }
+
+    void StubSuccess(HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetRevision(HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(1); // Arbitrary revision number
+    }
+
+    void GetAdditionalInfo(HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(0); // No additional info
     }
 
     KernelHelpers::ServiceContext service_context;
