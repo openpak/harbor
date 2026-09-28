@@ -22,6 +22,8 @@ private:
     void CloneCurrentObjectEx(HLERequestContext& ctx);
     void QueryPointerBufferSize(HLERequestContext& ctx);
     void SetPointerBufferSize(HLERequestContext& ctx);
+
+    bool guest_set_pointer_buffer_size{};
 };
 
 } // namespace Service::SM

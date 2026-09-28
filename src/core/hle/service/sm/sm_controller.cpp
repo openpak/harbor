@@ -76,6 +76,12 @@ void Controller::QueryPointerBufferSize(HLERequestContext& ctx) {
     ASSERT(process != nullptr);
 
     u32 buffer_size = process->GetPointerBufferSize();
+    // [OpenPak] An NPLN gRPC client's presence/friends/catalog/lobby streams all carry pointer
+    // buffers at once; with less than 0xF000 the game aborted on entering online play. A size
+    // the guest set itself wins.
+    if (!guest_set_pointer_buffer_size && buffer_size < 0xF000) {
+        buffer_size = 0xF000;
+    }
     if (buffer_size > (std::numeric_limits<u16>::max)()) {
         LOG_WARNING(Service, "Pointer buffer size exceeds u16 max, clamping");
         buffer_size = (std::numeric_limits<u16>::max)();
@@ -102,6 +108,7 @@ void Controller::SetPointerBufferSize(HLERequestContext& ctx) {
     }
 
     process->SetPointerBufferSize(requested_size);
+    guest_set_pointer_buffer_size = true;
 
     LOG_INFO(Service, "Pointer buffer size dynamically updated to {:#x} bytes by process", requested_size);
 
