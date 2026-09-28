@@ -430,7 +430,7 @@ private:
         LOG_WARNING(Service_NIFM, "(STUBBED) called, ssid_length={}", ssid_length);
 
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(1);
+        rb.Push(ResultSuccess);
     }
 
     void GetResult(HLERequestContext& ctx) {
@@ -490,7 +490,7 @@ private:
 
         ctx.WriteBuffer(out_buffer);
 
-        IPC::ResponseBuilder rb{ctx, 6};
+        IPC::ResponseBuilder rb{ctx, 5};
         rb.Push(ResultSuccess);
         rb.Push<u32>(0);
         rb.Push<u32>(0);
