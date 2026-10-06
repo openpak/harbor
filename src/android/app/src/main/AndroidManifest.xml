@@ -28,7 +28,6 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
@@ -38,7 +37,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
         android:label="${appNameBase}${appNameSuffix}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:hasFragileUserData="false"
         android:supportsRtl="true"
         android:isGame="true"
@@ -96,7 +95,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <data android:mimeType="application/octet-stream" android:scheme="content"/>
             </intent-filter>
             <intent-filter>
-                <action android:name="dev.eden.eden_emulator.LAUNCH_WITH_CUSTOM_CONFIG" />
+                <action android:name="org.openpak.harbor.LAUNCH_WITH_CUSTOM_CONFIG" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <meta-data android:name="android.nfc.action.TECH_DISCOVERED" android:resource="@xml/nfc_tech_filter" />

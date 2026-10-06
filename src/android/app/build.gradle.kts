@@ -8,7 +8,6 @@
 import com.android.build.gradle.api.ApplicationVariant
 import kotlin.collections.setOf
 import org.jlleitschuh.gradle.ktlint.reporter.ReporterType
-import com.github.triplet.gradle.androidpublisher.ReleaseStatus
 import org.gradle.api.tasks.Copy
 
 plugins {
@@ -18,7 +17,6 @@ plugins {
     kotlin("plugin.serialization") version "1.9.20"
     id("androidx.navigation.safeargs.kotlin")
     id("org.jlleitschuh.gradle.ktlint") version "11.4.0"
-    id("com.github.triplet.play") version "3.8.6"
     id("idea")
 }
 
@@ -64,7 +62,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "dev.eden.eden_emulator"
+        applicationId = "org.openpak.harbor.eden"
         minSdk = 24
         targetSdk = 36
         versionName = getGitVersion()
@@ -182,7 +180,7 @@ android {
     }
 
     // appNameBase is used for the primary identifier
-    // this should be "Eden <flavorName>"
+    // this should be "Harbor <flavorName>"
     flavorDimensions.add("version")
     productFlavors {
         create("mainline") {
@@ -190,26 +188,8 @@ android {
             isDefault = true
             minSdk = 33
 
-            manifestPlaceholders += mapOf("appNameBase" to "Eden")
-            resValue("string", "app_name_suffixed", "Eden")
-
-            ndk {
-                abiFilters += listOf("arm64-v8a")
-            }
-        }
-
-        create("genshinSpoof") {
-            dimension = "version"
-            minSdk = 35
-            manifestPlaceholders += mapOf("appNameBase" to "Eden Optimized")
-            resValue("string", "app_name_suffixed", "Eden Optimized")
-            applicationId = "com.miHoYo.Yuanshen"
-
-            externalNativeBuild {
-                cmake {
-                    arguments.add("-DGENSHIN_SPOOF=ON")
-                }
-            }
+            manifestPlaceholders += mapOf("appNameBase" to "Harbor")
+            resValue("string", "app_name_suffixed", "Harbor")
 
             ndk {
                 abiFilters += listOf("arm64-v8a")
@@ -219,9 +199,8 @@ android {
         create("legacy") {
             dimension = "version"
             minSdk = 29
-            manifestPlaceholders += mapOf("appNameBase" to "Eden Legacy")
-            resValue("string", "app_name_suffixed", "Eden Legacy")
-            applicationId = "dev.legacy.eden_emulator"
+            manifestPlaceholders += mapOf("appNameBase" to "Harbor")
+            resValue("string", "app_name_suffixed", "Harbor")
 
             externalNativeBuild {
                 cmake {
@@ -239,22 +218,6 @@ android {
                 abiFilters += listOf("arm64-v8a")
             }
         }
-
-        create("chromeOS") {
-            dimension = "version"
-            manifestPlaceholders += mapOf("appNameBase" to "Eden ChromeOS")
-            resValue("string", "app_name_suffixed", "Eden ChromeOS")
-
-            ndk {
-                abiFilters += listOf("x86_64")
-            }
-
-            externalNativeBuild {
-                cmake {
-                    abiFilters("x86_64")
-                }
-            }
-        }
     }
 
     externalNativeBuild {
@@ -265,12 +228,12 @@ android {
     }
 
     productFlavors.all {
-        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Eden"
+        val currentName = manifestPlaceholders["appNameBase"] as? String ?: "Harbor"
         val suffix = if (isNightly) " Nightly" else ""
 
         // apply nightly suffix I/A
         resValue("string", "app_name_suffixed", "$currentName$suffix")
-        resValue("string", "app_name", "Eden$suffix")
+        resValue("string", "app_name", "Harbor$suffix")
     }
 
     sourceSets {
@@ -319,15 +282,6 @@ ktlint {
     reporters {
         reporter(ReporterType.CHECKSTYLE)
     }
-}
-
-play {
-    val keyPath = System.getenv("SERVICE_ACCOUNT_KEY_PATH")
-    if (keyPath != null) {
-        serviceAccountCredentials.set(File(keyPath))
-    }
-    track.set(System.getenv("STORE_TRACK") ?: "internal")
-    releaseStatus.set(ReleaseStatus.COMPLETED)
 }
 
 dependencies {
