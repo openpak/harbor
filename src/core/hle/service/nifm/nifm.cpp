@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include "core/core.h"
@@ -361,7 +362,7 @@ public:
             {16, &IRequest::StubSuccess, "SetGreedy"},
             {17, &IRequest::StubSuccess, "SetSharable"},
             {18, &IRequest::StubSuccess, "SetRequirementByRevision"},
-            {19, &IRequest::StubSuccess, "GetRequirement"},
+            {19, &IRequest::GetRequirement, "GetRequirement"},
             {20, &IRequest::GetRevision, "GetRevision"},
             {21, &IRequest::GetAppletInfo, "GetAppletInfo"},
             {22, &IRequest::GetAdditionalInfo, "GetAdditionalInfo"},
@@ -386,14 +387,12 @@ private:
     void Submit(HLERequestContext& ctx) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
 
-        // [OpenPak] Resolve at once when the host is online. Nothing else moves the request out
-        // of OnHold, so a title that waits on the event or polls the state hung there.
-        if (state == RequestState::NotSubmitted || state == RequestState::OnHold) {
-            const auto has_connection = Network::GetHostIPv4Address().has_value() &&
-                                        !Settings::values.airplane_mode.GetValue();
-            awaiting_connection = !has_connection;
-            UpdateState(has_connection ? RequestState::Accepted : RequestState::OnHold);
-        }
+        // [OpenPak] Decide at once, from any state, and signal both events every time: a title
+        // that waits on them or polls the state would otherwise hang in OnHold or never wake.
+        const auto has_connection = Network::GetHostIPv4Address().has_value() &&
+                                    !Settings::values.airplane_mode.GetValue();
+        awaiting_connection = !has_connection;
+        UpdateState(has_connection ? RequestState::Accepted : RequestState::OnHold);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -420,14 +419,11 @@ private:
     }
 
     void SetNetworkProfileId(HLERequestContext& ctx) {
+        // The argument is an nn::util::Uuid (16 bytes), not an SSID length.
         IPC::RequestParser rp{ctx};
-        const auto ssid_length = rp.Pop<u32>();
-        if (ssid_length > 0x20) {
-            LOG_ERROR(Service_NIFM, "Invalid SSID length: {}", ssid_length);
-            IPC::ResponseBuilder{ctx, 2}.Push(ResultInvalidInput);
-            return;
-        }
-        LOG_WARNING(Service_NIFM, "(STUBBED) called, ssid_length={}", ssid_length);
+        const auto profile_id = rp.PopRaw<std::array<u8, 0x10>>();
+        LOG_WARNING(Service_NIFM, "(STUBBED) called, profile_id_first_bytes={:02x}{:02x}",
+                    profile_id[0], profile_id[1]);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -461,6 +457,16 @@ private:
         rb.Push(result);
     }
 
+    void GetRequirement(HLERequestContext& ctx) {
+        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        // nn::nifm::Requirement is 0x24 bytes on 3.0.0+; no requirement is tracked.
+        constexpr std::array<u8, 0x24> requirement{};
+        IPC::ResponseBuilder rb{ctx, 2 + sizeof(requirement) / sizeof(u32)};
+        rb.Push(ResultSuccess);
+        rb.PushRaw(requirement);
+    }
+
     void GetSystemEventReadableHandles(HLERequestContext& ctx) {
         LOG_WARNING(Service_NIFM, "(STUBBED) called");
 
@@ -471,6 +477,11 @@ private:
 
     void Cancel(HLERequestContext& ctx) {
         LOG_WARNING(Service_NIFM, "(STUBBED) called");
+
+        // The request goes back to Free/Error and says so on the first event.
+        awaiting_connection = false;
+        state = RequestState::Invalid;
+        event1->Signal(system.Kernel());
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
