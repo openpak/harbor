@@ -135,6 +135,18 @@ Files: src/android/app/src/main/res/*
 Copyright: 2023 yuzu Emulator Project
 License: GPL-3.0-or-later
 
+Files: src/android/app/src/main/res/drawable/ic_launcher_background.xml
+       src/android/app/src/main/res/drawable/ic_launcher_foreground.xml
+       src/android/app/src/main/res/drawable/ic_launcher_monochrome.xml
+       src/android/app/src/main/res/drawable-xhdpi/tv_banner.png
+       src/android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+       src/android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+       src/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+       src/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+       src/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+Copyright: 2026 tobagin
+License: AGPL-3.0-only
+
 Files: src/android/gradle/wrapper/*
 Copyright: 2023 yuzu Emulator Project
 License: GPL-3.0-or-later
