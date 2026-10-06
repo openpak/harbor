@@ -23,7 +23,10 @@ export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export GRADLE_USER_HOME="$SCR/gradle-home"
 export GRADLE_RO_DEP_CACHE=$HOME/.gradle/caches
-JOBS="${NUM_JOBS:-8}"
+JOBS="${NUM_JOBS:-6}"
+
+# The Android Gradle plugin runs ninja without -j, which exhausts memory here, so the
+# compile and link steps are limited with CMake job pools instead.
 
 # Reuse the Gradle distribution already on this machine instead of downloading it again.
 dist=gradle-8.13-bin
@@ -37,7 +40,7 @@ cd "$SRC/src/android"
 locked ./gradlew "$task" \
     -Dorg.gradle.daemon=false \
     -Dorg.gradle.workers.max="$JOBS" \
-    -PYUZU_ANDROID_ARGS="-DYUZU_DOWNLOAD_ANDROID_VVL=OFF" \
+    -PYUZU_ANDROID_ARGS="-DYUZU_DOWNLOAD_ANDROID_VVL=OFF -DCMAKE_JOB_POOLS=compile=$JOBS;link=2 -DCMAKE_JOB_POOL_COMPILE=compile -DCMAKE_JOB_POOL_LINK=link" \
     -Pnightly=false
 
 apk="$SRC/src/android/app/build/outputs/apk/$flavor/release/app-$flavor-release.apk"
