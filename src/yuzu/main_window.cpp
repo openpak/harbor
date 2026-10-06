@@ -358,7 +358,7 @@ inline static bool isDarkMode() {
 
 MainWindow::MainWindow(bool has_broken_vulkan)
     : ui{std::make_unique<Ui::MainWindow>()},
-      input_subsystem{std::make_shared<InputCommon::InputSubsystem>()}, user_data_migrator{this} {
+      input_subsystem{std::make_shared<InputCommon::InputSubsystem>()} {
     QtCommon::Init(this);
 
     Common::FS::CreateEdenPaths();
@@ -367,24 +367,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     Common::Log::Filter filter;
     filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(filter);
-
-    if (user_data_migrator.migrated) {
-        // Sort-of hack whereby we only move the old dir if it's a subfolder of the user dir
-
-        using namespace Common::FS;
-
-        static constexpr const std::array<const EdenPath, 4> paths = {
-            EdenPath::NANDDir, EdenPath::SDMCDir, EdenPath::DumpDir, EdenPath::LoadDir};
-
-        for (const EdenPath& path : paths) {
-            std::string str_path = Common::FS::GetEdenPathString(path);
-            if (str_path.starts_with(user_data_migrator.selected_emu.get_user_dir())) {
-                boost::replace_all(
-                    str_path, user_data_migrator.selected_emu.lower_name().toStdString(), "eden");
-                Common::FS::SetEdenPath(path, str_path);
-            }
-        }
-    }
 
 #ifdef __unix__
     SetupSigInterrupts();
@@ -448,9 +430,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // Gen keys if necessary
     OnCheckFirmwareDecryption();
 
-#ifdef __unix__
-    OnCheckGraphicsBackend();
-#endif
+    // Harbor: no "Wayland Detected!" prompt (OnCheckGraphicsBackend is not called).
 
     // Check for orphaned profiles and reset profile data if necessary
     QtCommon::Content::FixProfiles();

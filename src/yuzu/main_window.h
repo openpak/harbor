@@ -25,7 +25,6 @@
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "yuzu/hotkeys.h"
-#include "yuzu/user_data_migration.h"
 
 #ifdef __unix__
 #include <QDBusObjectPath>
@@ -534,7 +533,6 @@ private:
     // Stores what suffix to add to the FPS counter, e.g. Unlocked.
     QString m_fpsSuffix{};
 
-    UserDataMigrator user_data_migrator;
     std::unique_ptr<QtConfig> config;
 
     // Whether emulation is currently running in yuzu.
