@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include <regex>
 #include <cctype>
+#include <cstring>
+#include <regex>
 
 #include "common/assert.h"
 #include "common/logging.h"
@@ -39,9 +40,23 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
         {"null-render", no_argument, 0, 'n'},
         {"singlecore", no_argument, 0, 's'},
         {"filter", no_argument, 0, 'x'},
+        {"qlaunch", no_argument, 0, 'Q'},
+        {"hlaunch", no_argument, 0, 'H'},
+        {"setup", no_argument, 0, 'S'},
         {0, 0, 0, 0},
         // clang-format on
     };
+
+    // The Qt shortcuts use the single-dash spellings, which getopt would split into short options.
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-qlaunch") == 0) {
+            argv[i] = const_cast<char*>("--qlaunch");
+        } else if (strcmp(argv[i], "-hlaunch") == 0) {
+            argv[i] = const_cast<char*>("--hlaunch");
+        } else if (strcmp(argv[i], "-setup") == 0) {
+            argv[i] = const_cast<char*>("--setup");
+        }
+    }
 
     while (optind < argc) {
         if (int arg = getopt_long(argc, argv, "dc:fhg:m:p:u:vinsx", long_options, &option_index); arg != -1) {
@@ -125,6 +140,15 @@ LaunchParams ParseLaunchParams(Core::System& system, int argc, char *argv[], wch
             case 'x':
                 p.log_filter = argv[optind];
                 ++optind;
+                break;
+            case 'Q':
+                p.launch_qlaunch = true;
+                break;
+            case 'H':
+                p.launch_hlaunch = true;
+                break;
+            case 'S':
+                p.launch_setup = true;
                 break;
             }
         } else {
