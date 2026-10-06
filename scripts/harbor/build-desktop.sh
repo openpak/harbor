@@ -16,6 +16,7 @@ cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DYUZU_TESTS=OFF \
     -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
     -DYUZU_USE_BUNDLED_QT=OFF -DENABLE_QT_TRANSLATION=OFF \
+    -DVulkanHeaders_FORCE_BUNDLED=ON `# vulkan-utility-libraries is not installed on this machine` \
     "$@"
 locked cmake --build "$BUILD" -j"$JOBS"
 
