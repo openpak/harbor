@@ -529,15 +529,7 @@ void BSD_USA::ExecuteWork(HLERequestContext& ctx, Work work) {
 }
 
 std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol protocol) {
-    // user bsd:u has restrictions on SOCK_SEQPACKET and SOCK_RAW
-    if (is_user && (type == Type::SEQPACKET || type == Type::RAW)) {
-        if (type == Type::RAW && domain == Domain::INET && protocol == Protocol::ICMP) {
-            // fine, can use on bsd:s and bsd:u
-        } else {
-            return {-1, Errno::INVAL};
-        }
-    }
-
+    // The type flags come off first, so the bsd:u RAW/SEQPACKET check sees the base type.
     [[maybe_unused]] const bool unk_flag = (static_cast<u32>(type) & 0x20000000) != 0;
     UNIMPLEMENTED_IF_MSG(unk_flag, "Unknown flag in type");
     type = static_cast<Type>(static_cast<u32>(type) & ~0x20000000);
@@ -546,6 +538,15 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
     // type of 0x10000000 and the socket could not be created at all. It has no meaning for an
     // emulated descriptor table, but it must not survive into the base type.
     type = static_cast<Type>(static_cast<u32>(type) & ~0x10000000);
+
+    // user bsd:u has restrictions on SOCK_SEQPACKET and SOCK_RAW
+    if (is_user && (type == Type::SEQPACKET || type == Type::RAW)) {
+        if (type == Type::RAW && domain == Domain::INET && protocol == Protocol::ICMP) {
+            // fine, can use on bsd:s and bsd:u
+        } else {
+            return {-1, Errno::INVAL};
+        }
+    }
 
     // [OpenPak] With the flags gone some titles are left asking for Type::Unspecified, which
     // Translate() cannot map either. Risk of Rain 2 asks for exactly that -- SOCK_CLOEXEC over a
@@ -601,6 +602,7 @@ std::pair<s32, Errno> BSD_USA::SocketImpl(Domain domain, Type type, Protocol pro
 
     if (Settings::values.airplane_mode.GetValue() && descriptor.is_connection_based) {
         LOG_ERROR(Service, "Airplane mode is enabled, cannot create socket");
+        file_descriptors[fd].reset();
         return {-1, Errno::NOTCONN};
     }
 
