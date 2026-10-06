@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Harbor: a lighthouse between two controllers">
+<!-- SPDX-FileCopyrightText: 2026 tobagin -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+  <!-- Original Harbor artwork. Regenerate Android assets with scripts/harbor/generate-android-icons.py. -->
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#213b61"/><stop offset="1" stop-color="#09172c"/></linearGradient></defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <path d="M158,142 H196 V354 H158 A52,52 0 0 1 106,302 V194 A52,52 0 0 1 158,142 Z" fill="#42decb"/>
+  <path d="M316,142 H354 A52,52 0 0 1 406,194 V302 A52,52 0 0 1 354,354 H316 Z" fill="#ff7b78"/>
+  <path d="M137,208 a17,17 0 1 0 34,0 a17,17 0 1 0 -34,0 Z" fill="#16304b"/>
+  <path d="M341,286 a17,17 0 1 0 34,0 a17,17 0 1 0 -34,0 Z" fill="#16304b"/>
+  <path d="M148,260 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M148,290 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M133,275 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M163,275 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z" fill="#16304b"/>
+  <path d="M352,188 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M352,218 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M337,203 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M367,203 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z" fill="#16304b"/>
+  <path d="M228,153 L256,119 L284,153 Z" fill="#f4f7ff"/>
+  <path d="M235,164 H277 V198 H235 Z" fill="#ffda88"/>
+  <path d="M249,164 H263 V198 H249 Z" fill="#fff4cf"/>
+  <path d="M228,206 H284 A6,6 0 0 1 284,218 H228 A6,6 0 0 1 228,206 Z" fill="#f4f7ff"/>
+  <path d="M239,229 H273 L294,355 H218 Z" fill="#f4f7ff"/>
+  <path d="M235,253 H277 L280,271 H232 Z M227,304 H285 L288,322 H224 Z" fill="#193251"/>
+  <path d="M130,377 Q161,354 192,377 T254,377 T316,377 T378,377 L378,393 Q347,416 316,393 T254,393 T192,393 T130,393 Z" fill="#59decf"/>
+</svg>
