@@ -141,7 +141,9 @@ std::string SaveDataFactory::GetFullPath(ProgramId program_id, VirtualDir dir,
     case SaveDataType::Cache:
         return fmt::format("{}save/cache/{:016X}", out, title_id);
     case SaveDataType::Bcat:
-        return fmt::format("{}save/bcat/{:016X}", out, title_id);
+        // BCAT delivery caches live in the system save space, where BISFactory::GetBCATDirectory
+        // reads them, whichever space the request names.
+        return fmt::format("/system/save/bcat/{:016X}", title_id);
     default:
         ASSERT_MSG(false, "Unrecognized SaveDataType: {:02X}", static_cast<u8>(type));
         return fmt::format("{}save/unknown_{:X}/{:016X}", out, static_cast<u8>(type), title_id);
