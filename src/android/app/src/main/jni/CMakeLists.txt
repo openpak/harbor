@@ -28,7 +28,11 @@ if (ARCHITECTURE_arm64)
     target_link_libraries(yuzu-android PRIVATE adrenotools)
 endif()
 
-target_link_libraries(yuzu-android PRIVATE ${FFmpeg_LIBRARIES} OpenSSL::SSL cpp-jwt::cpp-jwt)
+target_link_libraries(yuzu-android PRIVATE ${FFmpeg_LIBRARIES} OpenSSL::SSL)
+# cpp-jwt only exists when the web service or the update checker is built
+if (ENABLE_WEB_SERVICE OR ENABLE_UPDATE_CHECKER)
+    target_link_libraries(yuzu-android PRIVATE cpp-jwt::cpp-jwt)
+endif()
 if (ENABLE_UPDATE_CHECKER)
     target_compile_definitions(yuzu-android PUBLIC ENABLE_UPDATE_CHECKER)
 endif()
