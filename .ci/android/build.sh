@@ -106,10 +106,6 @@ nightly() {
     [ "$NIGHTLY" = "true" ]
 }
 
-if nightly || [ "$DEVEL" != "true" ]; then
-    set -- "$@" -DENABLE_UPDATE_CHECKER=ON
-fi
-
 if nightly; then
     NIGHTLY=true
 else
