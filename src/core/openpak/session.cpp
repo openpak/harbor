@@ -112,6 +112,9 @@ struct Identity {
     std::string thumbnail_url;
     std::string friend_code;
     bool linked = false;
+    std::uint64_t na_id = 0;
+    std::string birthday;
+    std::string country;
 };
 
 struct State {
@@ -474,6 +477,9 @@ struct Login {
     std::string thumbnail_url;
     std::string friend_code;
     bool linked = false;
+    std::uint64_t na_id = 0;
+    std::string birthday;
+    std::string country;
 };
 
 /// The login chain, with no lock held. With a Nintendo Account id_token it goes to /federation,
@@ -607,8 +613,14 @@ bool RunChain(const Endpoint& endpoint, const std::string& uid, const std::strin
         if (user.contains("links") && user["links"].contains("friendCode")) {
             out.friend_code = Text(user["links"]["friendCode"], "id");
         }
-        // An unlinked device account carries no nickname; a linked one carries the account's.
-        out.linked = !out.nickname.empty();
+        out.birthday = Text(user, "birthday");
+        out.country = Text(user, "country");
+        if (user.contains("links") && user["links"].contains("nintendoAccount")) {
+            out.na_id = std::strtoull(Text(user["links"]["nintendoAccount"], "id").c_str(),
+                                      nullptr, 16);
+        }
+        // An unlinked device account carries no nickname and no NA link; a linked one both.
+        out.linked = !out.nickname.empty() || out.na_id != 0;
 
         out.nsa_id = std::strtoull(out.user_id.c_str(), nullptr, 16);
     }
@@ -681,6 +693,9 @@ bool SignIn(State& state, const std::string& uid, const std::string& account_id_
             identity->thumbnail_url = login.thumbnail_url;
             identity->friend_code = login.friend_code;
             identity->linked = login.linked;
+            identity->na_id = login.na_id;
+            identity->birthday = login.birthday;
+            identity->country = login.country;
         }
         active = uid == state.active;
     }
@@ -1080,6 +1095,71 @@ bool Linked(const std::string& uid) {
     return Read<bool>(uid, [](const Identity& i) { return i.linked; });
 }
 
+std::uint64_t NintendoAccountId(const std::string& uid) {
+    return Read<std::uint64_t>(uid, [](const Identity& i) { return i.na_id; });
+}
+
+std::string Birthday(const std::string& uid) {
+    return Read<std::string>(uid, [](const Identity& i) { return i.birthday; });
+}
+
+std::string Country(const std::string& uid) {
+    return Read<std::string>(uid, [](const Identity& i) { return i.country; });
+}
+
+std::string ThumbnailUrl(const std::string& uid) {
+    return Read<std::string>(uid, [](const Identity& i) { return i.thumbnail_url; });
+}
+
+std::string DauthToken(const std::string& client_id, const std::string& vendor) {
+    if (!Enabled() || client_id.empty()) {
+        return {};
+    }
+    try {
+        const Endpoint endpoint = EndpointSnapshot(Get());
+        if (!EnsureClientCertificate(endpoint)) {
+            return {};
+        }
+        auto dauth = MakeClient(endpoint, DauthHost);
+
+        const auto challenge = Parsed(dauth->Post("/v8/challenge"), "dauth challenge");
+        if (!challenge) {
+            return {};
+        }
+
+        unsigned char mac[32];
+        RAND_bytes(mac, sizeof(mac));
+
+        // The edge request's body is inferred from the server's reader and the module's vendor_id
+        // string, as the Ryujinx Harbor sends it, not from a capture.
+        nlohmann::json token_request{{"client_id", client_id}};
+        if (!vendor.empty()) {
+            token_request["vendor_id"] = vendor;
+        }
+        const nlohmann::json request{
+            {"system_version", "22.2.0-0.0"},
+            {"fw_revision", "0"},
+            {"key_generation", 11},
+            {"challenge", Text(*challenge, "challenge")},
+            {"mac", Base64(mac, sizeof(mac))},
+            {"ist", false},
+            {"token_requests", nlohmann::json::array({token_request})},
+        };
+
+        const char* path = vendor.empty() ? "/v8/device_auth_tokens" : "/v8/edge_tokens";
+        const auto tokens = Parsed(dauth->Post(path, request.dump(), "application/json"),
+                                   vendor.empty() ? "device auth token" : "edge token");
+        if (!tokens || !tokens->contains("results") || !(*tokens)["results"].is_array() ||
+            (*tokens)["results"].empty()) {
+            return {};
+        }
+        return Text((*tokens)["results"][0], vendor.empty() ? "device_auth_token" : "dtoken");
+    } catch (const std::exception& e) {
+        LOG_WARNING(WebService, "[OpenPak] dauth token: {}", e.what());
+        return {};
+    }
+}
+
 void SetInvitationHook(std::function<void(const Invitation&)> on_arrival) {
     State& state = Get();
     std::lock_guard lock{state.mutex};
@@ -1468,6 +1548,42 @@ void GoOffline() {
 
     // The one moment "I am gone" can be said; if it never arrives, the lease says it later.
     PublishInactive(state);
+}
+
+Response Send(const std::string& method, const std::string& host,
+              const std::string& path_and_query, const Headers& headers,
+              const std::string& content_type, const std::string& body) {
+    try {
+        if (!Enabled()) {
+            return {};
+        }
+        State& state = Get();
+        const Endpoint endpoint = EndpointSnapshot(state);
+        EnsureClientCertificate(endpoint);
+
+        httplib::Request request;
+        request.method = method;
+        request.path = path_and_query;
+        for (const auto& [name, value] : headers) {
+            request.headers.emplace(name, value);
+        }
+        if (!content_type.empty()) {
+            request.set_header("Content-Type", content_type);
+            request.body = body;
+        }
+
+        auto client = MakeClient(endpoint, host.c_str());
+        const httplib::Result result = client->send(request);
+        if (!result) {
+            LOG_DEBUG(WebService, "[OpenPak] {} {} did not reach the server: {}", method, host,
+                      httplib::to_string(result.error()));
+            return {};
+        }
+        return {result->status, result->body};
+    } catch (const std::exception& e) {
+        LOG_DEBUG(WebService, "[OpenPak] {} {}: {}", method, host, e.what());
+        return {};
+    }
 }
 
 } // namespace OpenPak::Session
