@@ -442,12 +442,31 @@ private:
         R_SUCCEED();
     }
 
-    // The negotiated protocol once there is one; before the handshake, what was offered.
-    Result GetNextAlpnProto(OutBuffer<BufferAttr_HipcMapAlias> data, Out<u32> to_write) {
-        const auto& source = negotiated_alpn_proto.empty() ? next_alpn_proto : negotiated_alpn_proto;
-        *to_write = u32((std::min)(source.size(), data.size()));
-        std::memcpy(data.data(), source.data(), *to_write);
-        LOG_DEBUG(Service_SSL, "GetNextAlpnProto called, size={}", *to_write);
+    // nn::ssl AlpnProtoState (libnx SslAlpnProtoState).
+    enum class AlpnProtoState : u32 {
+        NoSupport = 0,
+        Negotiated = 1,
+        NoOverlap = 2,
+        Selected = 3,
+        EarlyValue = 4,
+    };
+
+    // The state, then the length of the protocol the server selected (libnx
+    // sslConnectionGetNextAlpnProto). All zero before the handshake. Answering only a length put
+    // it where the guest reads the state ("h2" as 2, NoOverlap): the server then closed the
+    // connection test's HTTP/2 connection after its request (2160-6000).
+    Result GetNextAlpnProto(Out<AlpnProtoState> out_state, Out<u32> to_write,
+                            OutBuffer<BufferAttr_HipcMapAlias> data) {
+        *out_state = AlpnProtoState::NoSupport;
+        *to_write = 0;
+        if (did_handshake && alpn_offered) {
+            *out_state = negotiated_alpn_proto.empty() ? AlpnProtoState::NoOverlap
+                                                       : AlpnProtoState::Negotiated;
+            *to_write = u32((std::min)(negotiated_alpn_proto.size(), data.size()));
+            std::memcpy(data.data(), negotiated_alpn_proto.data(), *to_write);
+        }
+        LOG_DEBUG(Service_SSL, "GetNextAlpnProto called, state={}, size={}", u32(*out_state),
+                  *to_write);
         R_SUCCEED();
     }
 
