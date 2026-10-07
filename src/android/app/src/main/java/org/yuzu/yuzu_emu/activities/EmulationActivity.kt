@@ -478,6 +478,11 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         val code = when (event.keyCode) {
             KeyEvent.KEYCODE_BACK -> KeyEvent.KEYCODE_BUTTON_SELECT
             KeyEvent.KEYCODE_MENU -> KeyEvent.KEYCODE_BUTTON_START
+            // Android keeps HOME for itself; a pad that still delivers it means its HOME button.
+            KeyEvent.KEYCODE_HOME -> KeyEvent.KEYCODE_BUTTON_MODE
+            // The ROG Kunai's two extra keys both capture (mapped as BUTTON_9, AddSystemButtons).
+            KeyEvent.KEYCODE_BUTTON_10 ->
+                if (event.device?.vendorId == ASUS_VID) KeyEvent.KEYCODE_BUTTON_9 else return event
             else -> return event
         }
         return KeyEvent(
@@ -496,6 +501,14 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             KeyEvent.KEYCODE_BUTTON_SELECT
         } else {
             KeyEvent.KEYCODE_BUTTON_START
+        }
+        if (event.repeatCount == 0) {
+            Log.info(
+                "[Harbor] chord: ${if (code == KeyEvent.KEYCODE_BUTTON_START) "Plus" else "Minus"} " +
+                    "${if (event.action == KeyEvent.ACTION_DOWN) "down" else "up"} at ${event.eventTime} " +
+                    "(partner ${if (partner in harborDownButtons) "held" else "not held"}" +
+                    "${if (harborPendingPress?.keyCode == partner) ", waiting" else ""})"
+            )
         }
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
@@ -1012,6 +1025,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
         // How long a Plus or Minus press waits for its partner (the Harbor menu chord).
         private const val HARBOR_CHORD_WINDOW_MS = 150L
+        private const val ASUS_VID = 0x0b05
         @Volatile
         private var processHasEmulationSession = false
         @Volatile

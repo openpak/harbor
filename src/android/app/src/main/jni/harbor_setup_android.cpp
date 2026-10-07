@@ -18,6 +18,7 @@
 #include "common/android/id_cache.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/param_package.h"
 #include "common/settings.h"
 #include "core/openpak/boot_connection.h"
 #include "frontend_common/joycon_rails.h"
@@ -290,6 +291,29 @@ void StartWithJoyconsAttached() {
     auto& players = Settings::values.players.GetValue();
     auto& player1 = players[0];
     auto& handheld = players[HandheldIndex];
+    // A pad bound before HOME and Capture were mapped gets them now (see AddSystemButtons).
+    auto& home = player1.buttons[Settings::NativeButton::Home];
+    auto& capture = player1.buttons[Settings::NativeButton::Screenshot];
+    for (const auto button : {Settings::NativeButton::Plus, Settings::NativeButton::Minus,
+                              Settings::NativeButton::A, Settings::NativeButton::B}) {
+        const Common::ParamPackage param{player1.buttons[button]};
+        if (param.Get("engine", "") != "android" || !param.Has("button")) {
+            continue;
+        }
+        if (home.empty()) {
+            auto mode = param;
+            mode.Set("button", 110); // KEYCODE_BUTTON_MODE
+            home = mode.Serialize();
+            LOG_INFO(Frontend, "harbor: the controller's Mode button is HOME");
+        }
+        if (capture.empty() && param.Get("guid", "").ends_with("0b05")) {
+            auto button9 = param;
+            button9.Set("button", 196); // KEYCODE_BUTTON_9 (BUTTON_10 arrives as it too)
+            capture = button9.Serialize();
+            LOG_INFO(Frontend, "harbor: the ASUS controller's BUTTON_9/BUTTON_10 are Capture");
+        }
+        break;
+    }
     handheld.buttons = player1.buttons;
     handheld.analogs = player1.analogs;
     handheld.motions = player1.motions;

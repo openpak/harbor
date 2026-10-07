@@ -122,6 +122,30 @@ void MakeFaceButtonsPositional(InputCommon::ButtonMapping& mapping, const Common
     }
 }
 
+// Harbor: a pad's Mode (guide) button is the Switch HOME button, whatever the pad. Android gives
+// apps no KEYCODE_HOME, so BUTTON_MODE is the one to read; am times the press (short, long) from
+// the button's state like a console's. On ASUS pads (the ROG Kunai) the extra BUTTON_9 is Capture;
+// EmulationActivity sends BUTTON_10 as BUTTON_9, so both of those keys capture.
+void AddSystemButtons(InputCommon::ButtonMapping& mapping, const Common::ParamPackage& device) {
+    constexpr int KeycodeButtonMode = 110;
+    constexpr int KeycodeButton9 = 196;
+    for (const auto button : {Settings::NativeButton::Plus, Settings::NativeButton::Minus,
+                              Settings::NativeButton::A, Settings::NativeButton::B}) {
+        const auto it = mapping.find(button);
+        if (it != mapping.end() && it->second.Has("button")) {
+            auto home = it->second;
+            home.Set("button", KeycodeButtonMode);
+            mapping.insert_or_assign(Settings::NativeButton::Home, home);
+            if (device.Get("guid", "").ends_with("0b05")) {
+                auto capture = it->second;
+                capture.Set("button", KeycodeButton9);
+                mapping.insert_or_assign(Settings::NativeButton::Screenshot, capture);
+            }
+            return;
+        }
+    }
+}
+
 void ApplyControllerConfig(size_t player_index,
                            const std::function<void(Core::HID::EmulatedController*)>& apply) {
     auto& hid_core = EmulationSession::GetInstance().System().HIDCore();
@@ -540,6 +564,7 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_updateMappingsWithDefaul
     auto button_mappings = input_subsystem.GetButtonMappingForDevice(device);
     if (Harbor::ConsoleMode()) {
         MakeFaceButtonsPositional(button_mappings, device);
+        AddSystemButtons(button_mappings, device);
     }
     auto analog_mappings = input_subsystem.GetAnalogMappingForDevice(device);
     auto display_name = Common::Android::GetJString(env, j_display_name);
