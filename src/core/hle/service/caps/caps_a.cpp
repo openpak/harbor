@@ -250,6 +250,8 @@ Result IAlbumAccessorService::LoadAlbumScreenShotImageEx1(
 
     const Result result =
         manager->LoadAlbumScreenShotImage(*out_image_output, out_image, file_id, decoder_options);
+    LOG_INFO(Service_Capture, "image buffer {:#x} bytes, work buffer {:#x} bytes -> {:#x}",
+             out_image.size(), out_buffer.size(), result.raw);
     R_RETURN(TranslateResult(result));
 }
 
@@ -263,6 +265,8 @@ Result IAlbumAccessorService::LoadAlbumScreenShotThumbnailImageEx1(
 
     const Result result = manager->LoadAlbumScreenShotThumbnail(*out_image_output, out_image,
                                                                 file_id, decoder_options);
+    LOG_INFO(Service_Capture, "thumbnail buffer {:#x} bytes, work buffer {:#x} bytes -> {:#x}",
+             out_image.size(), out_buffer.size(), result.raw);
     R_RETURN(TranslateResult(result));
 }
 

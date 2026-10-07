@@ -606,6 +606,10 @@ static void PNGToMemory(void* context, void* data, int len) {
 Result AlbumManager::SaveImage(ApplicationAlbumEntry& out_entry, std::span<const u8> image,
                                u64 title_id, const AlbumFileDateTime& date, bool flip,
                                AlbumFileId* out_file_id) {
+    if (image.size() < std::size_t{1280} * 720 * STBI_rgb_alpha) {
+        return ResultUnknown;
+    }
+
     const auto screenshot_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::ScreenshotsDir);
     if (!Common::FS::CreateDir(screenshot_dir)) {
         return ResultFileCountLimit;
@@ -615,14 +619,18 @@ Result AlbumManager::SaveImage(ApplicationAlbumEntry& out_entry, std::span<const
     // from what is on disk.
     std::scoped_lock lk{mutex};
 
+    // The album's decoder reads JPEG only (stb_image is built with STBI_ONLY_JPEG, as a console's
+    // album files are), so a HOME session saves JPEG; stock Eden keeps writing PNG.
+    const bool jpeg = IsHomeSession();
+
     AlbumFileDateTime saved_date = date;
     std::filesystem::path file_path;
     for (int counter = 0; counter < 100; counter++) {
         saved_date.unique_id = static_cast<s8>(counter);
-        file_path = screenshot_dir / fmt::format("{:016x}_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}-{:03}.png",
+        file_path = screenshot_dir / fmt::format("{:016x}_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}-{:03}.{}",
                                                  title_id, u16(date.year), u8(date.month),
                                                  u8(date.day), u8(date.hour), u8(date.minute),
-                                                 u8(date.second), counter);
+                                                 u8(date.second), counter, jpeg ? "jpg" : "png");
         if (!Common::FS::Exists(file_path)) {
             break;
         }
@@ -632,10 +640,24 @@ Result AlbumManager::SaveImage(ApplicationAlbumEntry& out_entry, std::span<const
     }
 
     std::vector<u8> png_image;
-    stbi_flip_vertically_on_write(flip);
-    const bool encoded = stbi_write_png_to_func(PNGToMemory, &png_image, 1280, 720, STBI_rgb_alpha,
-                                                image.data(), 0) != 0;
-    stbi_flip_vertically_on_write(false);
+    bool encoded;
+    if (jpeg) {
+        // The JPEG writer has no flip: turn the rows over here when asked.
+        std::vector<u8> upright(image.begin(), image.end());
+        if (flip) {
+            constexpr std::size_t row = 1280 * STBI_rgb_alpha;
+            for (std::size_t y = 0; y < 720; y++) {
+                std::copy_n(image.data() + (719 - y) * row, row, upright.data() + y * row);
+            }
+        }
+        encoded = stbi_write_jpg_to_func(PNGToMemory, &png_image, 1280, 720, STBI_rgb_alpha,
+                                         upright.data(), 92) != 0;
+    } else {
+        stbi_flip_vertically_on_write(flip);
+        encoded = stbi_write_png_to_func(PNGToMemory, &png_image, 1280, 720, STBI_rgb_alpha,
+                                         image.data(), 0) != 0;
+        stbi_flip_vertically_on_write(false);
+    }
     if (!encoded) {
         return ResultFileCountLimit;
     }

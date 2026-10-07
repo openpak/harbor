@@ -6,7 +6,7 @@
 // The capture button's screenshot in a HOME session, as vi takes it on a console: the picture on
 // the screen (the foreground application's layers, or the whole HOME screen when HOME is in
 // front) is saved to the album, its 96x54 thumbnail is kept for caps:a 301, and the overlay
-// applet is told over ovln (source "vi": 8004 before the save, then 8001; 8002 on failure, 8003
+// applet is told over ovln (vi's sender on the source "overlay": 8004 before the save, then 8001; 8002 on failure, 8003
 // when the application does not allow screenshots) so it shows its "Captured" pop-up.
 
 #pragma once

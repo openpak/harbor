@@ -39,7 +39,8 @@ constexpr std::chrono::seconds FrameTimeout{3};
 // HOME's own program id: what the album records for a shot of the HOME screen.
 constexpr u64 HomeProgramId = 0x0100000000001000;
 
-// vi's sender: queue 4, appended, a full queue drops the new one.
+// vi's sender (the module "vi", on the overlay's source "overlay", the only one overlayDisp
+// attaches): queue 4, appended, a full queue drops the new one.
 constexpr u32 SenderQueueLength = 4;
 constexpr u64 SendOption = 1;
 
@@ -74,7 +75,7 @@ void SendOverlay(Core::System& system, u8 result_index, std::span<const u8> file
     for (int attempt = 0; attempt < 2; ++attempt) {
         if (!sender) {
             PSC::SourceName name{};
-            constexpr std::string_view source = "vi";
+            constexpr std::string_view source = "overlay";
             std::copy(source.begin(), source.end(), name.name.begin());
             if (agent.OpenSender(name, SenderQueueLength, sender) != PSC::OvlnStatus::Success) {
                 sender.reset();
