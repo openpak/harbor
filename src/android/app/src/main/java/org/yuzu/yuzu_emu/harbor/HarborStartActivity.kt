@@ -7,7 +7,8 @@ import android.app.Activity
 import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Bundle
-import android.view.View
+import android.view.Gravity
+import android.widget.TextView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -24,7 +25,13 @@ class HarborStartActivity : Activity() {
         // The paper colour of the setup's current theme, so nothing flashes between screens.
         val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
             Configuration.UI_MODE_NIGHT_YES
-        setContentView(View(this).apply { setBackgroundColor(if (dark) PAPER_DARK else PAPER_LIGHT) })
+        status = TextView(this).apply {
+            setBackgroundColor(if (dark) PAPER_DARK else PAPER_LIGHT)
+            setTextColor(if (dark) INK_DARK else INK_LIGHT)
+            gravity = Gravity.CENTER
+            textSize = 18f
+        }
+        setContentView(status)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
@@ -49,9 +56,18 @@ class HarborStartActivity : Activity() {
         }
     }
 
+    private lateinit var status: TextView
+
+    /** A one-line state while the console gets ready (the boot connection to OpenPak). */
+    fun showStatus(text: Int) {
+        status.setText(text)
+    }
+
     companion object {
         const val EXTRA_AFTER_SETUP = "harborAfterSetup"
         private val PAPER_LIGHT = Color.rgb(0xeb, 0xeb, 0xeb)
         private val PAPER_DARK = Color.rgb(0x2d, 0x2d, 0x2d)
+        private val INK_LIGHT = Color.rgb(0x2d, 0x2d, 0x2d)
+        private val INK_DARK = Color.rgb(0xeb, 0xeb, 0xeb)
     }
 }

@@ -93,6 +93,7 @@ extern "C" {
 #include "input_common/drivers/virtual_amiibo.h"
 #include "jni/native.h"
 #include "jni/harbor_setup_android.h"
+#include "core/openpak/boot_connection.h"
 #include "video_core/frame_gen/lossless_dll.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
@@ -338,6 +339,11 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
                 : -1,
     };
 
+    // Harbor console mode: OpenPak is connected before the console boots (the launcher already did it
+    // off the UI thread; this returns that result).
+    if (Harbor::ConsoleMode()) {
+        OpenPak::BootConnection::Run(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir));
+    }
     m_load_result = m_system.Load(EmulationSession::GetInstance().Window(), filepath, params);
     if (m_load_result != Core::SystemResultStatus::Success) {
         return m_load_result;

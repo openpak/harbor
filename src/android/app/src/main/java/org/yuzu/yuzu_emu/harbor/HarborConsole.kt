@@ -56,6 +56,11 @@ object HarborConsole {
                 Log.warning("[Harbor] library scan failed: ${e.message}")
                 -1
             }
+            // OpenPak before HOME, with its credentials in the Android Keystore.
+            (from as? HarborStartActivity)?.let { start ->
+                start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
+            }
+            HarborNative.connectOpenPak()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
             Log.info("[Harbor] console boot: $games titles registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
             from.runOnUiThread {
@@ -92,7 +97,35 @@ object HarborConsole {
         from.finish()
     }
 
-    /** The minimal Harbor menu: Resume, Set up again, Exit. */
+    /**
+     * The console stopped on its own (not through the Harbor menu). HOME's power menu: a restart boots
+     * the console again through the launcher (library scan, OpenPak, HOME), turning it off closes
+     * Harbor; anything else leaves the emulation screen as Eden does.
+     */
+    fun onConsoleStopped(activity: EmulationActivity) {
+        when (HarborNative.powerRequest()) {
+            POWER_REBOOT -> {
+                Log.info("[Harbor] the console restarts")
+                activity.startActivity(
+                    Intent(activity, HarborStartActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                        .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                )
+                activity.finish()
+            }
+            POWER_OFF -> {
+                Log.info("[Harbor] the console turned off")
+                HarborNative.stopOpenPak()
+                activity.finishAndRemoveTask()
+            }
+            else -> activity.finish()
+        }
+    }
+
+    private const val POWER_OFF = 1
+    private const val POWER_REBOOT = 2
+
+    /** The minimal Harbor menu: Resume, Set up again, Exit, Detach/Attach Joy-Con. */
     fun showMenu(activity: EmulationActivity) {
         if (activity.isFinishing || menuOpen) {
             return
@@ -104,12 +137,26 @@ object HarborConsole {
                 arrayOf(
                     activity.getString(R.string.harbor_menu_resume),
                     activity.getString(R.string.harbor_menu_setup_again),
-                    activity.getString(R.string.harbor_menu_exit)
+                    activity.getString(R.string.harbor_menu_exit),
+                    activity.getString(
+                        if (HarborNative.joyconsDetached()) {
+                            R.string.harbor_menu_attach_joycons
+                        } else {
+                            R.string.harbor_menu_detach_joycons
+                        }
+                    )
                 )
             ) { _, which ->
                 when (which) {
-                    1 -> activity.harborStop { restartIntoSetup(activity) }
-                    2 -> activity.harborStop { activity.finishAndRemoveTask() }
+                    3 -> HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
+                    1 -> activity.harborStop {
+                        HarborNative.stopOpenPak()
+                        restartIntoSetup(activity)
+                    }
+                    2 -> activity.harborStop {
+                        HarborNative.stopOpenPak()
+                        activity.finishAndRemoveTask()
+                    }
                 }
             }
             .setOnDismissListener { menuOpen = false }

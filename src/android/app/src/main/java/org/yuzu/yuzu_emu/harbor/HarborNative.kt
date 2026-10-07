@@ -34,4 +34,19 @@ object HarborNative {
 
     /** Every applet from the firmware, handheld; saved, since the emulation screen reloads the config. */
     external fun applyConsolePreset()
+
+    /** Connects to OpenPak before HOME boots (blocking: up to ~10 s on a first connect). Not on the UI thread. */
+    external fun connectOpenPak()
+
+    /** Stops OpenPak's heartbeat and push on the way out. */
+    external fun stopOpenPak()
+
+    /** What HOME's power menu asked for when the console stopped: 0 nothing, 1 turn off, 2 restart. */
+    external fun powerRequest(): Int
+
+    /** The Joy-Cons off (true) or back on the console's rails. */
+    external fun setJoyconsDetached(detached: Boolean)
+
+    /** Whether the Joy-Cons are off the rails. */
+    external fun joyconsDetached(): Boolean
 }

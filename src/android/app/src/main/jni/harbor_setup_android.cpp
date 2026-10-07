@@ -19,6 +19,8 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "core/openpak/boot_connection.h"
+#include "frontend_common/joycon_rails.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
 #include "harbor_setup_android.h"
@@ -31,6 +33,16 @@ namespace {
 using namespace HarborSetup;
 
 std::atomic_bool console_mode{false};
+
+/// The setup's folders as Eden's: game folders (tree URIs, scanned deep) and the DLC and update
+/// folders as external content. GameHelper.getGames() then registers everything under them.
+void ApplyRecordToSettings(const Record& record) {
+    AndroidSettings::values.game_dirs.clear();
+    for (const auto& dir : record.game_dirs.value_or(std::vector<std::string>{})) {
+        AndroidSettings::values.game_dirs.push_back({dir, true});
+    }
+    HarborSetup::ApplyRecordFolders(record);
+}
 
 // Java classes and methods, looked up once on a Java thread (a native thread's FindClass sees only
 // the system class loader).
@@ -120,12 +132,7 @@ public:
     }
 
     bool ApplyFolders(const Record& record, std::string* error) override {
-        AndroidSettings::values.game_dirs.clear();
-        for (const auto& dir : record.game_dirs.value_or(std::vector<std::string>{})) {
-            AndroidSettings::values.game_dirs.push_back({dir, true});
-        }
-        Settings::values.external_content_dirs = record.AutoloadDirs();
-        Settings::values.ext_content_from_game_dirs.SetValue(true);
+        ApplyRecordToSettings(record);
         if (!global_config) {
             if (error) {
                 *error = "the configuration is not loaded";
@@ -354,13 +361,44 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setConsoleMod
     console_mode = active == JNI_TRUE;
 }
 
-/// What a console session needs every boot: the firmware's own applets, not Eden's stand-ins.
+/// What a console session needs every boot: the firmware's own applets, not Eden's stand-ins, and
+/// the setup's folders as the library (so the scan that follows registers the latest add-ons).
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_applyConsolePreset(JNIEnv*, jobject) {
     HarborSetup::ApplyConsolePreset();
+    ApplyRecordToSettings(LoadRecord(RecordPath()));
     if (global_config) {
         global_config->SaveAllValues();
     }
-    LOG_INFO(Frontend, "harbor: console preset applied (every applet LLE, handheld)");
+    LOG_INFO(Frontend, "harbor: console preset applied (every applet LLE, handheld, {} game and {} "
+                       "add-on folders)",
+             AndroidSettings::values.game_dirs.size(), Settings::values.external_content_dirs.size());
+}
+
+/// OpenPak before HOME boots, with its credentials in the Android Keystore. Blocking (up to ~10 s
+/// on a first connect): called on the launcher's boot thread, a Java thread, which the Keystore
+/// store needs to find its Kotlin class.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_connectOpenPak(JNIEnv*, jobject) {
+    HarborSetup::ConnectOpenPak();
+}
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_stopOpenPak(JNIEnv*, jobject) {
+    OpenPak::BootConnection::Stop();
+}
+
+/// 0 none, 1 turn off, 2 restart: what HOME's power menu asked for when the console stopped.
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerRequest(JNIEnv*, jobject) {
+    return static_cast<jint>(HarborSetup::ConsolePowerRequest(EmulationSession::GetInstance().System()));
+}
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setJoyconsDetached(JNIEnv*, jobject,
+                                                                                     jboolean detached) {
+    FrontendCommon::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),
+                                       detached == JNI_TRUE);
+}
+
+JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {
+    return FrontendCommon::JoyconsDetached(EmulationSession::GetInstance().System().HIDCore()) ? JNI_TRUE
+                                                                                             : JNI_FALSE;
 }
 
 } // extern "C"

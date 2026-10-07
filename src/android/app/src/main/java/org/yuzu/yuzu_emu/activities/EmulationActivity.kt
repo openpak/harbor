@@ -841,6 +841,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             harborAfterStop = null
             if (after != null) {
                 after()
+            } else if (HarborConsole.active) {
+                HarborConsole.onConsoleStopped(this)
             } else {
                 finish()
             }
