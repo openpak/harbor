@@ -153,7 +153,7 @@ object HarborSetupBridge {
             val meta = GpuDriverHelper.getMetadataFromZip(staged)
             if (meta.name == null || meta.libraryName == null) {
                 staged.delete()
-                return failure("$name has no complete meta.json, so it is not a driver package Eden can load. Choose an AdrenoTools driver .zip.")
+                return failure("$name has no complete meta.json, so it is not a driver package Harbor can load. Choose an AdrenoTools driver .zip.")
             }
             arrayOf(
                 staged.path, meta.name!!, meta.version ?: "", meta.vendor ?: "", meta.libraryName!!,
