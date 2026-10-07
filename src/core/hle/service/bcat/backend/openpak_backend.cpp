@@ -125,15 +125,15 @@ struct OpenPakBcatBackend::Deliveries {
                          : (dataset.outcome == Outcome::None ? "[OpenPak] No BCAT data is published"
                                                              : "[OpenPak] BCAT data not reachable"));
 
-            const auto self = weak.lock();
-            if (!self) {
+            const auto alive = weak.lock();
+            if (!alive) {
                 return;
             }
 
             std::vector<std::function<void()>> waiting;
             {
-                std::scoped_lock lock{self->mutex};
-                Job& job = self->jobs[title_id];
+                std::scoped_lock lock{alive->mutex};
+                Job& job = alive->jobs[title_id];
                 job.finished = true;
                 // Not asked: the next call tries again.
                 if (dataset.outcome == Outcome::Unreachable) {
@@ -143,7 +143,7 @@ struct OpenPakBcatBackend::Deliveries {
                 job.waiting.clear();
             }
             for (auto& callback : waiting) {
-                self->worker.Post(std::move(callback));
+                alive->worker.Post(std::move(callback));
             }
         }).detach();
     }

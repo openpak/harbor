@@ -4,6 +4,7 @@
 #include "core/hle/service/bcat/news/news_shared.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <sstream>
 #include <stdexcept>
@@ -165,8 +166,26 @@ void NewsShared::Fill(std::stop_token stop) {
     const auto fetcher = BCAT::GetOpenPakFetcher();
     int added = 0;
 
-    const auto response = fetcher->Get("/openpak/v1/local/index");
-    if (!response.reached || response.status != 200) {
+    // The index may be asked for before OpenPak is up (its configuration is applied by the
+    // frontend) or while the server is away: ask again every so often, for a while.
+    constexpr int Attempts = 20;
+    constexpr auto Pause = std::chrono::seconds{15};
+    BCAT::FetchResponse response;
+    for (int attempt = 0; attempt < Attempts && !stop.stop_requested(); ++attempt) {
+        response = fetcher->Get("/openpak/v1/local/index");
+        if (response.reached && response.status == 200) {
+            break;
+        }
+        if (attempt == 0) {
+            LOG_WARNING(Service_BCAT, "[OpenPak] News index not fetched ({}); retrying",
+                        response.reached ? response.status : 0);
+        }
+        std::mutex wait_mutex;
+        std::condition_variable_any wake;
+        std::unique_lock lock{wait_mutex};
+        wake.wait_for(lock, stop, Pause, [] { return false; });
+    }
+    if (stop.stop_requested() || !response.reached || response.status != 200) {
         LOG_WARNING(Service_BCAT, "[OpenPak] News index not fetched ({})",
                     response.reached ? response.status : 0);
         filling = false;
