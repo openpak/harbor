@@ -109,6 +109,10 @@ public:
 
     Result GetTouchScreenFirmwareVersion(Core::HID::FirmwareVersion& firmware) const;
 
+    // Self-check of the per-aruid input focus (input_focus_self_test.cpp); runs at Initialize
+    // when HARBOR_HID_SELFTEST is set. Logs and returns whether every check passed.
+    bool RunInputFocusSelfTest();
+
     void UpdateControllers(std::chrono::nanoseconds ns_late);
     void UpdateNpad(std::chrono::nanoseconds ns_late);
     void UpdateMouseKeyboard(std::chrono::nanoseconds ns_late);
