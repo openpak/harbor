@@ -16,4 +16,8 @@ Result CreateSSLConnectionBackend(std::unique_ptr<SSLConnectionBackend>* out_bac
     return ResultInternalError;
 }
 
+std::vector<u8> LoadPinnedCaDer() {
+    return {};
+}
+
 } // namespace Service::SSL

@@ -16,7 +16,6 @@
 #include "core/internal_network/emu_net_state.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
-#include "core/internal_network/wifi_scanner.h"
 #include "network/network.h"
 
 #include <atomic>
@@ -51,25 +50,21 @@ namespace {
 
 namespace Service::NIFM {
 
-static u128 MakeUuidFromName(std::string_view name) {
-    constexpr u64 kOff = 0xcbf29ce484222325ULL;
-    constexpr u64 kPrime = 0x100000001b3ULL;
-
-    u64 h1 = kOff;
-    u64 h2 = kOff ^ 0x9e3779b97f4a7c15ULL;
-
-    for (unsigned char c : name) {
-        h1 ^= c;
-        h1 *= kPrime;
-
-        h2 ^= static_cast<u8>(c ^ 0x5A);
-        h2 *= kPrime;
-    }
-    if (h1 == 0 && h2 == 0)
-        h1 = 1;
-
-    return {h1, h2};
+// The console has one network and it is wired: whatever carries the host's internet (Wi-Fi,
+// mobile data, a LAN) is presented to the guest as an Ethernet link with one stored wired
+// profile. Its uuid ("OPENPAK\0network\x01") is the same in EnumerateNetworkProfiles, the current
+// profile and GetNetworkProfile, so a system applet that lists then fetches gets the same record
+// back. No host network name ever reaches the guest or the log. Behaviour follows the Ryujinx
+// Harbor (MIT-licensed Ryujinx base).
+static u128 StoredProfileUuid() {
+    static constexpr std::array<u8, 16> bytes{0x4f, 0x50, 0x45, 0x4e, 0x50, 0x41, 0x4b, 0x00,
+                                              0x6e, 0x65, 0x74, 0x77, 0x6f, 0x72, 0x6b, 0x01};
+    u128 uuid{};
+    std::memcpy(uuid.data(), bytes.data(), sizeof(uuid));
+    return uuid;
 }
+
+constexpr std::string_view StoredProfileName = "HarborNetwork";
 
 // This is nn::nifm::RequestState
 enum class RequestState : u32 {
@@ -216,21 +211,13 @@ struct NifmNetworkProfileData {
 #pragma pack(pop)
 static_assert(sizeof(NifmNetworkProfileData) == 0x18E, "NifmNetworkProfileData has incorrect size.");
 
-struct PendingProfile {
-    std::array<char, 0x21> ssid{};
-    u8 ssid_len{};
-    std::array<char, 0x41> passphrase{};
-};
-
 constexpr Result ResultPendingConnection{ErrorModule::NIFM, 111};
 constexpr Result ResultInvalidInput{ErrorModule::NIFM, 112};
 constexpr Result ResultNetworkCommunicationDisabled{ErrorModule::NIFM, 1111};
 
-static std::mutex g_scan_mtx;
-static std::vector<Network::ScanData> g_last_scan_results;
-static std::mutex g_profile_mtx;
-static std::optional<PendingProfile> g_pending_profile;
 
+// A Wi-Fi scan completes at once with no access points: the guest's network is the host's,
+// there is nothing to pick, and the host's own networks are nobody's business (location data).
 class IScanRequest final : public ServiceFramework<IScanRequest> {
 public:
     explicit IScanRequest(Core::System& system_)
@@ -250,49 +237,26 @@ public:
     }
 
     ~IScanRequest() override {
-        state.store(State::Idle);
         svc_ctx.CloseEvent(evt_scan_complete);
         svc_ctx.CloseEvent(evt_processing);
-        if (worker.joinable())
-            worker.join();
     }
 
 private:
-    std::vector<Network::ScanData> scan_results;
-
     void Submit(HLERequestContext& ctx) {
-
-        if (state.load() == State::Finished) {
-            if (worker.joinable())
-                worker.join();
-
-            state.store(State::Idle);
-            worker_result.store(ResultPendingConnection);
-        }
-
-        if (state.load() != State::Idle) {
-            IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
-            return;
-        }
-
-        state.store(State::Processing);
-        evt_processing->Signal(system.Kernel());
-
-        worker = std::thread(&IScanRequest::WorkerThread, this);
+        LOG_DEBUG(Service_NIFM, "called, completes at once with no access points");
+        evt_scan_complete->Signal(system.Kernel());
         IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
     }
 
     void IsProcessing(HLERequestContext& ctx) {
-        const bool processing = state.load() == State::Processing;
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
-        rb.Push<u8>(processing);
+        rb.Push<u8>(false);
     }
 
     void GetResult(HLERequestContext& ctx) {
-        const Result rc = worker_result.load();
         IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(rc);
+        rb.Push(ResultSuccess);
     }
 
     void GetSystemEventReadableHandle(HLERequestContext& ctx) {
@@ -303,40 +267,14 @@ private:
     }
 
     void SetChannels(HLERequestContext& ctx) {
-        LOG_WARNING(Service_NIFM, "(STUBBED) called");
+        LOG_DEBUG(Service_NIFM, "called");
         IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
-    }
-
-    enum class State { Idle, Processing, Finished };
-
-    void WorkerThread() {
-        using namespace std::chrono_literals;
-
-        scan_results = Network::ScanWifiNetworks(3s);
-
-        {
-            std::scoped_lock lk{g_scan_mtx};
-            g_last_scan_results = scan_results;
-        }
-
-        // choose result code
-        const bool ok = !scan_results.empty();
-        Finish(ok ? ResultSuccess : ResultPendingConnection);
-    }
-
-    void Finish(Result rc) {
-        worker_result.store(rc);
-        state.store(State::Finished);
-        evt_scan_complete->Signal(system.Kernel());
     }
 
     KernelHelpers::ServiceContext svc_ctx;
 
     Kernel::KEvent* evt_scan_complete{};
     Kernel::KEvent* evt_processing{};
-    std::thread worker;
-    std::atomic<State> state{State::Idle};
-    std::atomic<Result> worker_result{ResultPendingConnection};
 };
 
 class IRequest final : public ServiceFramework<IRequest> {
@@ -351,9 +289,10 @@ public:
             {4, &IRequest::Submit, "Submit"},
             {5, &IRequest::StubSuccess, "SetRequirement"},
             {6, &IRequest::SetRequirementPreset, "SetRequirementPreset"},
-            {8, &IRequest::StubSuccess, "SetPriority"},
+            // switchbrew has no 7; the Ryujinx Harbor's 7/8/9 are these three, one id low.
+            {8, &IRequest::SetPriority, "SetPriority"},
             {9, &IRequest::SetNetworkProfileId, "SetNetworkProfileId"},
-            {10, &IRequest::StubSuccess, "SetRejectable"},
+            {10, &IRequest::SetRejectable, "SetRejectable"},
             {11, &IRequest::SetConnectionConfirmationOption, "SetConnectionConfirmationOption"},
             {12, &IRequest::StubSuccess, "SetPersistent"},
             {13, &IRequest::StubSuccess, "SetInstant"},
@@ -418,15 +357,29 @@ private:
         rb.Push(ResultSuccess);
     }
 
+    // Request options are recorded as set: the emulated network has one profile and no
+    // priority or rejection logic.
+    void SetPriority(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        priority = rp.Pop<u8>();
+        LOG_DEBUG(Service_NIFM, "called, priority={}", priority);
+        IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+    }
+
     void SetNetworkProfileId(HLERequestContext& ctx) {
         // The argument is an nn::util::Uuid (16 bytes), not an SSID length.
         IPC::RequestParser rp{ctx};
-        const auto profile_id = rp.PopRaw<std::array<u8, 0x10>>();
-        LOG_WARNING(Service_NIFM, "(STUBBED) called, profile_id_first_bytes={:02x}{:02x}",
-                    profile_id[0], profile_id[1]);
+        network_profile_id = rp.PopRaw<u128>();
+        LOG_DEBUG(Service_NIFM, "called, stored profile={}",
+                  network_profile_id == StoredProfileUuid());
+        IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+    }
 
-        IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(ResultSuccess);
+    void SetRejectable(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        rejectable = rp.Pop<bool>();
+        LOG_DEBUG(Service_NIFM, "called, rejectable={}", rejectable);
+        IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
     }
 
     void GetResult(HLERequestContext& ctx) {
@@ -556,6 +509,9 @@ private:
     RequestState state;
     // [OpenPak] Submitted with no host address, and not accepted since.
     bool awaiting_connection = false;
+    u8 priority = 0;
+    u128 network_profile_id{};
+    bool rejectable = false;
 
     Kernel::KEvent* event1;
     Kernel::KEvent* event2;
@@ -576,6 +532,40 @@ public:
         RegisterHandlers(functions);
     }
 };
+
+// The one stored profile: wired, automatic addressing, the host's address when it has one.
+static SfNetworkProfileData MakeStoredProfile() {
+    Network::RefreshFromHost();
+    auto& st = Network::EmuNetState::Get();
+
+    SfNetworkProfileData profile{};
+    profile.uuid = StoredProfileUuid();
+    std::memcpy(profile.network_name.data(), StoredProfileName.data(), StoredProfileName.size());
+    profile.profile_type = static_cast<u8>(NetworkProfileType::User);
+    profile.interface_type = static_cast<u8>(NetworkInterfaceType::Ethernet);
+    profile.is_auto_connect = 1;
+
+    profile.ip_setting_data.ip_address_setting.is_automatic = true;
+    profile.ip_setting_data.dns_setting.is_automatic = true;
+    profile.ip_setting_data.mtu = 1500;
+    {
+        std::scoped_lock lock{st.mtx};
+        if (st.connected) {
+            profile.ip_setting_data.ip_address_setting.ip_address = st.ip;
+            profile.ip_setting_data.ip_address_setting.subnet_mask = st.mask;
+            profile.ip_setting_data.ip_address_setting.default_gateway = st.gw;
+            profile.ip_setting_data.dns_setting.primary_dns = {1, 1, 1, 1};
+            profile.ip_setting_data.dns_setting.secondary_dns = {1, 0, 0, 1};
+        }
+    }
+
+    if (auto room_member = Network::GetRoomMember().lock()) {
+        if (room_member->IsConnected()) {
+            profile.ip_setting_data.ip_address_setting.ip_address = room_member->GetFakeIpAddress();
+        }
+    }
+    return profile;
+}
 
 void IGeneralService::GetClientId(HLERequestContext& ctx) {
     static constexpr u32 client_id = 1;
@@ -605,301 +595,111 @@ void IGeneralService::CreateRequest(HLERequestContext& ctx) {
 }
 
 void IGeneralService::GetCurrentNetworkProfile(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_NIFM, "called");
 
-    Network::RefreshFromHost();
-    const auto net_iface = Network::GetSelectedNetworkInterface();
-    const auto& st = Network::EmuNetState::Get();
-
-    SfNetworkProfileData profile{};
-
-    if (st.connected) {
-
-        profile.ip_setting_data.ip_address_setting.is_automatic = true;
-        profile.ip_setting_data.ip_address_setting.ip_address = st.ip;
-        profile.ip_setting_data.ip_address_setting.subnet_mask = st.mask;
-        profile.ip_setting_data.ip_address_setting.default_gateway = st.gw;
-
-        profile.ip_setting_data.dns_setting.is_automatic = true;
-        profile.ip_setting_data.dns_setting.primary_dns = {1, 1, 1, 1};
-        profile.ip_setting_data.dns_setting.secondary_dns = {1, 0, 0, 1},
-
-        profile.uuid = MakeUuidFromName(st.ssid);
-        profile.profile_type = static_cast<u8>(NetworkProfileType::User);
-        profile.interface_type = static_cast<u8>(st.via_wifi ? NetworkInterfaceType::WiFi_Ieee80211
-                                                             : NetworkInterfaceType::Ethernet);
-
-        std::strncpy(profile.network_name.data(), st.ssid, sizeof(profile.network_name) - 1);
-
-        if (auto room_member = Network::GetRoomMember().lock()) {
-            if (room_member->IsConnected()) {
-                profile.ip_setting_data.ip_address_setting.ip_address =
-                    room_member->GetFakeIpAddress();
-            }
-            profile.ip_setting_data.dns_setting.secondary_dns = {8, 8, 8, 8};
-        }
-
-        if (st.via_wifi) {
-            profile.wireless_setting_data.ssid_length = static_cast<u8>(std::strlen(st.ssid));
-            std::memcpy(profile.wireless_setting_data.ssid.data(), st.ssid,
-                        profile.wireless_setting_data.ssid_length);
-        }
-    }
-
-    ctx.WriteBuffer(profile);
+    ctx.WriteBuffer(MakeStoredProfile());
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
 
+// One interface, "eth0": Ethernet whatever the host link is, connected when the host has one.
 void IGeneralService::EnumerateNetworkInterfaces(HLERequestContext& ctx) {
-
-    using Network::HostAdapterKind;
-
-    const auto adapters = Network::GetAvailableNetworkInterfaces();
     constexpr size_t kEntry = 0x3F0;
+    std::vector<u8> entry(kEntry, 0);
 
-    std::vector<u8> blob(adapters.size() * kEntry, 0);
+    const u32 type = static_cast<u32>(NetworkInterfaceType::Ethernet);
+    const u32 enabled = 1;
+    std::memcpy(entry.data() + 0x0, &type, sizeof(type));
+    std::memcpy(entry.data() + 0x4, &enabled, sizeof(enabled));
 
-    for (size_t i = 0; i < adapters.size(); ++i) {
-        const auto& host = adapters[i];
-        u8* const base = blob.data() + i * kEntry;
-
-        *reinterpret_cast<u32*>(base + 0x0) = host.kind == HostAdapterKind::Wifi ? 1u : 2u;
-        *reinterpret_cast<u32*>(base + 0x4) = 1u;
-
-        *reinterpret_cast<in_addr*>(base + 0x18) = host.ip_address;
-        *reinterpret_cast<in_addr*>(base + 0x1C) = host.subnet_mask;
-        *reinterpret_cast<in_addr*>(base + 0x20) = host.gateway;
-
-        std::string name_utf8 = host.name;
-        name_utf8.resize(0x110, '\0');
-        std::memcpy(base + 0x2E0, name_utf8.data(), 0x110);
+    Network::RefreshFromHost();
+    auto& st = Network::EmuNetState::Get();
+    {
+        std::scoped_lock lock{st.mtx};
+        if (st.connected) {
+            std::memcpy(entry.data() + 0x18, st.ip.data(), st.ip.size());
+            std::memcpy(entry.data() + 0x1C, st.mask.data(), st.mask.size());
+            std::memcpy(entry.data() + 0x20, st.gw.data(), st.gw.size());
+        }
     }
+    constexpr std::string_view name = "eth0";
+    std::memcpy(entry.data() + 0x2E0, name.data(), name.size());
 
     const size_t guest_bytes = ctx.GetWriteBufferSize();
-    if (guest_bytes && !blob.empty())
-        ctx.WriteBuffer(blob.data(), (std::min)(guest_bytes, blob.size()));
+    if (guest_bytes != 0) {
+        ctx.WriteBuffer(entry.data(), (std::min)(guest_bytes, entry.size()));
+    }
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push<u32>(static_cast<u32>(adapters.size()));
+    rb.Push<u32>(1);
 }
 
 void IGeneralService::EnumerateNetworkProfiles(HLERequestContext& ctx) {
-    const auto adapter = Network::GetSelectedNetworkInterface();
-
-    if (!adapter) {
-        IPC::ResponseBuilder rb{ctx, 3};
-        rb.Push(ResultSuccess);
-        rb.Push(0);
-        return;
-    }
-
-    const u32 count = static_cast<u32>(1);
-
-    std::vector<u128> uuids;
-    uuids.reserve(count);
-
-    uuids.push_back(MakeUuidFromName(adapter.value().name));
-
-    const size_t guest_sz = ctx.GetWriteBufferSize();
-    if (guest_sz && uuids.size()) {
-        const size_t to_copy = (std::min)(guest_sz, uuids.size() * sizeof(u128));
-        ctx.WriteBuffer(uuids.data(), to_copy);
+    const u128 uuid = StoredProfileUuid();
+    if (ctx.GetWriteBufferSize() >= sizeof(uuid)) {
+        ctx.WriteBuffer(&uuid, sizeof(uuid));
     }
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(count);
+    rb.Push<s32>(1);
 }
 
+// NetConnect asks for the profile EnumerateNetworkProfiles listed; any uuid gets the one profile.
 void IGeneralService::GetNetworkProfile(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_NIFM, "GetNetworkProfile called");
+    LOG_DEBUG(Service_NIFM, "called");
 
-    IPC::RequestParser rp{ctx};
-
-    ASSERT_MSG(ctx.GetWriteBufferSize() == sizeof(SfNetworkProfileData),
-               "Caller expects SfNetworkProfileData (0x17C bytes)");
-
-    const auto net_iface = Network::GetSelectedNetworkInterface();
-
-    SfNetworkProfileData profile = [&] {
-        if (!net_iface) {
-            return SfNetworkProfileData{};
-        }
-
-        const auto& net_state = Network::EmuNetState::Get();
-
-        std::array<char, 0x40> net_name{};
-        const size_t ssid_len = std::min<size_t>(std::strlen(net_state.ssid), net_name.size());
-        std::memcpy(net_name.data(), net_state.ssid, ssid_len);
-
-        SfWirelessSettingData wifi{};
-        wifi.ssid_length =
-            static_cast<u8>(std::min<size_t>(std::strlen(net_state.ssid), net_name.size()));
-        wifi.is_secured = !net_state.secure; // somehow reversed
-        wifi.passphrase = {"password"};
-        std::memcpy(wifi.ssid.data(), net_state.ssid, wifi.ssid_length);
-
-        LOG_INFO(Service_NIFM, "ssid={} lenght={}", wifi.ssid, wifi.ssid_length);
-
-        return SfNetworkProfileData{
-            .ip_setting_data{
-                .ip_address_setting{
-                    .is_automatic{true},
-                    .ip_address{Network::TranslateIPv4(net_iface->ip_address)},
-                    .subnet_mask{Network::TranslateIPv4(net_iface->subnet_mask)},
-                    .default_gateway{Network::TranslateIPv4(net_iface->gateway)},
-                },
-                .dns_setting{
-                    .is_automatic{true},
-                    .primary_dns{1, 1, 1, 1},
-                    .secondary_dns{1, 0, 0, 1},
-                },
-                .proxy_setting{
-                    .is_enabled{false},
-                },
-                .mtu{1500},
-            },
-            .uuid{MakeUuidFromName(net_state.ssid)},
-            .network_name{net_name},
-            .profile_type = static_cast<u8>(NetworkProfileType::User),
-            .interface_type = static_cast<u8>(net_iface->kind == Network::HostAdapterKind::Wifi
-                                                  ? NetworkInterfaceType::WiFi_Ieee80211
-                                                  : NetworkInterfaceType::Ethernet),
-            .wireless_setting_data{wifi}};
-    }();
-
-    if (auto room_member = Network::GetRoomMember().lock()) {
-        if (room_member->IsConnected()) {
-            profile.ip_setting_data.ip_address_setting.ip_address = room_member->GetFakeIpAddress();
-        }
-    }
-
-    ctx.WriteBuffer(profile);
+    ctx.WriteBuffer(MakeStoredProfile());
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<INetworkProfile>(ctx, system);
 }
 
+// The edited profile is accepted and dropped (the network comes from the host); the stored
+// profile keeps its uuid. Nothing it carries, a Wi-Fi passphrase included, is kept.
 void IGeneralService::SetNetworkProfile(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_NIFM, "SetNetworkProfile called");
+    LOG_INFO(Service_NIFM, "SetNetworkProfile accepted, not stored ({} bytes)",
+             ctx.GetReadBufferSize());
 
-    if (!ctx.CanReadBuffer(0) || ctx.GetReadBufferSize() < sizeof(NifmNetworkProfileData)) {
-        IPC::ResponseBuilder{ctx, 2}.Push(ResultInvalidInput);
-        return;
-    }
-
-    const auto data = ctx.ReadBufferCopy(0);
-    const auto* np = reinterpret_cast<const NifmNetworkProfileData*>(data.data());
-
-    PendingProfile prof{};
-    prof.ssid_len = np->wireless_setting_data.ssid_length;
-    std::memcpy(prof.ssid.data(), np->wireless_setting_data.ssid.data(), prof.ssid_len);
-    std::memcpy(prof.passphrase.data(), np->wireless_setting_data.passphrase.data(),
-                sizeof(prof.passphrase));
-
-    {
-        std::scoped_lock lk{g_profile_mtx};
-        g_pending_profile = prof;
-    }
-
-    IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+    IPC::ResponseBuilder rb{ctx, 6};
+    rb.Push(ResultSuccess);
+    rb.PushRaw(StoredProfileUuid());
 }
 
 void IGeneralService::RemoveNetworkProfile(HLERequestContext& ctx) {
-    LOG_WARNING(Service_NIFM, "(STUBBED) called");
+    LOG_INFO(Service_NIFM, "RemoveNetworkProfile accepted; the stored profile stays");
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
 
-void IGeneralService::GetScanData(HLERequestContext& ctx) {
-    LOG_INFO(Service_NIFM, "GetScanData called");
+// No access point is ever listed (see IScanRequest); the output array is zeroed.
+static void NoScanData(HLERequestContext& ctx) {
+    const size_t guest_bytes = ctx.GetWriteBufferSize();
+    if (guest_bytes != 0) {
+        const std::vector<u8> zeros(guest_bytes, 0);
+        ctx.WriteBuffer(zeros);
+    }
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(0);
+    rb.Push<s32>(0);
+}
+
+void IGeneralService::GetScanData(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_NIFM, "called, 0 access points");
+    NoScanData(ctx);
 }
 
 void IGeneralService::GetScanDataV2(HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
-    std::scoped_lock lk{g_scan_mtx};
-    const auto& scans = g_last_scan_results;
-
-    const auto& net_state = Network::EmuNetState::Get();
-
-    const std::size_t guest_bytes = ctx.GetWriteBufferSize();
-    const std::size_t max_rows = guest_bytes / sizeof(AccessPointDataV3);
-    const std::size_t rows_copy = std::min<std::size_t>(scans.size(), max_rows);
-
-    std::vector<AccessPointDataV3> rows;
-    rows.resize(rows_copy);
-
-    auto to_bars = [](u8 q) {
-        return static_cast<u8>((q + 16) / 33); // quick maths
-    };
-
-    for (std::size_t i = 0; i < rows_copy; ++i) {
-        const Network::ScanData& s = scans[i];
-        auto& ap = rows[i];
-
-        ap.ssid_len = s.ssid_len;
-        std::memcpy(ap.ssid, s.ssid, s.ssid_len);
-        ap.strength = to_bars(s.quality);
-
-        bool is_connected = std::strncmp(net_state.ssid, ap.ssid, ap.ssid_len) == 0 &&
-                            net_state.ssid[ap.ssid_len] == '\0';
-
-        ap.visible = (is_connected) ? 0 : 1;
-        ap.has_password = (s.flags & 2) ? 2 : 1;
-        ap.is_available = 1;
-    }
-
-    if (rows_copy)
-        ctx.WriteBuffer(rows.data(), rows_copy * sizeof(AccessPointDataV3));
-
-    IPC::ResponseBuilder rb{ctx, 3};
-    rb.Push(ResultSuccess);
-    rb.Push(static_cast<u32>(scans.size()));
+    LOG_DEBUG(Service_NIFM, "called, 0 access points");
+    NoScanData(ctx);
 }
 
 void IGeneralService::GetScanDataV3(HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx};
-
-    std::scoped_lock lk{g_scan_mtx};
-    const auto& scans = g_last_scan_results;
-
-    const std::size_t guest_bytes = ctx.GetWriteBufferSize();
-    const std::size_t max_rows = guest_bytes / sizeof(AccessPointDataV3);
-    const std::size_t rows_copy = std::min<std::size_t>(scans.size(), max_rows);
-
-    std::vector<AccessPointDataV3> rows;
-    rows.resize(rows_copy);
-
-    auto to_bars = [](u8 q) {
-        return static_cast<u8>((q + 16) / 33); // quick maths
-    };
-
-    for (std::size_t i = 0; i < rows_copy; ++i) {
-        const Network::ScanData& s = scans[i];
-        auto& ap = rows[i];
-
-        ap.ssid_len = s.ssid_len;
-        std::memcpy(ap.ssid, s.ssid, s.ssid_len);
-        ap.strength = to_bars(s.quality);
-        ap.visible = 1;
-        ap.has_password = (s.flags & 2) ? 2 : 1;
-        ap.is_available = 1;
-    }
-
-    if (rows_copy)
-        ctx.WriteBuffer(rows.data(), rows_copy * sizeof(AccessPointDataV3));
-
-    IPC::ResponseBuilder rb{ctx, 3};
-    rb.Push(ResultSuccess);
-    rb.Push(static_cast<u32>(scans.size()));
+    LOG_DEBUG(Service_NIFM, "called, 0 access points");
+    NoScanData(ctx);
 }
 
 void IGeneralService::GetCurrentIpAddress(HLERequestContext& ctx) {
@@ -1002,15 +802,11 @@ void IGeneralService::GetInternetConnectionStatus(HLERequestContext& ctx) {
     };
     Output out{};
 
-    if (!st.connected) {
-        out.type = 1;
-        out.bars = 0;
-        out.state = InternetConnectionStatus::ConnectingUnknown1;
-    } else {
-        out.type = st.via_wifi ? 1 : 2;
-        out.bars = st.bars;
-        out.state = InternetConnectionStatus::Connected;
-    }
+    // Wired, so no signal bars.
+    out.type = static_cast<u8>(NetworkInterfaceType::Ethernet);
+    out.bars = 0;
+    out.state = st.connected ? InternetConnectionStatus::Connected
+                             : InternetConnectionStatus::ConnectingUnknown1;
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
@@ -1026,16 +822,11 @@ void IGeneralService::SetEthernetCommunicationEnabled(HLERequestContext& ctx) {
     IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
 }
 
+// The wired link is always enabled; airplane mode only switches wireless off.
 void IGeneralService::IsEthernetCommunicationEnabled(HLERequestContext& ctx) {
-    LOG_WARNING(Service_NIFM, "(STUBBED) called");
-
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    if (Network::GetHostIPv4Address().has_value() && !Settings::values.airplane_mode.GetValue()) {
-        rb.Push<u8>(1);
-    } else {
-        rb.Push<u8>(0);
-    }
+    rb.Push<u8>(1);
 }
 
 void IGeneralService::IsAnyInternetRequestAccepted(HLERequestContext& ctx) {
@@ -1051,13 +842,36 @@ void IGeneralService::IsAnyInternetRequestAccepted(HLERequestContext& ctx) {
 }
 
 void IGeneralService::IsAnyForegroundRequestAccepted(HLERequestContext& ctx) {
-    const bool is_accepted{};
-
-    LOG_WARNING(Service_NIFM, "(STUBBED) called, is_accepted={}", is_accepted);
+    LOG_DEBUG(Service_NIFM, "called");
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push<u8>(is_accepted);
+    rb.Push<u8>(true);
+}
+
+// One client owning the network is a console power-management idea; emulation has nothing to
+// arbitrate, so the claim is accepted and forgotten.
+void IGeneralService::SetExclusiveClient(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_NIFM, "called");
+    IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+}
+
+void IGeneralService::SetDefaultIpSetting(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_NIFM, "called, accepted and not stored");
+    IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+}
+
+// Test-only switches titles poke before they trust the network: the answers they gate stay yes.
+void IGeneralService::SetWirelessCommunicationEnabledForTest(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    LOG_DEBUG(Service_NIFM, "called, enabled={}", rp.Pop<bool>());
+    IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
+}
+
+void IGeneralService::SetEthernetCommunicationEnabledForTest(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    LOG_DEBUG(Service_NIFM, "called, enabled={}", rp.Pop<bool>());
+    IPC::ResponseBuilder{ctx, 2}.Push(ResultSuccess);
 }
 
 void IGeneralService::GetSsidListVersion(HLERequestContext& ctx) {
@@ -1088,22 +902,9 @@ void IGeneralService::SetBackgroundRequestEnabled(HLERequestContext& ctx) {
     rb.Push(ResultSuccess);
 }
 
+// The link is wired, so there is no access point: the record stays zeroed.
 void IGeneralService::GetCurrentAccessPoint(HLERequestContext& ctx) {
-    Network::RefreshFromHost();
-
-    const auto& st = Network::EmuNetState::Get();
-
-    AccessPointDataV3 access_point_info{};
-
-    if (st.connected && st.via_wifi) {
-        access_point_info.ssid_len = static_cast<u8>(std::strlen(st.ssid));
-        access_point_info.strength = st.bars;
-        access_point_info.visible = 1;
-        access_point_info.is_available = 1;
-        std::memcpy(access_point_info.ssid, st.ssid, access_point_info.ssid_len);
-    }
-
-    ctx.WriteBuffer(access_point_info);
+    ctx.WriteBuffer(AccessPointDataV3{});
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
@@ -1138,11 +939,11 @@ IGeneralService::IGeneralService(Core::System& system_)
         {23, nullptr, "PutToSleep"},
         {24, nullptr, "WakeUp"},
         {25, &IGeneralService::GetSsidListVersion, "GetSsidListVersion"},
-        {26, nullptr, "SetExclusiveClient"},
+        {26, &IGeneralService::SetExclusiveClient, "SetExclusiveClient"},
         {27, nullptr, "GetDefaultIpSetting"},
-        {28, nullptr, "SetDefaultIpSetting"},
-        {29, nullptr, "SetWirelessCommunicationEnabledForTest"},
-        {30, nullptr, "SetEthernetCommunicationEnabledForTest"},
+        {28, &IGeneralService::SetDefaultIpSetting, "SetDefaultIpSetting"},
+        {29, &IGeneralService::SetWirelessCommunicationEnabledForTest, "SetWirelessCommunicationEnabledForTest"},
+        {30, &IGeneralService::SetEthernetCommunicationEnabledForTest, "SetEthernetCommunicationEnabledForTest"},
         {31, nullptr, "GetTelemetorySystemEventReadableHandle"},
         {32, nullptr, "GetTelemetryInfo"},
         {33, &IGeneralService::ConfirmSystemAvailability, "ConfirmSystemAvailability"}, // 2.0.0+

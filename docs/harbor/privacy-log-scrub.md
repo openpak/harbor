@@ -76,9 +76,14 @@ Resolved: `psc/ovln/sender.cpp` and `sender_service.cpp`. The OvlnAgent rewrite 
 
 | File:line | What it logs |
 |---|---|
-| `core/hle/service/ssl/ssl_backend_openssl.cpp:320` | TLS secrets at DEBUG when `SSLKEYLOGFILE` is set. Compile `KeyLogCallback` and the `SSLKEYLOGFILE` handling out of release builds |
-| `core/hle/service/nifm/nifm.cpp:744` | host Wi-Fi SSID (location data) |
-| `core/internal_network/wifi_scanner.cpp:85` | host Wi-Fi SSIDs |
+| `core/internal_network/wifi_scanner.cpp:85` | host Wi-Fi SSIDs (Windows build only). Unreachable in Harbor: nothing calls `ScanWifiNetworks` since nifm became wired-only. The file is not the net stream's; drop the line when it is next touched |
+
+Resolved on `p3/net`:
+- `ssl/ssl_backend_openssl.cpp`: `KeyLogCallback` and the `SSLKEYLOGFILE` handling are compiled only
+  without `NDEBUG`, so a release build has neither. The secrets go to the file, never to the log.
+- `nifm/nifm.cpp`: the Wi-Fi scan is gone (wired only, an empty scan), and with it the host SSID line.
+- `ssl`: the host names a connection verifies against are logged (they are server names, not user data);
+  no request, header or certificate content is.
 
 ## Core, frontend and common (coordinator)
 

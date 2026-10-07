@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <mutex>
+#include <vector>
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -12,10 +14,12 @@
 #include <openssl/x509.h>
 
 #include "common/fs/file.h"
+#include "common/fs/path_util.h"
 #include "common/hex_util.h"
 #include "common/string_util.h"
 
 #include "core/hle/service/ssl/ssl_backend.h"
+#include "core/hle/service/ssl/ssl_trust.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/sockets.h"
 
@@ -37,13 +41,21 @@ std::once_flag one_time_init_flag;
 bool one_time_init_success = false;
 
 SSL_CTX* ssl_ctx;
-IOFile key_log_file; // only open if SSLKEYLOGFILE set in environment
+#ifndef NDEBUG
+// TLS secrets of guest connections: debug builds only, and only when SSLKEYLOGFILE is set.
+IOFile key_log_file;
+#endif
 BIO_METHOD* bio_meth;
+
+// The pinned OpenPak CA last added to the context's store, so an unchanged file is not re-added.
+std::mutex pinned_ca_mutex;
+std::string pinned_ca_pem;
 
 Result CheckOpenSSLErrors();
 void OneTimeInit();
 void OneTimeInitLogFile();
 bool OneTimeInitBIO();
+void TrustPinnedCa();
 
 #ifdef YUZU_BUNDLED_OPENSSL
 // This is ported from httplib
@@ -120,10 +132,6 @@ inline void LoadCaCertStore(SSL_CTX* ctx, const char* ca_cert, std::size_t size)
 class SSLConnectionBackendOpenSSL final : public SSLConnectionBackend {
 public:
     Result Init() {
-        // on bundled OpenSSL, load ca cert store
-#ifdef YUZU_BUNDLED_OPENSSL
-        LoadCaCertStore(ssl_ctx, kCert, sizeof(kCert));
-#endif
         std::call_once(one_time_init_flag, OneTimeInit);
 
         if (!one_time_init_success) {
@@ -132,6 +140,8 @@ public:
             return ResultInternalError;
         }
 
+        TrustPinnedCa();
+
         ssl = SSL_new(ssl_ctx);
         if (!ssl) {
             LOG_ERROR(Service_SSL, "SSL_new failed");
@@ -139,6 +149,8 @@ public:
         }
 
         SSL_set_connect_state(ssl);
+        // Always verified host-side, whatever the guest's verify option (ssl_trust.h).
+        SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
 
         bio = BIO_new(bio_meth);
         if (!bio) {
@@ -157,17 +169,10 @@ public:
         socket = std::move(socket_in);
     }
 
+    // The name and the verify option arrive in either order, so the name is only remembered here
+    // and applied when the handshake starts.
     Result SetHostName(const char* hostname) override {
-        if (!skip_cert_verification) {
-            if (!SSL_set1_host(ssl, hostname)) {
-                LOG_ERROR(Service_SSL, "SSL_set1_host({}) failed", hostname);
-                return CheckOpenSSLErrors();
-            }
-        }
-        if (!SSL_set_tlsext_host_name(ssl, hostname)) { // hostname for SNI
-            LOG_ERROR(Service_SSL, "SSL_set_tlsext_host_name({}) failed", hostname);
-            return CheckOpenSSLErrors();
-        }
+        host_name = hostname;
         R_SUCCEED();
     }
 
@@ -184,32 +189,77 @@ public:
     }
 
     void SetVerifyOption(u32 option) override {
-        skip_cert_verification = (option == 0);
-        LOG_WARNING(Service_SSL, "option={} skip_verification={}", option,
-                    skip_cert_verification);
-        if (skip_cert_verification) {
-            SSL_set_verify(ssl, SSL_VERIFY_NONE, nullptr);
-            SSL_set1_host(ssl, nullptr);
-            SSL_set_hostflags(ssl, 0);
-        } else {
-            SSL_set_verify(ssl, SSL_VERIFY_PEER, nullptr);
+        // Recorded for the log only. A guest that asks for no verification still gets it: a
+        // redirected Nintendo name must prove it is OpenPak, and nothing else is excused either
+        // (the Ryujinx Harbor's model).
+        LOG_DEBUG(Service_SSL, "guest verify option {} (the host verifies regardless)", option);
+    }
+
+    // The name the certificate must carry: the one the guest set, or the peer's address when it
+    // set none. A literal address is matched against the IP SAN and never sent as SNI.
+    Result ApplyVerification() {
+        verify_name = host_name;
+        if (verify_name.empty() && socket) {
+            const auto [peer, err] = socket->GetPeerName();
+            if (err == Network::Errno::SUCCESS) {
+                verify_name = Network::IPv4AddressToString(peer.ip);
+            }
         }
+        if (!Trust::SetExpectedPeer(SSL_get0_param(ssl), verify_name)) {
+            LOG_ERROR(Service_SSL, "No name to verify the server against; refusing the handshake");
+            return ResultConnectionReset;
+        }
+        if (!host_name.empty() && !Trust::IsIpLiteral(host_name) &&
+            !SSL_set_tlsext_host_name(ssl, host_name.c_str())) {
+            LOG_ERROR(Service_SSL, "SSL_set_tlsext_host_name({}) failed", host_name);
+            return CheckOpenSSLErrors();
+        }
+        R_SUCCEED();
+    }
+
+    // Whether the verified chain's root is the pinned OpenPak CA (for the log only).
+    bool ChainEndsAtPinnedCa() const {
+        STACK_OF(X509)* const chain = SSL_get0_verified_chain(ssl);
+        const int count = chain != nullptr ? sk_X509_num(chain) : 0;
+        if (count == 0) {
+            return false;
+        }
+        unsigned char* buffer = nullptr;
+        const int length = i2d_X509(sk_X509_value(chain, count - 1), &buffer);
+        std::vector<unsigned char> pinned;
+        {
+            std::scoped_lock lock{pinned_ca_mutex};
+            pinned = Trust::PemCaToDer(pinned_ca_pem);
+        }
+        const bool same = length > 0 && buffer != nullptr &&
+                          pinned.size() == static_cast<std::size_t>(length) &&
+                          std::equal(pinned.begin(), pinned.end(), buffer);
+        OPENSSL_free(buffer);
+        return same;
     }
 
     Result DoHandshake() override {
-        SSL_set_verify_result(ssl, X509_V_OK);
-        const int ret = SSL_do_handshake(ssl);
-
-        if (!skip_cert_verification) {
-            const long verify_result = SSL_get_verify_result(ssl);
-            if (verify_result != X509_V_OK) {
-                LOG_ERROR(Service_SSL, "SSL cert verification failed because: {}",
-                          X509_verify_cert_error_string(verify_result));
-                return CheckOpenSSLErrors();
-            }
+        // Once: a non-blocking handshake is called again until it completes.
+        if (!verification_applied) {
+            R_TRY(ApplyVerification());
+            verification_applied = true;
         }
 
+        const int ret = SSL_do_handshake(ssl);
+
+        if (ret == 1) {
+            LOG_DEBUG(Service_SSL, "Verified {}: the chain ends at {}", verify_name,
+                      ChainEndsAtPinnedCa() ? "the pinned OpenPak CA" : "a host root");
+        }
         if (ret <= 0) {
+            const long verify_result = SSL_get_verify_result(ssl);
+            if (verify_result != X509_V_OK) {
+                LOG_WARNING(Service_SSL, "Refused the certificate of {}: {}", verify_name,
+                            X509_verify_cert_error_string(verify_result));
+                ERR_clear_error();
+                return ResultConnectionReset;
+            }
+
             const int ssl_err = SSL_get_error(ssl, ret);
             if (ssl_err == SSL_ERROR_ZERO_RETURN ||
                 (ssl_err == SSL_ERROR_SYSCALL && got_read_eof)) {
@@ -225,11 +275,11 @@ public:
         return HandleReturn("SSL_read_ex", out_size, ret);
     }
 
+    // Reads without consuming: Moving Out 2's websocket uses Peek as its readiness check.
     Result Peek(size_t* out_size, std::span<u8> data) override {
-        auto const n = (std::min)(data.size(), *out_size);
-        const int ret = SSL_peek(ssl, data.data(), int(n));
-        *out_size = n;
-        return HandleReturn("SSL_write_ex", out_size, ret);
+        *out_size = 0;
+        const int ret = SSL_peek_ex(ssl, data.data(), data.size(), out_size);
+        return HandleReturn("SSL_peek_ex", out_size, ret);
     }
 
     Result Write(size_t* out_size, std::span<const u8> data) override {
@@ -289,11 +339,14 @@ public:
         return SSL_pending(ssl);
     }
 
+    // This connection's own options: the context is shared by every guest connection.
     Result SetRenegotiationMode(u32 mode) override {
         if (mode == 0) {
-            SSL_CTX_set_options(ssl_ctx, SSL_OP_NO_RENEGOTIATION);
+            SSL_clear_options(ssl, SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
+            SSL_set_options(ssl, SSL_OP_NO_RENEGOTIATION);
         } else {
-            SSL_CTX_set_options(ssl_ctx, SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
+            SSL_clear_options(ssl, SSL_OP_NO_RENEGOTIATION);
+            SSL_set_options(ssl, SSL_OP_ALLOW_CLIENT_RENEGOTIATION);
         }
         R_SUCCEED();
     }
@@ -303,22 +356,54 @@ public:
         R_SUCCEED();
     }
 
+    // The guest's list goes to OpenSSL as it arrived: SetNextAlpnProto carries the
+    // length-prefixed wire form SSL_set_alpn_protos wants.
+    void SetAlpnProtos(std::span<const u8> protos) override {
+        if (protos.empty()) {
+            return;
+        }
+        if (SSL_set_alpn_protos(ssl, protos.data(), static_cast<unsigned>(protos.size())) != 0) {
+            LOG_ERROR(Service_SSL, "SSL_set_alpn_protos failed");
+        }
+    }
+
+    std::vector<u8> GetNegotiatedAlpnProto() override {
+        const unsigned char* selected = nullptr;
+        unsigned int length = 0;
+        SSL_get0_alpn_selected(ssl, &selected, &length);
+        if (selected == nullptr || length == 0) {
+            return {};
+        }
+        return {selected, selected + length};
+    }
+
+    Result GetCipherInfo(std::string* cipher_name, std::string* protocol_version) override {
+        const SSL_CIPHER* const cipher = SSL_get_current_cipher(ssl);
+        if (cipher == nullptr) {
+            return ResultInternalError;
+        }
+        *cipher_name = SSL_CIPHER_get_name(cipher);
+        *protocol_version = SSL_get_version(ssl);
+        R_SUCCEED();
+    }
+
     ~SSLConnectionBackendOpenSSL() {
         // this is null-tolerant:
         SSL_free(ssl);
     }
 
+#ifndef NDEBUG
     static void KeyLogCallback(const SSL* ssl, const char* line) {
         std::string str(line);
         str.push_back('\n');
         // Do this in a single WriteString for atomicity if multiple instances
         // are running on different threads (though that can't currently
-        // happen).
+        // happen). The secret itself never goes to the log.
         if (key_log_file.WriteString(str) != str.size() || !key_log_file.Flush()) {
             LOG_CRITICAL(Service_SSL, "Failed to write to SSLKEYLOGFILE");
         }
-        LOG_DEBUG(Service_SSL, "Wrote to SSLKEYLOGFILE: {}", line);
     }
+#endif
 
     static int WriteCallback(BIO* bio, const char* buf, size_t len, size_t* actual_p) {
         auto self = static_cast<SSLConnectionBackendOpenSSL*>(BIO_get_data(bio));
@@ -384,7 +469,9 @@ public:
     SSL* ssl = nullptr;
     BIO* bio = nullptr;
     bool got_read_eof = false;
-    bool skip_cert_verification = false;
+    bool verification_applied = false;
+    std::string host_name;
+    std::string verify_name;
 
     std::shared_ptr<Network::SocketBase> socket;
 };
@@ -446,6 +533,12 @@ void OneTimeInit() {
         return;
     }
 
+    // Once, before any connection: reloading it per connection replaced the store, and with it
+    // the OpenPak CA, under every connection already set up.
+#ifdef YUZU_BUNDLED_OPENSSL
+    LoadCaCertStore(ssl_ctx, kCert, sizeof(kCert));
+#endif
+
     OneTimeInitLogFile();
 
     if (!OneTimeInitBIO()) {
@@ -456,6 +549,7 @@ void OneTimeInit() {
 }
 
 void OneTimeInitLogFile() {
+#ifndef NDEBUG
     const char* logfile = getenv("SSLKEYLOGFILE");
     if (logfile) {
         key_log_file.Open(logfile, FileAccessMode::Append, FileType::TextFile,
@@ -467,6 +561,34 @@ void OneTimeInitLogFile() {
                          "SSLKEYLOGFILE was set but file could not be opened; not logging keys!");
         }
     }
+#endif
+}
+
+std::filesystem::path PinnedCaFile() {
+    return Trust::PinnedCaPath(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "openpak" /
+                               "ca.pem");
+}
+
+// OpenPak answers to Nintendo's own names, which no public CA can issue for, so its pinned CA
+// joins the roots guest connections are checked against. Nothing else is loosened: a chain that
+// reaches neither it nor a host root is refused. Behaviour follows the Ryujinx Harbor (MIT-licensed
+// Ryujinx base).
+void TrustPinnedCa() {
+    std::string pem = Trust::ReadFile(PinnedCaFile());
+    if (pem.empty()) {
+        return;
+    }
+    std::scoped_lock lock{pinned_ca_mutex};
+    if (pem == pinned_ca_pem) {
+        return;
+    }
+    const int added = Trust::AddPemCaCertificates(SSL_CTX_get_cert_store(ssl_ctx), pem);
+    if (added == 0) {
+        LOG_WARNING(Service_SSL, "openpak/ca.pem holds no CA certificate; it is not trusted");
+        return;
+    }
+    pinned_ca_pem = std::move(pem);
+    LOG_INFO(Service_SSL, "Guest TLS trusts the host roots and the pinned OpenPak CA");
 }
 
 bool OneTimeInitBIO() {
@@ -483,5 +605,9 @@ bool OneTimeInitBIO() {
 }
 
 } // namespace
+
+std::vector<u8> LoadPinnedCaDer() {
+    return Trust::PemCaToDer(Trust::ReadFile(PinnedCaFile()));
+}
 
 } // namespace Service::SSL
