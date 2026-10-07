@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/registered_cache.h"
@@ -21,9 +22,80 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
+#include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace Service::NS {
+
+namespace {
+
+bool IsUpdateVersionDisabled(const std::vector<std::string>& disabled, u32 version) {
+    return std::find(disabled.begin(), disabled.end(), fmt::format("Update@{}", version)) !=
+               disabled.end() ||
+           std::find(disabled.begin(), disabled.end(), "Update") != disabled.end();
+}
+
+// HOME polls the views, so a version is logged the first time it is reported for a title.
+void LogReportedVersion(u64 application_id, u32 version) {
+    static std::mutex mutex;
+    static std::set<std::pair<u64, u32>> logged;
+    std::scoped_lock lk{mutex};
+    if (logged.emplace(application_id, version).second) {
+        LOG_INFO(Service_NS, "application {:016X} reported at installed version {} ({:#x})",
+                 application_id, version, version);
+    }
+}
+
+} // Anonymous namespace
+
+u32 FindInstalledApplicationVersion(Core::System& system, u64 application_id);
+
+u32 GetInstalledApplicationVersion(Core::System& system, u64 application_id) {
+    const auto version = FindInstalledApplicationVersion(system, application_id);
+    LogReportedVersion(application_id, version);
+    return version;
+}
+
+u32 FindInstalledApplicationVersion(Core::System& system, u64 application_id) {
+    const auto& content = system.GetContentProviderUnion();
+    const auto update_id = FileSys::GetUpdateTitleID(application_id);
+    const auto& disabled = Settings::values.disabled_addons[application_id];
+
+    // The external folders win, then the frontend's own, as FileSys::PatchManager picks the update
+    // it applies. Each lists its updates newest first.
+    const auto newest_enabled = [&](const auto* provider) -> std::optional<u32> {
+        if (provider == nullptr) {
+            return std::nullopt;
+        }
+        for (const auto& entry : provider->ListUpdateVersions(update_id)) {
+            if (!IsUpdateVersionDisabled(disabled, entry.version)) {
+                return entry.version;
+            }
+        }
+        return std::nullopt;
+    };
+    const auto* const external = content.GetExternalProvider();
+    const auto* const manual = static_cast<const FileSys::ManualContentProvider*>(
+        content.GetSlotProvider(FileSys::ContentProviderUnionSlot::FrontendManual));
+    if (const auto version = newest_enabled(external)) {
+        return *version;
+    }
+    if (const auto version = newest_enabled(manual)) {
+        return *version;
+    }
+
+    // An update installed on the NAND or the SD card, else the base title.
+    if (std::find(disabled.begin(), disabled.end(), "Update") == disabled.end() &&
+        content.HasEntry(update_id, FileSys::ContentRecordType::Program)) {
+        if (const auto version = content.GetEntryVersion(update_id)) {
+            return *version;
+        }
+    }
+    return content.GetEntryVersion(application_id).value_or(0);
+}
 
 IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_)
     : ServiceFramework{system_, "IApplicationManagerInterface"},
@@ -689,7 +761,7 @@ Result IApplicationManagerInterface::GetApplicationViewDeprecated(
     for (size_t i = 0; i < size; i++) {
         ApplicationViewV19 view{};
         view.application_id = application_ids[i];
-        view.version = 0x70000;
+        view.version = GetInstalledApplicationVersion(system, application_ids[i]);
         view.flags = 0x401f17;
 
         out_application_views[i] = view;
@@ -717,7 +789,7 @@ Result IApplicationManagerInterface::GetApplicationViewWithPromotionInfo(
     for (size_t i = 0; i < to_write_entries; ++i) {
         ApplicationViewWithPromotionData data{};
         data.view.application_id = application_ids[i];
-        data.view.version = 0x70000;
+        data.view.version = GetInstalledApplicationVersion(system, application_ids[i]);
         data.view.unk = 0;
         data.view.flags = 0x401f17;
         data.view.download_state = {};
@@ -744,7 +816,7 @@ Result IApplicationManagerInterface::GetApplicationView(
     for (size_t i = 0; i < size; i++) {
         ApplicationViewV20 view{};
         view.application_id = application_ids[i];
-        view.version = 0x70000;
+        view.version = GetInstalledApplicationVersion(system, application_ids[i]);
         view.unk = 0;
         view.flags = 0x401f17;
 
