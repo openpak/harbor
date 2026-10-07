@@ -19,6 +19,7 @@
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/window_system.h"
+#include "core/hle/service/caps/caps_overlay_screenshot.h"
 #include "core/hle/service/friend/friend_service.h"
 #include "core/hle/service/psc/ovln/ovln_agent.h"
 #include "core/hle/service/psc/ovln/ovln_types.h"
@@ -432,6 +433,10 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
             if (is_long) {
                 // No video recording here: the overlay says so.
                 SendAmOverlayNotification(AmOverlayNotificationRecordingUnavailable);
+            } else {
+                // A screenshot of what is on screen; returns at once, the capture runs on its own
+                // thread (this lock is held here).
+                Service::Capture::TakeOverlayScreenShot(m_system);
             }
         }
         return;
