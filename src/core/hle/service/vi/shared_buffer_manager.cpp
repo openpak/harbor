@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <random>
 
 #include "common/assert.h"
@@ -177,7 +178,10 @@ constexpr u32 SharedBufferBlockLinearStride =
 
 constexpr u32 SharedBufferNumCaptureSlots = 3;
 constexpr u32 SharedBufferSlotsPerSession = 2;
-constexpr u32 SharedBufferMaxSessions = 2;
+// One session per non-application applet drawing at once in a HOME session: qlaunch, overlayDisp,
+// the starter, the applet it opens and that applet's keyboard. Each owns its own two presentation
+// slots, so a backgrounded session never draws into the front one's frames.
+constexpr u32 SharedBufferMaxSessions = 5;
 
 constexpr u32 SharedBufferNumSlots =
     SharedBufferNumCaptureSlots + SharedBufferSlotsPerSession * SharedBufferMaxSessions;
@@ -300,6 +304,24 @@ Result SharedBufferManager::CreateSession(Kernel::KProcess* owner_process, u64* 
             }
         }
 
+        // Find free presentation slots for this session.
+        std::optional<u32> slot_base;
+        for (u32 candidate = 0; candidate < SharedBufferMaxSessions * SharedBufferSlotsPerSession;
+             candidate += SharedBufferSlotsPerSession) {
+            const bool taken = std::ranges::any_of(m_sessions, [&](const auto& entry) {
+                return entry.second.presentation_slot_base == candidate;
+            });
+            if (!taken) {
+                slot_base = candidate;
+                break;
+            }
+        }
+        if (!slot_base) {
+            LOG_WARNING(Service_VI, "no free shared buffer session for pid {} ({} in use)", aruid,
+                        m_sessions.size());
+            R_THROW(VI::ResultPermissionDenied);
+        }
+
         // Map into process.
         Common::ProcessAddress map_address{};
         R_TRY(MapSharedBufferIntoProcessAddressSpace(std::addressof(map_address), m_buffer_page_group,
@@ -308,6 +330,7 @@ Result SharedBufferManager::CreateSession(Kernel::KProcess* owner_process, u64* 
         // Create new session.
         auto [it, was_emplaced] = m_sessions.emplace(aruid, SharedBufferSession{});
         auto& session = it->second;
+        session.presentation_slot_base = *slot_base;
 
         auto& container = m_nvdrv->GetContainer();
         session.session_id = container.OpenSession(owner_process);
@@ -330,6 +353,11 @@ Result SharedBufferManager::CreateSession(Kernel::KProcess* owner_process, u64* 
         R_TRY(m_container.GetLayerProducerHandle(std::addressof(producer), session.layer_id));
         for (u32 i = 0; i < SharedBufferSlotsPerSession; i++)
             MakeGraphicBuffer(*producer, i, GetPresentationSlot(session.presentation_slot_base, i), session.buffer_nvmap_handle);
+
+        LOG_INFO(Service_VI, "shared buffer session for pid {}: layer {}, slots {}-{}", aruid,
+                 session.layer_id, GetPresentationSlot(session.presentation_slot_base, 0),
+                 GetPresentationSlot(session.presentation_slot_base,
+                                     SharedBufferSlotsPerSession - 1));
 
         // Assign outputs.
         *out_buffer_id = m_buffer_id;

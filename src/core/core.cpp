@@ -318,6 +318,9 @@ struct System::Impl {
 
         InitializeKernel(system);
 
+        // One ProfileManager for the frontend and acc, read afresh for each session.
+        profile_manager.ReloadForSession(Service::AM::IsHomeSessionRoot(params));
+
         if (params.applet_type == Service::AM::AppletType::Application) {
             current_application_filepath = filepath;
         }

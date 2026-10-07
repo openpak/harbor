@@ -40,7 +40,9 @@ public:
     void RequestUpdate();
 
 public:
-    void TrackApplet(std::shared_ptr<Applet> applet, bool is_application);
+    // False when the slot is taken: a second home menu, or an application that has not completed.
+    [[nodiscard]] bool TrackApplet(std::shared_ptr<Applet> applet, bool is_application);
+    bool HasApplication();
     std::shared_ptr<Applet> GetByAppletResourceUserId(u64 aruid);
     std::shared_ptr<Applet> GetMainApplet();
     std::shared_ptr<Applet> GetOverlayDisplayApplet();
@@ -70,7 +72,8 @@ private:
     bool IsOverlayOpenLocked(const Applet& overlay) const;
     bool DoesOverlayTakeInputLocked() const;
 
-    void UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input);
+    void UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input,
+                                 s32 caller_z_index = -1);
     void SendButtonAppletMessageLocked(AppletMessage message);
 
 private:
@@ -95,6 +98,7 @@ private:
     // Applet map by aruid.
     std::map<u64, std::shared_ptr<Applet>> m_applets{};
     std::optional<u64> m_pending_application_notification{};
+    u64 m_logged_foreground_pid{};
 };
 
 } // namespace Service::AM

@@ -53,10 +53,39 @@ constexpr char ACC_SAVE_AVATORS_BASE_PATH[] = "system/save/8000000000000010/su/a
 ProfileManager::ProfileManager() {
     ParseUserSaveFile();
 
-    // Create an user if none are present
+    // Create an user if none are present. It is written out when a game session starts
+    // (ReloadForSession), so a HOME session on a new console still finds no user.
     if (user_count == 0) {
         CreateNewUser(UUID::MakeRandom(), "Eden");
+    }
+
+    OpenCurrentUser();
+}
+
+void ProfileManager::ReloadForSession(bool home_session) {
+    RemoveAllProfiles();
+    stored_opened_profiles = {};
+    last_opened_user = Common::InvalidUUID;
+    is_save_needed = false;
+
+    ParseUserSaveFile();
+
+    // A console with no user runs the firmware's first-time setup, which creates the first one.
+    if (user_count == 0) {
+        if (home_session) {
+            LOG_INFO(Service_ACC, "HOME session with no user: the setup creates the first one");
+            return;
+        }
+        CreateNewUser(UUID::MakeRandom(), "Eden");
         WriteUserSaveFile();
+    }
+
+    OpenCurrentUser();
+}
+
+void ProfileManager::OpenCurrentUser() {
+    if (user_count == 0) {
+        return;
     }
 
     auto current =
@@ -68,7 +97,9 @@ ProfileManager::ProfileManager() {
         Settings::values.current_user = 0;
     }
 
-    OpenUser(*GetUser(current));
+    if (const auto user = GetUser(current)) {
+        OpenUser(*user);
+    }
 }
 
 ProfileManager::~ProfileManager() = default;
