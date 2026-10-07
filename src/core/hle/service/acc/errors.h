@@ -28,7 +28,6 @@ constexpr Result ResultInvalidTheme{ErrorModule::Account, 34};
 // A procedure command at the wrong step (a request after a response, a result before it).
 constexpr Result ResultInvalidProcedureState{ErrorModule::Account, 41};
 constexpr Result ResultInternetRequestDenied{ErrorModule::Account, 59};
-constexpr Result ResultUserNotFound{ErrorModule::Account, 100};
 // CreateProcedureToLinkWithNintendoAccount for a user already linked.
 constexpr Result ResultNintendoAccountAlreadyLinked{ErrorModule::Account, 140};
 // No su/baas/<uid>.dat: the user has no network service account.
