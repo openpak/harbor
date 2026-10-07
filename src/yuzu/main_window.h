@@ -7,6 +7,7 @@
 #pragma once
 
 #include <memory>
+#include <thread>
 #include <optional>
 
 #include <filesystem>
@@ -539,6 +540,17 @@ private:
 
     // Whether emulation is currently running in yuzu.
     bool emulation_running = false;
+    // Harbor console mode: a completed setup boots the HOME menu, and no game list is shown.
+    bool harbor_console = false;
+    // HOME boots when both have happened.
+    enum : int { HarborConsoleScanned = 1, HarborConsoleConnected = 2 };
+    int harbor_console_steps = 0;
+    std::thread harbor_connect;
+    bool harbor_openpak_stopped = false;
+    QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
+    void HarborConsoleStep(int done);
+    void HarborRestartConsole();
+    void HarborStopOpenPak();
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)

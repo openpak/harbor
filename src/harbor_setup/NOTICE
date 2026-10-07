@@ -1,0 +1,17 @@
+Harbor setup (src/harbor_setup), AGPL-3.0-only.
+
+Third-party code and assets it builds with or ships:
+
+- borealis, XITRIX fork (https://github.com/XITRIX/borealis, commit 8c1f1093ee41a461d9d3bdd6dd2f6dfec166ab7a),
+  Apache-2.0 (LICENSES/Apache-2.0.txt). Copyright 2019-2021 natinusala, 2021-2023 xfangfang, XITRIX and other
+  borealis contributors. Downloaded at build time (cpmfile.json "borealis") with the changes in .patch/borealis.
+  Built with it: nanovg (zlib, Mikko Mononen), stb_image and stb_truetype (public domain / MIT, Sean Barrett),
+  fontstash (zlib), Yoga (MIT, Facebook, Inc. and its affiliates), tweeny (MIT), tinyxml2 (zlib, Lee Thomason),
+  libretro-common (MIT). Borealis' own resources (Nintendo system fonts, images) are not used or shipped.
+- Noto Sans Regular 2.015 (resources/NotoSans-Regular.ttf), SIL Open Font License 1.1 (resources/OFL.txt).
+  Copyright 2022 The Noto Project Authors.
+- The Android Java helpers org.libsdl.app.PlatformUtils and BorealisHandler (src/android) come from borealis'
+  android-project, Apache-2.0.
+
+The setup's flow, pages, strings, horn cue and Harbor mark follow the Ryujinx Harbor (MIT-licensed Ryujinx base).
+No firmware, keys, console fonts, icons or sounds are included.

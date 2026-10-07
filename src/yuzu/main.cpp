@@ -24,6 +24,7 @@
 #endif
 
 #include "common/logging.h"
+#include "harbor_setup/harbor_setup.h"
 #include "main_window.h"
 
 #ifdef _WIN32
@@ -184,6 +185,12 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     QApplication::setStyle(QStringLiteral("windowsvista"));
 #endif
+
+    // Harbor's first-run setup, in its own SDL window before Qt starts: when this data directory
+    // cannot boot the console yet, or with --harbor-setup. Closing it before "Start Harbor" quits.
+    if (HarborSetup::RunDesktopIfNeeded(argc, argv) > 0) {
+        return 0;
+    }
 
     QApplication app(argc, argv);
 

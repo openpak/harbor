@@ -1,0 +1,19 @@
+--- a/library/lib/platforms/desktop/desktop_font.cpp
++++ b/library/lib/platforms/desktop/desktop_font.cpp
+@@ -119,13 +119,10 @@
+         prefix+"msyh",
+     };
+ #elif defined(ANDROID)
++    // Harbor: no CJK fallback. The setup is English only, and fontstash would read the whole
++    // tens-of-MB system collection into memory.
+     std::vector<std::string> koreanFonts;
+-    std::vector<std::string> simplifiedChineseFonts = {
+-        "/system/fonts/NotoSansCJK-Regular",
+-        "/system/fonts/DroidSansFallback",
+-        "/system/fonts/NotoSansSC-Regular",
+-        "/system/fonts/DroidSansChinese",
+-    };
++    std::vector<std::string> simplifiedChineseFonts;
+ #else
+     std::vector<std::string> koreanFonts;
+     std::vector<std::string> simplifiedChineseFonts;
