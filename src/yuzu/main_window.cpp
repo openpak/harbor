@@ -40,6 +40,7 @@
 
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
+#include "frontend_common/secret_store.h"
 #include "harbor_control.h"
 #ifdef HAS_LSFG
 #include "harbor_frame_gen.h"
@@ -590,6 +591,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                     FrontendCommon::SetJoyconsDetached(QtCommon::system->HIDCore(), detached);
                 },
         });
+
+    // Harness runs use the system password store too (console mode installs it before OpenPak
+    // connects), so every stream tests the real credential path.
+    if (harbor_control) {
+        FrontendCommon::InstallSecretStore();
+    }
 
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {
         QList<QByteArray> qba{};
