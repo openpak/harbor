@@ -680,6 +680,14 @@ add_library(core STATIC
     hle/service/friend/friend.h
     hle/service/friend/friend_interface.cpp
     hle/service/friend/friend_interface.h
+    hle/service/friend/friend_pictures.cpp
+    hle/service/friend/friend_pictures.h
+    hle/service/friend/friend_service.cpp
+    hle/service/friend/friend_service.h
+    hle/service/friend/friend_viewer.h
+    hle/service/friend/friends_overlay_payloads.h
+    hle/service/friend/friends_session.cpp
+    hle/service/friend/friends_session.h
     hle/service/glue/arp.cpp
     hle/service/glue/arp.h
     hle/service/glue/bgtc.cpp
