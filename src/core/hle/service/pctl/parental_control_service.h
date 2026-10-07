@@ -62,6 +62,13 @@ private:
     void GetSafetyLevelSettings(HLERequestContext& ctx);
     void GetCurrentSettings(HLERequestContext& ctx);
     void GetDefaultRatingOrganization(HLERequestContext& ctx);
+    void SetSafetyLevel(HLERequestContext& ctx);
+    void SetCustomSafetyLevelSettings(HLERequestContext& ctx);
+    void SetDefaultRatingOrganization(HLERequestContext& ctx);
+    void AddToFreeCommunicationApplicationList(HLERequestContext& ctx);
+    void AddToFreeCommunicationApplicationListWithFlag(HLERequestContext& ctx);
+    void UpdateFreeCommunicationApplicationList(HLERequestContext& ctx);
+    void DeleteSettings(HLERequestContext& ctx);
     void GetFreeCommunicationApplicationListCount(HLERequestContext& ctx);
     void GetFreeCommunicationApplicationList(HLERequestContext& ctx);
     void ConfirmStereoVisionRestrictionConfigurable(HLERequestContext& ctx);
