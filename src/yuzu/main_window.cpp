@@ -38,6 +38,7 @@
 #include "install_dialog.h"
 
 #include "bootmanager.h"
+#include "frontend_common/joycon_rails.h"
 #include "harbor_control.h"
 #include "loading_screen.h"
 #include "qt_common/util/vk.h"
@@ -522,6 +523,15 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     connect(thread_dump_shortcut, &QShortcut::activated, this,
             [] { QtCommon::system->LogGuestThreads(); });
 
+    // F7 takes the Joy-Cons off the console's rails or puts them back (the firmware's setup waits
+    // for them to leave at "Detaching Joy-Con Controllers").
+    auto* joycon_shortcut = new QShortcut(QKeySequence(Qt::Key_F7), this);
+    joycon_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(joycon_shortcut, &QShortcut::activated, this, [] {
+        auto& hid = QtCommon::system->HIDCore();
+        FrontendCommon::SetJoyconsDetached(hid, !FrontendCommon::JoyconsDetached(hid));
+    });
+
     // Test harness: HARBOR_CONTROL=<fifo path> accepts input, screenshot and dump commands.
     harbor_control = HarborControl::CreateFromEnvironment(
         this, *input_subsystem,
@@ -538,6 +548,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 },
             .quit = [this] { close(); },
             .threads = [] { QtCommon::system->LogGuestThreads(); },
+            .keyboard_dialog = [this]() -> QWidget* {
+                return software_keyboard && software_keyboard->isVisible() ? software_keyboard
+                                                                           : nullptr;
+            },
+            .joycons =
+                [](bool detached) {
+                    FrontendCommon::SetJoyconsDetached(QtCommon::system->HIDCore(), detached);
+                },
         });
 
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {

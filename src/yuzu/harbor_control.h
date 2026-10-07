@@ -10,6 +10,7 @@
 #include <thread>
 
 class QObject;
+class QWidget;
 
 namespace InputCommon {
 class InputSubsystem;
@@ -22,10 +23,15 @@ class InputSubsystem;
  *   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
  *   home   home-long   capture   power
  *   screenshot <png path>   threads   quit
+ *   type <text>   type-line <file> <n>   key <name>   detach   attach
  *
  * Buttons reach the guest through the virtual gamepad (the same input path the Android overlay
- * uses), on both the Player 1 and the Handheld controller. Every command is logged with the
- * prefix "harbor-control:".
+ * uses), on both the Player 1 and the Handheld controller. Text and keys reach it as key presses
+ * on the emulated USB keyboard (US layout), which the firmware's own software keyboard reads as a
+ * real console reads a USB keyboard; while Eden's Qt keyboard dialog is open (swkbd HLE, outside a
+ * HOME session) they go to that dialog instead. Every command is logged with the prefix
+ * "harbor-control:", except that type-line logs only its length: it is for secrets (a test
+ * account's password), read from line n of a file, the value alone when the line is key=value.
  */
 class HarborControl {
 public:
@@ -36,6 +42,10 @@ public:
         std::function<void()> quit;
         /// Runs on the control thread.
         std::function<void()> threads;
+        /// Runs on the GUI thread: Eden's Qt software keyboard dialog when it is showing, else null.
+        std::function<QWidget*()> keyboard_dialog;
+        /// Runs on the GUI thread: the Joy-Cons off (true) or back on (false) the console's rails.
+        std::function<void(bool detached)> joycons;
     };
 
     /// Returns nullptr unless HARBOR_CONTROL is set.
@@ -52,6 +62,12 @@ private:
     void Execute(const std::string& line);
     void SetButton(int button, bool pressed);
     void PressFor(int button, int ms);
+    /// Types `text`; never logs it. False (nothing typed) when a character has no key.
+    bool TypeText(const std::string& text);
+    /// One named key (Enter, Backspace, Tab, Escape, Space, Up, Down, Left, Right, Delete, Home, End).
+    bool TypeKey(const std::string& name);
+    /// The Qt dialog when it is showing (asked on the GUI thread), else null: use the USB keyboard.
+    QWidget* KeyboardDialog();
 
     std::string fifo_path;
     QObject* gui_context;
