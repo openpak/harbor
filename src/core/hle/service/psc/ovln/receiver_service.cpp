@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/psc/ovln/ovln_agent.h"
 #include "core/hle/service/psc/ovln/receiver.h"
 #include "core/hle/service/psc/ovln/receiver_service.h"
 
@@ -18,6 +19,9 @@ IReceiverService::IReceiverService(Core::System& system_) : ServiceFramework{sys
     // clang-format on
 
     RegisterHandlers(functions);
+
+    // A new session: nothing is open yet, so whatever an earlier one left is dropped.
+    GetOvlnAgent().Reset();
 }
 
 IReceiverService::~IReceiverService() = default;

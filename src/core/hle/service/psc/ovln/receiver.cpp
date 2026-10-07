@@ -4,8 +4,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "core/hle/service/psc/ovln/receiver.h"
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/psc/ovln/ovln_result.h"
+#include "core/hle/service/psc/ovln/receiver.h"
 
 namespace Service::PSC {
 
@@ -24,95 +28,47 @@ IReceiver::IReceiver(Core::System& system_)
     RegisterHandlers(functions);
 
     receive_event = service_context.CreateEvent("IReceiver::ReceiveEvent");
+
+    // The agent signals from whichever thread sends, under its lock; the event outlives the state
+    // (the state is closed in the destructor before the event is).
+    state = std::make_unique<OvlnAgent::ReceiverState>(
+        [this] { receive_event->Signal(system.Kernel()); }, [this] { receive_event->Clear(system.Kernel()); });
 }
 
 IReceiver::~IReceiver() {
+    GetOvlnAgent().CloseReceiver(*state);
     service_context.CloseEvent(receive_event);
 }
 
 Result IReceiver::AddSource(SourceName source_name) {
-    const std::string name = source_name.GetString();
-    LOG_INFO(Service_PSC, "called: source_name={}", name);
-
-    // Add source if it doesn't already exist
-    if (message_sources.find(name) == message_sources.end()) {
-        message_sources[name] = {};
-    }
-
-    R_SUCCEED();
+    LOG_INFO(Service_PSC, "called: source_name={}", source_name.GetString());
+    R_RETURN(ToResult(GetOvlnAgent().AddSource(*state, source_name)));
 }
 
 Result IReceiver::RemoveSource(SourceName source_name) {
-    const std::string name = source_name.GetString();
-    LOG_INFO(Service_PSC, "called: source_name={}", name);
-
-    // Remove source if it exists
-    message_sources.erase(name);
-
-    R_SUCCEED();
+    LOG_INFO(Service_PSC, "called: source_name={}", source_name.GetString());
+    R_RETURN(ToResult(GetOvlnAgent().RemoveSource(*state, source_name)));
 }
 
 Result IReceiver::GetReceiveEventHandle(OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_INFO(Service_PSC, "called");
+    LOG_DEBUG(Service_PSC, "called");
     *out_event = &receive_event->GetReadableEvent();
     R_SUCCEED();
 }
 
-Result IReceiver::Receive(Out<OverlayNotification> out_notification, Out<MessageFlags> out_flags) {
-    u64 tick;
-    return ReceiveWithTick(out_notification, out_flags, Out<u64>(&tick));
+Result IReceiver::Receive(Out<OverlayNotification> out_notification) {
+    u64 tick{};
+    R_RETURN(ReceiveWithTick(out_notification, Out<u64>(&tick)));
 }
 
-Result IReceiver::ReceiveWithTick(Out<OverlayNotification> out_notification,
-                                   Out<MessageFlags> out_flags, Out<u64> out_tick) {
-    LOG_DEBUG(Service_PSC, "called");
-
-    // Find the message with the lowest ID across all sources
-    const std::string* target_source = nullptr;
-    size_t target_index = 0;
-
-    for (const auto& [source_name, messages] : message_sources) {
-        if (!messages.empty()) {
-            if (target_source == nullptr) {
-                target_source = &source_name;
-                target_index = 0;
-            }
-            // Note: In the real implementation, we would track message IDs
-            // For now, just use FIFO order
-        }
+Result IReceiver::ReceiveWithTick(Out<OverlayNotification> out_notification, Out<u64> out_tick) {
+    // An empty receive is 2025-0012; overlayDisp aborts on any other empty result.
+    const auto status = GetOvlnAgent().Receive(*state, *out_notification, *out_tick);
+    if (status == OvlnStatus::Success) {
+        LOG_DEBUG(Service_PSC, "received tag={} size={:#x}", GetNotificationTag(*out_notification),
+                  GetNotificationPayloadSize(*out_notification));
     }
-
-    if (target_source != nullptr) {
-        auto& messages = message_sources[*target_source];
-        *out_notification = messages[target_index].first;
-        *out_flags = messages[target_index].second;
-        *out_tick = 0; // TODO: Implement tick tracking
-
-        // Remove the message
-        messages.erase(messages.begin() + target_index);
-
-        // Clear event if no more messages
-        bool has_messages = false;
-        for (const auto& [_, msgs] : message_sources) {
-            if (!msgs.empty()) {
-                has_messages = true;
-                break;
-            }
-        }
-        if (!has_messages) {
-            receive_event->Clear(system.Kernel());
-        }
-
-        R_SUCCEED();
-    }
-
-    // No messages available
-    *out_notification = {};
-    *out_flags = {};
-    *out_tick = 0;
-
-    LOG_WARNING(Service_PSC, "No messages available");
-    R_THROW(ResultUnknown); // TODO: Use proper OvlnResult::NoMessages when available
+    R_RETURN(ToResult(status));
 }
 
 } // namespace Service::PSC
