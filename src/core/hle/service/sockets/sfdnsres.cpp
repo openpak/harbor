@@ -65,7 +65,8 @@ void ProbeTls(const std::string& address, const std::string& name) {
 // Test only, for the harness, until the frontends call OpenPak::BootConnection::Run before boot
 // (wizard stream): under the harness (HARBOR_CONTROL set) and with a `harbor-net-test` file in
 // the user directory, the boot connection runs here, then one TLS handshake to the console server
-// under a redirected name and one under a name its chain does not carry. True when it connected.
+// under a redirected name, one under a name its chain does not carry and one under a name that is
+// not redirected. True when it connected.
 bool TestBootConnection() {
     static std::once_flag once;
     static bool connected = false;
@@ -91,6 +92,9 @@ bool TestBootConnection() {
             // address itself: no SNI goes out, and the default chain, rooted at the pinned CA,
             // carries no IP SAN.
             ProbeTls(address, address);
+            // A name that is not redirected: the server signs for it with the OpenPak CA, which
+            // vouches only for the names OpenPak answers.
+            ProbeTls(address, "www.example.org");
         }).detach();
     });
     return connected;

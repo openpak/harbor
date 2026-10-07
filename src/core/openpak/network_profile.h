@@ -63,6 +63,9 @@ struct Result {
     bool ok = false;        // false only when even the built-in default could not be produced,
                             // which currently cannot happen; kept for future-proofing callers
     Source source = Source::BuiltIn;
+    // The site answered for the profile in use now: a fresh copy (Fetched) or a 304 for the
+    // stored one (Cached). False for no answer, an HTTP error or a refused body.
+    bool confirmed = false;
     Profile profile;
     std::string error;      // why the fetch or the profile fell back, for the log
 };
@@ -220,6 +223,11 @@ char const* SourceName(Source s);
 
 // The same flow without the stored ETag (an unconditional GET).
 Result Refresh(std::string const& platform);
+
+// What Fetch decides from one answer to the profile request (status 0: no answer), without
+// applying it: for the self-check.
+Result DecideFetched(std::string const& platform, int status, std::string const& body,
+                     std::string const& etag, std::string const& etag_sent);
 
 // The compiled-in default, used while no profile was ever stored: the Nintendo families as
 // wildcards to the console server, and (switch) the NAT check's second probe with an address of

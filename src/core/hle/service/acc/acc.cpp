@@ -11,6 +11,7 @@
 
 #include "common/common_types.h"
 #include "common/fs/file.h"
+#include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/redact.h"
@@ -750,7 +751,7 @@ protected:
         const auto image_data = ctx.ReadBufferA(0);
         const auto user_data = ctx.ReadBufferX(0);
 
-        LOG_INFO(Service_ACC, "called");
+        LOG_INFO(Service_ACC, "called, image_size={}", image_data.size());
 
         if (user_data.size() < sizeof(UserData)) {
             LOG_ERROR(Service_ACC, "UserData buffer too small!");
@@ -762,7 +763,13 @@ protected:
         UserData data;
         std::memcpy(&data, user_data.data(), sizeof(UserData));
 
-        Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Write,
+        // A new console has no su/avators yet: the setup's first user is stored with its image
+        // before profiles.dat is ever written.
+        const auto image_path = GetImagePath(user_id);
+        if (!Common::FS::CreateParentDirs(image_path)) {
+            LOG_ERROR(Service_ACC, "Could not create the profile image directory");
+        }
+        Common::FS::IOFile image(image_path, Common::FS::FileAccessMode::Write,
                                  Common::FS::FileType::BinaryFile);
 
         if (!image.IsOpen() || !image.SetSize(image_data.size()) ||

@@ -22,6 +22,7 @@
 #include "core/hle/service/ssl/ssl_trust.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/sockets.h"
+#include "core/openpak/boot_connection.h"
 
 #ifdef YUZU_BUNDLED_OPENSSL
 #include <openssl/cert.h>
@@ -47,9 +48,13 @@ IOFile key_log_file;
 #endif
 BIO_METHOD* bio_meth;
 
-// The pinned OpenPak CA last added to the context's store, so an unchanged file is not re-added.
+// The pinned OpenPak CA as last read, and a store of the host roots plus it. Connections to the
+// names OpenPak answers verify against that store; every other connection against the context's
+// store, the host roots alone (ssl_trust.h). Rebuilt when ca.pem changes; a connection keeps its
+// own reference.
 std::mutex pinned_ca_mutex;
 std::string pinned_ca_pem;
+X509_STORE* pinned_store = nullptr;
 
 Result CheckOpenSSLErrors();
 void OneTimeInit();
@@ -126,6 +131,20 @@ inline void LoadCaCertStore(SSL_CTX* ctx, const char* ca_cert, std::size_t size)
     SetCaCertStore(ctx, CreateCaCertStore(ca_cert, size));
 }
 #endif
+
+// A store of the host roots, as the context loads them.
+X509_STORE* NewHostStore() {
+#ifdef YUZU_BUNDLED_OPENSSL
+    return CreateCaCertStore(kCert, sizeof(kCert));
+#else
+    X509_STORE* const store = X509_STORE_new();
+    if (store != nullptr && X509_STORE_set_default_paths(store) != 1) {
+        X509_STORE_free(store);
+        return nullptr;
+    }
+    return store;
+#endif
+}
 
 } // namespace
 
@@ -214,7 +233,27 @@ public:
             LOG_ERROR(Service_SSL, "SSL_set_tlsext_host_name({}) failed", host_name);
             return CheckOpenSSLErrors();
         }
+        // The pinned CA only for a name OpenPak answers, decided from the resolver's own answer.
+        const auto hooks = Sockets::Dns::GetHooks();
+        const std::string console_server = OpenPak::Network::ConsoleServer();
+        std::scoped_lock lock{pinned_ca_mutex};
+        X509_STORE* const store = Trust::StoreFor(verify_name, SSL_CTX_get_cert_store(ssl_ctx),
+                                                  pinned_store, hooks, console_server);
+        pinned_ca_allowed = store == pinned_store;
+        if (pinned_ca_allowed && SSL_set1_verify_cert_store(ssl, store) != 1) {
+            LOG_ERROR(Service_SSL, "SSL_set1_verify_cert_store failed");
+            return CheckOpenSSLErrors();
+        }
         R_SUCCEED();
+    }
+
+    // A refused chain that the pinned CA issued, for a name it may not vouch for.
+    bool RefusedAsNotRedirected() const {
+        if (pinned_ca_allowed) {
+            return false;
+        }
+        std::scoped_lock lock{pinned_ca_mutex};
+        return Trust::ChainIssuedBy(SSL_get_peer_cert_chain(ssl), pinned_ca_pem);
     }
 
     // Whether the verified chain's root is the pinned OpenPak CA (for the log only).
@@ -254,8 +293,13 @@ public:
         if (ret <= 0) {
             const long verify_result = SSL_get_verify_result(ssl);
             if (verify_result != X509_V_OK) {
-                LOG_WARNING(Service_SSL, "Refused the certificate of {}: {}", verify_name,
-                            X509_verify_cert_error_string(verify_result));
+                if (RefusedAsNotRedirected()) {
+                    LOG_WARNING(Service_SSL, "OpenPak CA not trusted for {}: not redirected",
+                                verify_name);
+                } else {
+                    LOG_WARNING(Service_SSL, "Refused the certificate of {}: {}", verify_name,
+                                X509_verify_cert_error_string(verify_result));
+                }
                 ERR_clear_error();
                 return ResultConnectionReset;
             }
@@ -470,6 +514,7 @@ public:
     BIO* bio = nullptr;
     bool got_read_eof = false;
     bool verification_applied = false;
+    bool pinned_ca_allowed = false;
     std::string host_name;
     std::string verify_name;
 
@@ -569,26 +614,32 @@ std::filesystem::path PinnedCaFile() {
                                "ca.pem");
 }
 
-// OpenPak answers to Nintendo's own names, which no public CA can issue for, so its pinned CA
-// joins the roots guest connections are checked against. Nothing else is loosened: a chain that
-// reaches neither it nor a host root is refused. Behaviour follows the Ryujinx Harbor (MIT-licensed
-// Ryujinx base).
+// OpenPak answers to Nintendo's own names, which no public CA can issue for, so its pinned CA is
+// trusted for those names: the ones the resolver redirects to OpenPak, and the console server
+// itself. Nothing else is loosened: every other name is checked against the host roots alone, and
+// a chain that reaches no trusted root is refused. Behaviour follows the Ryujinx Harbor
+// (MIT-licensed Ryujinx base), with the pinned CA scoped to OpenPak's names.
 void TrustPinnedCa() {
     std::string pem = Trust::ReadFile(PinnedCaFile());
-    if (pem.empty()) {
-        return;
-    }
     std::scoped_lock lock{pinned_ca_mutex};
     if (pem == pinned_ca_pem) {
         return;
     }
-    const int added = Trust::AddPemCaCertificates(SSL_CTX_get_cert_store(ssl_ctx), pem);
-    if (added == 0) {
-        LOG_WARNING(Service_SSL, "openpak/ca.pem holds no CA certificate; it is not trusted");
-        return;
+    X509_STORE* store = nullptr;
+    if (!pem.empty()) {
+        store = NewHostStore();
+        if (store == nullptr || Trust::AddPemCaCertificates(store, pem) == 0) {
+            LOG_WARNING(Service_SSL, "openpak/ca.pem holds no CA certificate; it is not trusted");
+            X509_STORE_free(store);
+            store = nullptr;
+        }
     }
+    X509_STORE_free(pinned_store);
+    pinned_store = store;
     pinned_ca_pem = std::move(pem);
-    LOG_INFO(Service_SSL, "Guest TLS trusts the host roots and the pinned OpenPak CA");
+    if (pinned_store != nullptr) {
+        LOG_INFO(Service_SSL, "Guest TLS trusts the pinned OpenPak CA for the names OpenPak answers");
+    }
 }
 
 bool OneTimeInitBIO() {

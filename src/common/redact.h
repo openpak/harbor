@@ -70,6 +70,34 @@ inline std::string RedactUrl(std::string_view url) {
     return out;
 }
 
+/// A file path with every 32-hex-digit run (a uid: save directories, avatar files) replaced by
+/// "<uid>". Title and save ids (16 digits) stay, so the line still says what was opened.
+inline std::string RedactPath(std::string_view path) {
+    const auto is_hex = [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    };
+    std::string out;
+    out.reserve(path.size());
+    std::size_t i = 0;
+    while (i < path.size()) {
+        if (!is_hex(path[i])) {
+            out += path[i++];
+            continue;
+        }
+        std::size_t run = i;
+        while (run < path.size() && is_hex(path[run])) {
+            ++run;
+        }
+        if (run - i == 32) {
+            out += "<uid>";
+        } else {
+            out.append(path.substr(i, run - i));
+        }
+        i = run;
+    }
+    return out;
+}
+
 } // namespace Common
 
 template <typename T>

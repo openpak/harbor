@@ -134,6 +134,65 @@ int main() {
     X509_STORE* const empty_store = X509_STORE_new();
     CHECK(Trust::VerifyChain(empty_store, leaf, nullptr, "accounts.nintendo.com") != X509_V_OK);
 
+    // The pinned CA vouches only for names OpenPak answers. The host store holds a "public" CA;
+    // the pinned store holds it and the OpenPak CA.
+    namespace Dns = Service::Sockets::Dns;
+    bool openpak_on = true;
+    const Dns::Hooks hooks{
+        .enabled = [&openpak_on] { return openpak_on; },
+        .route =
+            [](const std::string& host) {
+                if (Dns::InFamily(host, ".nintendo.com") || Dns::InFamily(host, ".nintendo.net")) {
+                    return Dns::RouteAnswer{Dns::Route::Redirect, "145.241.199.19"};
+                }
+                return Dns::RouteAnswer{};
+            },
+        .in_ceiling = [](const std::string&) { return false; },
+    };
+    const std::string console_server = "145.241.199.19";
+    EVP_PKEY* const public_key = NewKey();
+    X509* const public_ca = MakeCert("Public Root", public_key, nullptr, public_key, true, nullptr);
+    X509* const public_leaf = MakeCert("www.example.org", leaf_key, public_ca, public_key, false,
+                                       "DNS:www.example.org");
+    X509* const openpak_any = MakeCert("www.example.org", leaf_key, ca, ca_key, false,
+                                       "DNS:www.example.org");
+    X509_STORE* const host_store = X509_STORE_new();
+    CHECK(Trust::AddPemCaCertificates(host_store, ToPem(public_ca)) == 1);
+    X509_STORE* const pinned_store = X509_STORE_new();
+    CHECK(Trust::AddPemCaCertificates(pinned_store, ToPem(public_ca) + ToPem(ca)) == 2);
+    const auto verify = [&](X509* cert, const std::string& name) {
+        return Trust::VerifyChain(
+            Trust::StoreFor(name, host_store, pinned_store, hooks, console_server), cert, nullptr,
+            name);
+    };
+    // A redirected name with an OpenPak leaf: accepted (and with a trailing dot or capitals).
+    CHECK(verify(leaf, "accounts.nintendo.com") == X509_V_OK);
+    CHECK(Trust::PinnedCaTrustedFor("Accounts.Nintendo.COM.", hooks, console_server));
+    // A name that is not redirected, with an OpenPak leaf: refused as a wrong CA is.
+    const int not_redirected = verify(openpak_any, "www.example.org");
+    CHECK(not_redirected == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY ||
+          not_redirected == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT);
+    STACK_OF(X509)* const chain = sk_X509_new_null();
+    sk_X509_push(chain, openpak_any);
+    CHECK(Trust::ChainIssuedBy(chain, ToPem(ca)));
+    CHECK(!Trust::ChainIssuedBy(chain, ToPem(public_ca)));
+    sk_X509_free(chain);
+    // The same name with a public chain: accepted.
+    CHECK(verify(public_leaf, "www.example.org") == X509_V_OK);
+    // The console server's address: accepted; another address: the host store only.
+    CHECK(verify(leaf, "145.241.199.19") == X509_V_OK);
+    CHECK(!Trust::PinnedCaTrustedFor("145.241.199.20", hooks, console_server));
+    // OpenPak off: the pinned CA vouches for nothing, redirected names included.
+    openpak_on = false;
+    CHECK(verify(leaf, "accounts.nintendo.com") != X509_V_OK);
+    CHECK(!Trust::PinnedCaTrustedFor("145.241.199.19", hooks, console_server));
+    X509_STORE_free(pinned_store);
+    X509_STORE_free(host_store);
+    X509_free(openpak_any);
+    X509_free(public_leaf);
+    X509_free(public_ca);
+    EVP_PKEY_free(public_key);
+
     CHECK(Trust::IsIpLiteral("145.241.199.19"));
     CHECK(Trust::IsIpLiteral("::1"));
     CHECK(!Trust::IsIpLiteral("accounts.nintendo.com"));
