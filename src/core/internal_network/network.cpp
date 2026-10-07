@@ -21,7 +21,9 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <poll.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -158,8 +160,39 @@ Errno TranslateNativeError(int e, CallType call_type = CallType::Other) {
         return Errno::INPROGRESS;
     case WSAEISCONN:
         return Errno::ISCONN;
+    case WSAEADDRINUSE:
+        return Errno::ADDRINUSE;
+    case WSAEADDRNOTAVAIL:
+        return Errno::ADDRNOTAVAIL;
+    case WSAEAFNOSUPPORT:
+        return Errno::AFNOSUPPORT;
+    case WSAEOPNOTSUPP:
+        return Errno::OPNOTSUPP;
+    case WSAENOPROTOOPT:
+        return Errno::NOPROTOOPT;
+    case WSAEALREADY:
+        return Errno::ALREADY;
+    case WSAENOBUFS:
+        return Errno::NOBUFS;
+    case WSAEACCES:
+        return Errno::ACCES;
+    case WSAEPROTONOSUPPORT:
+        return Errno::PROTONOSUPPORT;
+    case WSAEDESTADDRREQ:
+        return Errno::DESTADDRREQ;
+    case WSAENOTSOCK:
+        return Errno::NOTSOCK;
+    case WSAEINTR:
+        return Errno::INTR;
+    case WSAEFAULT:
+        return Errno::FAULT;
+    case WSAEPROTOTYPE:
+        return Errno::PROTOTYPE;
+    case WSAEHOSTDOWN:
+        return Errno::HOSTDOWN;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented errno={}", e);
+        // Unmapped reaches the guest as EINVAL (emulator-parity-ledger §2 Sockets).
+        LOG_WARNING(Network, "Unmapped host errno={}", e);
         return Errno::OTHER;
     }
 }
@@ -299,8 +332,47 @@ Errno TranslateNativeError(int e, CallType call_type = CallType::Other) {
         return Errno::INPROGRESS;
     case EISCONN:
         return Errno::ISCONN;
+    case EADDRINUSE:
+        return Errno::ADDRINUSE;
+    case EADDRNOTAVAIL:
+        return Errno::ADDRNOTAVAIL;
+    case EAFNOSUPPORT:
+        return Errno::AFNOSUPPORT;
+    case EOPNOTSUPP:
+        return Errno::OPNOTSUPP;
+    case ENOPROTOOPT:
+        return Errno::NOPROTOOPT;
+    case ENOMEM:
+        return Errno::NOMEM;
+    case EALREADY:
+        return Errno::ALREADY;
+    case ENOBUFS:
+        return Errno::NOBUFS;
+    case EACCES:
+    case EPERM:
+        return Errno::ACCES;
+    case EPROTONOSUPPORT:
+        return Errno::PROTONOSUPPORT;
+    case EDESTADDRREQ:
+        return Errno::DESTADDRREQ;
+    case ENOTSOCK:
+        return Errno::NOTSOCK;
+    case EINTR:
+        return Errno::INTR;
+    case EFAULT:
+        return Errno::FAULT;
+    case EPROTOTYPE:
+        return Errno::PROTOTYPE;
+    case EHOSTDOWN:
+        return Errno::HOSTDOWN;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented errno={} ({})", e, strerror(e));
+#if EWOULDBLOCK != EAGAIN
+        if (e == EWOULDBLOCK) {
+            return Errno::AGAIN;
+        }
+#endif
+        // Unmapped reaches the guest as EINVAL (emulator-parity-ledger §2 Sockets).
+        LOG_WARNING(Network, "Unmapped host errno={} ({})", e, strerror(e));
         return Errno::OTHER;
     }
 }
@@ -837,6 +909,17 @@ Errno Socket::SetSockOpt(SOCKET fd_so, int option, T value) {
 }
 
 Errno Socket::Initialize(Domain domain, Type type, Protocol protocol) {
+#ifndef _WIN32
+    // Harbor: a guest ICMP socket is a ping socket. The host needs no privilege for a datagram
+    // ICMP socket, and a raw one would fail for every unprivileged user.
+    // Written from: emulator-parity-ledger §2 Sockets ("ICMP is a ping socket"), Linux icmp(7).
+    if (type == Type::RAW && protocol == Protocol::ICMP) {
+        fd = socket(TranslateDomainToNative(domain), SOCK_DGRAM, IPPROTO_ICMP);
+        if (fd != INVALID_SOCKET) {
+            return Errno::SUCCESS;
+        }
+    }
+#endif
     fd = socket(TranslateDomainToNative(domain), TranslateTypeToNative(type), TranslateProtocolToNative(protocol));
     if (fd != INVALID_SOCKET) {
         return Errno::SUCCESS;
@@ -952,21 +1035,55 @@ Errno Socket::Shutdown(ShutdownHow how) {
     return GetAndLogLastError();
 }
 
+// Harbor: guest (FreeBSD-numbered) message flags to the host's. MSG_DONTWAIT has no Windows
+// equivalent; there the caller toggles the descriptor around the call instead.
+// Written from: FreeBSD recv(2)/send(2), Linux recv(2)/send(2).
+int Socket::TranslateMsgFlags(int flags, bool& toggle_nonblock) const {
+    int native = 0;
+    toggle_nonblock = false;
+    if ((flags & FLAG_MSG_OOB) != 0) {
+        native |= MSG_OOB;
+    }
+    if ((flags & FLAG_MSG_PEEK) != 0) {
+        native |= MSG_PEEK;
+    }
+    if ((flags & FLAG_MSG_DONTROUTE) != 0) {
+        native |= MSG_DONTROUTE;
+    }
+    if ((flags & FLAG_MSG_WAITALL) != 0) {
+        native |= MSG_WAITALL;
+    }
+    if ((flags & FLAG_MSG_DONTWAIT) != 0 && !is_non_blocking) {
+#ifdef _WIN32
+        toggle_nonblock = true;
+#else
+        native |= MSG_DONTWAIT;
+#endif
+    }
+    return native;
+}
+
 std::pair<s32, Errno> Socket::Recv(int flags, std::span<u8> message) {
-    ASSERT(flags == 0);
     ASSERT(message.size() < static_cast<size_t>((std::numeric_limits<int>::max)()));
 
-    const auto result =
-        recv(fd, reinterpret_cast<char*>(message.data()), static_cast<int>(message.size()), 0);
-    if (result != SOCKET_ERROR) {
+    bool toggle = false;
+    const int native_flags = TranslateMsgFlags(flags, toggle);
+    if (toggle) {
+        EnableNonBlock(fd, true);
+    }
+    const auto result = recv(fd, reinterpret_cast<char*>(message.data()),
+                             static_cast<int>(message.size()), native_flags);
+    const Errno err = result != SOCKET_ERROR ? Errno::SUCCESS : GetAndLogLastError();
+    if (toggle) {
+        EnableNonBlock(fd, false);
+    }
+    if (err == Errno::SUCCESS) {
         return {static_cast<s32>(result), Errno::SUCCESS};
     }
-
-    return {-1, GetAndLogLastError()};
+    return {-1, err};
 }
 
 std::pair<s32, Errno> Socket::RecvFrom(int flags, std::span<u8> message, SockAddrIn* addr) {
-    ASSERT(flags == 0);
     ASSERT(message.size() < static_cast<size_t>((std::numeric_limits<int>::max)()));
 
     sockaddr_in addr_in{};
@@ -974,39 +1091,53 @@ std::pair<s32, Errno> Socket::RecvFrom(int flags, std::span<u8> message, SockAdd
     socklen_t* const p_addrlen = addr ? &addrlen : nullptr;
     sockaddr* const p_addr_in = addr ? reinterpret_cast<sockaddr*>(&addr_in) : nullptr;
 
+    bool toggle = false;
+    const int native_flags = TranslateMsgFlags(flags, toggle);
+    if (toggle) {
+        EnableNonBlock(fd, true);
+    }
     const auto result = recvfrom(fd, reinterpret_cast<char*>(message.data()),
-                                 static_cast<int>(message.size()), 0, p_addr_in, p_addrlen);
-    if (result != SOCKET_ERROR) {
+                                 static_cast<int>(message.size()), native_flags, p_addr_in,
+                                 p_addrlen);
+    const Errno err = result != SOCKET_ERROR ? Errno::SUCCESS : GetAndLogLastError();
+    if (toggle) {
+        EnableNonBlock(fd, false);
+    }
+    if (err == Errno::SUCCESS) {
         if (addr) {
             *addr = TranslateToSockAddrIn(addr_in, addrlen);
         }
         return {static_cast<s32>(result), Errno::SUCCESS};
     }
-
-    return {-1, GetAndLogLastError()};
+    return {-1, err};
 }
 
 std::pair<s32, Errno> Socket::Send(std::span<const u8> message, int flags) {
     ASSERT(message.size() < static_cast<size_t>((std::numeric_limits<int>::max)()));
-    ASSERT(flags == 0);
 
-    int native_flags = 0;
+    bool toggle = false;
+    int native_flags = TranslateMsgFlags(flags & ~(FLAG_MSG_PEEK | FLAG_MSG_WAITALL), toggle);
 #ifdef __unix__
     native_flags |= MSG_NOSIGNAL; // do not send us SIGPIPE
 #endif
+    if (toggle) {
+        EnableNonBlock(fd, true);
+    }
     const auto result = send(fd, reinterpret_cast<const char*>(message.data()),
                              static_cast<int>(message.size()), native_flags);
-    if (result != SOCKET_ERROR) {
+    const Errno err =
+        result != SOCKET_ERROR ? Errno::SUCCESS : GetAndLogLastError(CallType::Send);
+    if (toggle) {
+        EnableNonBlock(fd, false);
+    }
+    if (err == Errno::SUCCESS) {
         return {static_cast<s32>(result), Errno::SUCCESS};
     }
-
-    return {-1, GetAndLogLastError(CallType::Send)};
+    return {-1, err};
 }
 
 std::pair<s32, Errno> Socket::SendTo(u32 flags, std::span<const u8> message,
                                      const SockAddrIn* addr) {
-    ASSERT(flags == 0);
-
     const sockaddr* to = nullptr;
     const int to_len = addr ? sizeof(sockaddr) : 0;
     sockaddr host_addr_in;
@@ -1016,13 +1147,26 @@ std::pair<s32, Errno> Socket::SendTo(u32 flags, std::span<const u8> message,
         to = &host_addr_in;
     }
 
+    bool toggle = false;
+    int native_flags =
+        TranslateMsgFlags(static_cast<int>(flags) & ~(FLAG_MSG_PEEK | FLAG_MSG_WAITALL), toggle);
+#ifdef __unix__
+    native_flags |= MSG_NOSIGNAL;
+#endif
+    if (toggle) {
+        EnableNonBlock(fd, true);
+    }
     const auto result = sendto(fd, reinterpret_cast<const char*>(message.data()),
-                               static_cast<int>(message.size()), 0, to, to_len);
-    if (result != SOCKET_ERROR) {
+                               static_cast<int>(message.size()), native_flags, to, to_len);
+    const Errno err =
+        result != SOCKET_ERROR ? Errno::SUCCESS : GetAndLogLastError(CallType::Send);
+    if (toggle) {
+        EnableNonBlock(fd, false);
+    }
+    if (err == Errno::SUCCESS) {
         return {static_cast<s32>(result), Errno::SUCCESS};
     }
-
-    return {-1, GetAndLogLastError(CallType::Send)};
+    return {-1, err};
 }
 
 Errno Socket::Close() {
@@ -1064,12 +1208,152 @@ Errno Socket::SetRcvBuf(u32 value) {
     return SetSockOpt(fd, SO_RCVBUF, value);
 }
 
+// Harbor: the value is in milliseconds. Windows takes a DWORD of milliseconds, everything else
+// a struct timeval. Written from: emulator-parity-ledger §2 Sockets ("Timeouts are timevals off
+// Windows"), Linux socket(7) SO_RCVTIMEO.
 Errno Socket::SetSndTimeo(u32 value) {
+#ifdef _WIN32
     return SetSockOpt(fd, SO_SNDTIMEO, value);
+#else
+    timeval tv{};
+    tv.tv_sec = static_cast<time_t>(value / 1000);
+    tv.tv_usec = static_cast<suseconds_t>((value % 1000) * 1000);
+    return SetSockOpt(fd, SO_SNDTIMEO, tv);
+#endif
 }
 
 Errno Socket::SetRcvTimeo(u32 value) {
+#ifdef _WIN32
     return SetSockOpt(fd, SO_RCVTIMEO, value);
+#else
+    timeval tv{};
+    tv.tv_sec = static_cast<time_t>(value / 1000);
+    tv.tv_usec = static_cast<suseconds_t>((value % 1000) * 1000);
+    return SetSockOpt(fd, SO_RCVTIMEO, tv);
+#endif
+}
+
+namespace {
+
+// Harbor: host level/name for an option. Written from: Linux socket(7), ip(7), tcp(7).
+bool NativeOption(SockOpt opt, int& level, int& name) {
+    switch (opt) {
+    case SockOpt::ReuseAddr: level = SOL_SOCKET; name = SO_REUSEADDR; return true;
+#ifdef SO_REUSEPORT
+    case SockOpt::ReusePort: level = SOL_SOCKET; name = SO_REUSEPORT; return true;
+#endif
+    case SockOpt::KeepAlive: level = SOL_SOCKET; name = SO_KEEPALIVE; return true;
+    case SockOpt::Broadcast: level = SOL_SOCKET; name = SO_BROADCAST; return true;
+    case SockOpt::OobInline: level = SOL_SOCKET; name = SO_OOBINLINE; return true;
+    case SockOpt::SndBuf: level = SOL_SOCKET; name = SO_SNDBUF; return true;
+    case SockOpt::RcvBuf: level = SOL_SOCKET; name = SO_RCVBUF; return true;
+    case SockOpt::SndLowat: level = SOL_SOCKET; name = SO_SNDLOWAT; return true;
+    case SockOpt::RcvLowat: level = SOL_SOCKET; name = SO_RCVLOWAT; return true;
+    case SockOpt::Type: level = SOL_SOCKET; name = SO_TYPE; return true;
+    case SockOpt::TcpNoDelay: level = IPPROTO_TCP; name = TCP_NODELAY; return true;
+#ifdef TCP_MAXSEG
+    case SockOpt::TcpMaxSeg: level = IPPROTO_TCP; name = TCP_MAXSEG; return true;
+#endif
+#ifdef TCP_KEEPIDLE
+    case SockOpt::TcpKeepIdle: level = IPPROTO_TCP; name = TCP_KEEPIDLE; return true;
+#endif
+#ifdef TCP_KEEPINTVL
+    case SockOpt::TcpKeepIntvl: level = IPPROTO_TCP; name = TCP_KEEPINTVL; return true;
+#endif
+#ifdef TCP_KEEPCNT
+    case SockOpt::TcpKeepCnt: level = IPPROTO_TCP; name = TCP_KEEPCNT; return true;
+#endif
+    case SockOpt::IpTos: level = IPPROTO_IP; name = IP_TOS; return true;
+    case SockOpt::IpTtl: level = IPPROTO_IP; name = IP_TTL; return true;
+    case SockOpt::IpMulticastTtl: level = IPPROTO_IP; name = IP_MULTICAST_TTL; return true;
+    case SockOpt::IpMulticastLoop: level = IPPROTO_IP; name = IP_MULTICAST_LOOP; return true;
+    default:
+        return false;
+    }
+}
+
+} // Anonymous namespace
+
+Errno Socket::SetIntOption(SockOpt opt, s32 value) {
+    int level = 0;
+    int name = 0;
+    if (!NativeOption(opt, level, name)) {
+        return Errno::NOPROTOOPT;
+    }
+    // Linux takes a byte for the multicast TTL/loop options when given one; an int works too.
+    const int v = value;
+    if (setsockopt(fd, level, name, reinterpret_cast<const char*>(&v), sizeof(v)) !=
+        SOCKET_ERROR) {
+        return Errno::SUCCESS;
+    }
+    return GetAndLogLastError();
+}
+
+std::pair<s32, Errno> Socket::GetIntOption(SockOpt opt) {
+    int level = 0;
+    int name = 0;
+    if (!NativeOption(opt, level, name)) {
+        return {0, Errno::NOPROTOOPT};
+    }
+    int v = 0;
+    socklen_t len = sizeof(v);
+    if (getsockopt(fd, level, name, reinterpret_cast<char*>(&v), &len) == SOCKET_ERROR) {
+        return {0, GetAndLogLastError()};
+    }
+    if (opt == SockOpt::Type) {
+        v = static_cast<s32>(TranslateTypeFromNative(v));
+    }
+    return {v, Errno::SUCCESS};
+}
+
+std::pair<u32, Errno> Socket::GetTimeoutOption(bool send) {
+    const int name = send ? SO_SNDTIMEO : SO_RCVTIMEO;
+#ifdef _WIN32
+    DWORD v = 0;
+    int len = sizeof(v);
+    if (getsockopt(fd, SOL_SOCKET, name, reinterpret_cast<char*>(&v), &len) == SOCKET_ERROR) {
+        return {0, GetAndLogLastError()};
+    }
+    return {static_cast<u32>(v), Errno::SUCCESS};
+#else
+    timeval tv{};
+    socklen_t len = sizeof(tv);
+    if (getsockopt(fd, SOL_SOCKET, name, &tv, &len) == SOCKET_ERROR) {
+        return {0, GetAndLogLastError()};
+    }
+    return {static_cast<u32>(tv.tv_sec * 1000 + tv.tv_usec / 1000), Errno::SUCCESS};
+#endif
+}
+
+std::pair<std::pair<bool, u32>, Errno> Socket::GetLinger() {
+    linger value{};
+    socklen_t len = sizeof(value);
+    if (getsockopt(fd, SOL_SOCKET, SO_LINGER, reinterpret_cast<char*>(&value), &len) ==
+        SOCKET_ERROR) {
+        return {{false, 0}, GetAndLogLastError()};
+    }
+    return {{value.l_onoff != 0, static_cast<u32>(value.l_linger)}, Errno::SUCCESS};
+}
+
+Errno Socket::SetMulticastMembership(bool join, IPv4Address group, IPv4Address iface) {
+    ip_mreq mreq{};
+    std::memcpy(&mreq.imr_multiaddr, group.data(), sizeof(mreq.imr_multiaddr));
+    std::memcpy(&mreq.imr_interface, iface.data(), sizeof(mreq.imr_interface));
+    if (setsockopt(fd, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP,
+                   reinterpret_cast<const char*>(&mreq), sizeof(mreq)) != SOCKET_ERROR) {
+        return Errno::SUCCESS;
+    }
+    return GetAndLogLastError();
+}
+
+Errno Socket::SetMulticastInterface(IPv4Address iface) {
+    in_addr addr{};
+    std::memcpy(&addr, iface.data(), sizeof(addr));
+    if (setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, reinterpret_cast<const char*>(&addr),
+                   sizeof(addr)) != SOCKET_ERROR) {
+        return Errno::SUCCESS;
+    }
+    return GetAndLogLastError();
 }
 
 Errno Socket::SetNonBlock(bool enable) {
