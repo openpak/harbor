@@ -58,11 +58,18 @@ static void JPGToMemory(void* context, void* data, int len) {
 static void SanitizeJPEGImageSize(std::vector<u8>& image) {
     constexpr std::size_t max_jpeg_image_size = 0x20000;
     constexpr int profile_dimensions = 256;
-    int original_width, original_height, color_channels;
+    int original_width = 0, original_height = 0, color_channels = 0;
 
     const auto plain_image =
         stbi_load_from_memory(image.data(), static_cast<int>(image.size()), &original_width,
                               &original_height, &color_channels, STBI_rgb);
+    if (plain_image == nullptr) {
+        // [Harbor] Not a picture stb can read (a file cut short, say): handed over as it is
+        // rather than resized from nothing, which crashed the host.
+        LOG_WARNING(Service_ACC, "The user provided image could not be decoded; passed as is");
+        image.resize((std::min)(image.size(), max_jpeg_image_size));
+        return;
+    }
 
     // Resize image to match 256*256
     if (original_width != profile_dimensions || original_height != profile_dimensions) {
@@ -77,6 +84,7 @@ static void SanitizeJPEGImageSize(std::vector<u8>& image) {
             LOG_ERROR(Service_ACC, "Failed to resize the user provided image.");
         }
     }
+    stbi_image_free(plain_image);
 
     image.resize((std::min)(image.size(), max_jpeg_image_size));
 }
