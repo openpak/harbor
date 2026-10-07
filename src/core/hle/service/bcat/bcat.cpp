@@ -17,6 +17,7 @@
 #include "core/hle/service/bcat/openpak_fetch.h"
 #include "core/hle/service/bcat/service_creator.h"
 #include "core/hle/service/server_manager.h"
+#include "core/openpak/boot_connection.h"
 
 namespace Service::BCAT {
 
@@ -44,6 +45,14 @@ void LoopProcess(Core::System& system) {
             LOG_WARNING(Service_BCAT, "OpenPak fetches come from files, not a server");
             SetOpenPakFetcher(std::make_shared<FileFetcher>(stub));
         }
+    }
+
+    // Test-only: the frontends call BootConnection::Run themselves once they are wired (it is
+    // idempotent, so this does nothing then). A file <user dir>/openpak/news-test-boot makes this
+    // connect here, so a desktop run with the OpenPak files in place fills the news.
+    const auto user_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
+    if (std::filesystem::exists(user_dir / "openpak" / "news-test-boot")) {
+        OpenPak::BootConnection::Run(user_dir);
     }
 
     // One store, two events and one fill worker behind all five news ports.
