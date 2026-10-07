@@ -444,6 +444,9 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     m_system.SetShuttingDown(false);
     m_system.ApplySettings();
     Settings::LogSettings();
+    if (Harbor::ConsoleMode()) {
+        Harbor::StartWithJoyconsAttached();
+    }
     m_system.HIDCore().ReloadInputDevices();
     if (Harbor::ConsoleMode()) {
         // A console session runs the firmware's own keyboard and browser, never Android's.

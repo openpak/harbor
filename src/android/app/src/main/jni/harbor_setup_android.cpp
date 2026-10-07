@@ -23,6 +23,9 @@
 #include "frontend_common/joycon_rails.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
+#include "hid_core/frontend/emulated_controller.h"
+#include "hid_core/hid_core.h"
+#include "hid_core/hid_types.h"
 #include "harbor_setup_android.h"
 #include "native.h"
 
@@ -280,6 +283,46 @@ bool ConsoleMode() {
     return console_mode.load();
 }
 
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): physical pads and the touch
+// overlay share the handheld controller (docs/android-port/controller-support.md).
+void StartWithJoyconsAttached() {
+    constexpr std::size_t HandheldIndex = 8;
+    auto& players = Settings::values.players.GetValue();
+    auto& player1 = players[0];
+    auto& handheld = players[HandheldIndex];
+    handheld.buttons = player1.buttons;
+    handheld.analogs = player1.analogs;
+    handheld.motions = player1.motions;
+    player1.controller_type = Settings::ControllerType::Handheld;
+    player1.connected = false;
+    handheld.controller_type = Settings::ControllerType::Handheld;
+    handheld.connected = true;
+    LOG_INFO(Frontend, "harbor: the console starts with its Joy-Cons attached (Handheld connected, "
+                       "Player 1 disconnected)");
+}
+
+void SetJoyconsDetached(Core::HID::HIDCore& hid, bool detached) {
+    using Core::HID::NpadIdType;
+    using Core::HID::NpadStyleIndex;
+    auto* const handheld = hid.GetEmulatedController(NpadIdType::Handheld);
+    auto* const player1 = hid.GetEmulatedController(NpadIdType::Player1);
+    // A style changes only while its controller is disconnected.
+    player1->Disconnect();
+    handheld->Disconnect();
+    if (detached) {
+        player1->SetNpadStyleIndex(NpadStyleIndex::JoyconDual);
+        player1->Connect();
+    } else {
+        player1->SetNpadStyleIndex(NpadStyleIndex::Handheld);
+        handheld->SetNpadStyleIndex(NpadStyleIndex::Handheld);
+        handheld->Connect();
+    }
+    LOG_INFO(Frontend, "harbor: Joy-Cons {} (Handheld {}, Player 1 {})",
+             detached ? "detached" : "attached",
+             handheld->IsConnected() ? "connected" : "disconnected",
+             player1->IsConnected() ? "connected" : "disconnected");
+}
+
 } // namespace Harbor
 
 /// SDL's entry point for HarborSetupActivity: SDLActivity runs it on its own thread, and finishes the
@@ -422,8 +465,8 @@ JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerRequest(
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setJoyconsDetached(JNIEnv*, jobject,
                                                                                      jboolean detached) {
-    FrontendCommon::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),
-                                       detached == JNI_TRUE);
+    Harbor::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),
+                               detached == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_logGuestThreads(JNIEnv*, jobject) {
