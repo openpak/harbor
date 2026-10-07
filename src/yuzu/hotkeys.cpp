@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <sstream>
+#include <string_view>
 #include <QShortcut>
 #include <QTreeWidgetItem>
 #include <QtGlobal>
@@ -29,7 +30,34 @@ void HotkeyRegistry::SaveHotkeys() {
     }
 }
 
+namespace {
+
+// Harbor's host keys (F4 capture, F6 docked, F7 Joy-Con, F8 HOME, F11 fullscreen, F12 thread dump)
+// take Eden's default keys; Eden's actions on them move. Only keys still at Eden's default change.
+struct HarborKey {
+    std::string_view name;
+    std::string_view eden;
+    std::string_view harbor;
+};
+constexpr HarborKey HarborKeys[] = {
+    {"Continue/Pause Emulation", "F4", "Shift+F4"},
+    {"Stop Emulation", "F5", "Shift+F5"},
+    {"Restart Emulation", "F6", "Shift+F6"},
+    {"Change Adapting Filter", "F8", "Shift+F8"},
+    {"Change Docked Mode", "F10", "F6"},
+};
+
+} // namespace
+
 void HotkeyRegistry::LoadHotkeys() {
+    for (auto& shortcut : UISettings::values.shortcuts) {
+        for (const auto& key : HarborKeys) {
+            if (shortcut.name == key.name && shortcut.shortcut.keyseq == key.eden) {
+                shortcut.shortcut.keyseq = std::string{key.harbor};
+            }
+        }
+    }
+
     // Make sure NOT to use a reference here because it would become invalid once we call
     // beginGroup()
     for (auto shortcut : UISettings::values.shortcuts) {
