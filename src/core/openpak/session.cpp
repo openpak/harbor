@@ -281,7 +281,11 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
     const std::filesystem::path cert_path = DevicePath(endpoint, "pem");
     const std::filesystem::path key_path = DevicePath(endpoint, "key");
 
+    // The private key is readable by its owner only (installs from before this kept it 0644).
+    constexpr auto owner_only = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write;
     if (std::filesystem::exists(cert_path) && std::filesystem::exists(key_path)) {
+        std::error_code ec;
+        std::filesystem::permissions(key_path, owner_only, ec);
         return true;
     }
 
@@ -324,6 +328,11 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
         }
 
         FILE* key_file = std::fopen(key_path.string().c_str(), "wb");
+        if (key_file != nullptr) {
+            // Restricted before the key is written, so it is never readable by others.
+            std::error_code ec;
+            std::filesystem::permissions(key_path, owner_only, ec);
+        }
         ok = ok && key_file != nullptr &&
              PEM_write_PrivateKey(key_file, key, nullptr, nullptr, 0, nullptr, nullptr) != 0;
         if (key_file != nullptr) {
