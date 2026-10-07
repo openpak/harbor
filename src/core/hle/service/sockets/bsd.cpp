@@ -31,6 +31,7 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/sockets/bsd.h"
+#include "core/hle/service/sockets/sfdnsres.h"
 #include "core/hle/service/sockets/sockets_translate.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
@@ -488,7 +489,8 @@ Outcome OpAccept(DescriptorTable& table, s32 fd, std::vector<u8>& addr_out, Park
 
 // Written from: Ryujinx master IClient.Poll + ManagedSocketPollManager.cs and the commit message
 // of 154744710 (a zero-timeout probe that finds nothing answers 0 ready, never -1/ETIMEDOUT; a
-// datagram socket never reports POLLHUP); emulator-parity-ledger §2/§3 (zero event mask watches
+// datagram socket never reports POLLHUP; a readable eventfd is drained as it is reported);
+// emulator-parity-ledger §2/§3 (zero event mask watches
 // errors only; a dead fd is POLLNVAL on its entry and the rest is evaluated; poll with no fds
 // sleeps; a deferred poll that runs out of time answers 0 / success); POSIX poll(2) (a negative fd
 // is ignored).
@@ -516,6 +518,9 @@ Outcome OpPoll(DescriptorTable& table, std::span<PollFD> fds, s32 timeout, ParkS
             PollEvents r{};
             if (True(want & (PollEvents::In | PollEvents::RdNorm)) && file->event->IsReadable()) {
                 r |= want & (PollEvents::In | PollEvents::RdNorm);
+                // Drained as it is reported (Ryujinx master IClient.Poll: gRPC writes its wakeup
+                // fd and never reads it, so a level-triggered fd would spin its poller).
+                file->event->Read();
             }
             if (True(want & PollEvents::Out) && file->event->IsWritable()) {
                 r |= PollEvents::Out;
@@ -639,6 +644,11 @@ Outcome OpSelect(DescriptorTable& table, u32 nfds, const std::array<std::span<co
         if (e.file->event) {
             r = e.want[0] && e.file->event->IsReadable();
             w = e.want[1] && e.file->event->IsWritable();
+            if (r) {
+                // Ryujinx master IClient.Select: the reported wakeup is drained (edge-triggered),
+                // or a fd left readable masks the socket half of the next round.
+                e.file->event->Read();
+            }
         } else {
             const auto rev = revents[i];
             const bool failed = True(rev & (Network::PollEvents::Err | Network::PollEvents::Hup));
@@ -1298,6 +1308,29 @@ void BsdState::ReleaseSlot(const void* key) {
     slots.erase(key);
 }
 
+// Written from: the Harbor-on-Eden bsd brief (a resolver signal wakes the parked waiters) and
+// Ryujinx master ServerBase.cs (an eventfd write completes the park at once).
+void BsdState::AddManager(ServerManager* manager) {
+    std::scoped_lock lk{manager_mutex};
+    if (std::find(managers.begin(), managers.end(), manager) == managers.end()) {
+        managers.push_back(manager);
+    }
+}
+
+void BsdState::RemoveManagers() {
+    std::scoped_lock lk{manager_mutex};
+    managers.clear();
+}
+
+void BsdState::WakeParked() {
+    // Held while signalling: a bsd service clears the list in its destructor, before its server
+    // manager closes the deferral event.
+    std::scoped_lock lk{manager_mutex};
+    for (auto* manager : managers) {
+        manager->SignalDeferral();
+    }
+}
+
 // ---- IPC ----------------------------------------------------------------------------------
 
 std::shared_ptr<DescriptorTable> BSD_USA::TableFor(HLERequestContext& ctx) {
@@ -1309,8 +1342,15 @@ std::shared_ptr<DescriptorTable> BSD_USA::TableFor(HLERequestContext& ctx) {
 // without a reply and re-run until it is ready or overdue; Eden's SetIsDeferred is that park.
 template <typename Step, typename Respond>
 void BSD_USA::RunParkable(HLERequestContext& ctx, Step&& step, Respond&& respond) {
+    const u64 thread_id = ctx.GetThread().GetThreadId();
+    const u32 command = ctx.GetCommand();
     ParkSlot* existing = state->FindSlot(&ctx);
-    ParkSlot local{};
+    if (existing != nullptr && (existing->thread_id != thread_id || existing->command != command)) {
+        // Left behind by a request whose session went away while parked; this context is new.
+        state->ReleaseSlot(&ctx);
+        existing = nullptr;
+    }
+    ParkSlot local{.thread_id = thread_id, .command = command};
     ParkSlot& slot = existing != nullptr ? *existing : local;
 
     Outcome outcome;
@@ -1330,7 +1370,9 @@ void BSD_USA::RunParkable(HLERequestContext& ctx, Step&& step, Respond&& respond
         }
         ctx.SetIsDeferred(true);
         if (auto manager = ctx.GetManager()) {
-            manager->GetServerManager().EnableDeferralHeartbeat(DeferralHeartbeat);
+            auto& server_manager = manager->GetServerManager();
+            server_manager.EnableDeferralHeartbeat(DeferralHeartbeat);
+            state->AddManager(&server_manager);
         }
         return;
     }
@@ -1358,6 +1400,37 @@ void BSD_USA::StartMonitoring(HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 2};
 
     rb.Push(ResultSuccess);
+}
+
+// Open(u32 flags, buffer<0x21> path) -> (i32 ret, u32 bsd_errno). Only /dev/bpf on a console.
+// Written from: switchbrew Sockets services (Open is limited to /dev/bpf) and Ryujinx master
+// IClient.Open (EOPNOTSUPP).
+void BSD_USA::Open(HLERequestContext& ctx) {
+    LOG_WARNING(Service, "(STUBBED) Open answered EOPNOTSUPP");
+    PushRetErrno(ctx, {-1, Errno::OPNOTSUPP});
+}
+
+// Ioctl(u32 fd, u32 request, u32 bufcount, buffer<0x21> x4) -> (i32 ret, u32 bsd_errno,
+// buffer<0x22> x4). Written from: Ryujinx master IClient.Ioctl (SIOCATMARK answers 0, no
+// out-of-band data; anything else EOPNOTSUPP) and FreeBSD sys/sockio.h (SIOCATMARK 0x40047307).
+void BSD_USA::Ioctl(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const s32 fd = rp.Pop<s32>();
+    const u32 request = rp.Pop<u32>();
+    constexpr u32 SiocAtMark = 0x40047307;
+
+    Errno err;
+    if (!SocketFile(*TableFor(ctx), fd, err)) {
+        PushRetErrno(ctx, {-1, err});
+        return;
+    }
+    if (request == SiocAtMark) {
+        WriteOut(ctx, AsBytes(s32{0}));
+        PushRetErrno(ctx, {0, Errno::SUCCESS});
+        return;
+    }
+    LOG_WARNING(Service, "ioctl request={:#x} answered EOPNOTSUPP", request);
+    PushRetErrno(ctx, {-1, Errno::OPNOTSUPP});
 }
 
 void BSD_USA::Socket(HLERequestContext& ctx) {
@@ -2098,18 +2171,12 @@ std::shared_ptr<BsdEventFd> BSD_USA::GetEventFd(u64 process_id, s32 fd) {
     return file ? file->event : nullptr;
 }
 
+namespace {
+
 // Written from: the net stream's request (fw23 resolver signals a guest eventfd by process and
 // fd) and Linux eventfd(2) (a write of 1).
-bool SignalGuestEventFd(u64 process_id, s32 fd) {
-    std::shared_ptr<BsdState> shared;
-    {
-        std::scoped_lock lk{g_shared_state_mutex};
-        shared = g_shared_state.lock();
-    }
-    if (!shared) {
-        return false;
-    }
-    const auto table = shared->FindTable(process_id);
+bool SignalEventFdIn(BsdState& st, u64 process_id, s32 fd) {
+    const auto table = st.FindTable(process_id);
     if (!table) {
         return false;
     }
@@ -2117,11 +2184,53 @@ bool SignalGuestEventFd(u64 process_id, s32 fd) {
     if (!file || !file->event) {
         return false;
     }
-    return file->event->Write(1) == Errno::SUCCESS;
+    if (file->event->Write(1) != Errno::SUCCESS) {
+        return false;
+    }
+    st.WakeParked();
+    return true;
+}
+
+} // Anonymous namespace
+
+bool SignalGuestEventFd(u64 process_id, s32 fd) {
+    std::shared_ptr<BsdState> shared;
+    {
+        std::scoped_lock lk{g_shared_state_mutex};
+        shared = g_shared_state.lock();
+    }
+    return shared && SignalEventFdIn(*shared, process_id, fd);
 }
 
 std::function<bool(u64 process_id, s32 fd)> GuestEventFdSignalHook() {
     return [](u64 process_id, s32 fd) { return SignalGuestEventFd(process_id, fd); };
+}
+
+namespace {
+
+// Installs the hook on a resolver that has SetEventFdSignal; compiles to nothing on one that
+// does not (sfdnsres before the net stream's resolver lands).
+template <typename Resolver>
+bool InstallEventFdSignalOn() {
+    if constexpr (requires { Resolver::SetEventFdSignal(GuestEventFdSignalHook()); }) {
+        Resolver::SetEventFdSignal(GuestEventFdSignalHook());
+        return true;
+    } else {
+        return false;
+    }
+}
+
+} // Anonymous namespace
+
+// Written from: the Harbor-on-Eden bsd brief (bsd installs the resolver's eventfd signal).
+bool InstallResolverEventFdSignal() {
+    static const bool installed = [] {
+        const bool ok = InstallEventFdSignalOn<SFDNSRES>();
+        LOG_INFO(Service, "bsd: resolver eventfd signal {}",
+                 ok ? "installed" : "not available in this sfdnsres");
+        return ok;
+    }();
+    return installed;
 }
 
 // ---- Self-check ---------------------------------------------------------------------------
@@ -2241,12 +2350,22 @@ bool BSD_USA::RunSelfCheck() {
         auto event = a->Get(fe)->event;
         const Errno w1 = event->Write(3);
         const auto r2 = OpPoll(*a, p, -1, slot);
+        const u64 after_poll = event->Value();
+        event->Write(2);
         const auto read1 = event->Read();
         const auto read2 = event->Read();
         check(ee == Errno::SUCCESS && !r1 && w1 == Errno::SUCCESS && r2 && r2->first == 1 &&
-                  True(p[0].revents & PollEvents::In) && read1.first == 3 &&
+                  True(p[0].revents & PollEvents::In) && after_poll == 0 && read1.first == 2 &&
                   read1.second == Errno::SUCCESS && read2.second == Errno::AGAIN,
-              "eventfd: a parked poll wakes on a write, read takes the count, then EAGAIN");
+              "eventfd: a parked poll wakes on a write and drains it; read takes the count, "
+              "then EAGAIN");
+        const bool signalled = SignalEventFdIn(st, 0xA001, fe);
+        const u64 after_signal = event->Value();
+        event->Read();
+        check(signalled && after_signal == 1 && !SignalEventFdIn(st, 0xB002, fe) &&
+                  !SignalEventFdIn(st, 0xA001, fa) && !SignalEventFdIn(st, 0xC003, fe),
+              "the resolver signal adds 1 to that process's eventfd only; a socket or another "
+              "process's fd is refused");
         BsdEventFd sem{2, true};
         check(sem.Read().first == 1 && sem.Read().first == 1 && sem.Read().second == Errno::AGAIN &&
                   sem.Write(0xffff'ffff'ffff'ffffULL) == Errno::INVAL,
@@ -2290,8 +2409,10 @@ bool BSD_USA::RunSelfCheck() {
         auto file6 = b->Get(f6);
         const auto bytes = file6 ? GuestAddrBytes(*file6, file6->socket->GetSockName().first)
                                  : std::vector<u8>{};
+        // sockaddr_in6: len, family, port, flowinfo, then the address at offset 8.
         check(e6 == Errno::SUCCESS && bind6 == Errno::SUCCESS && bytes.size() == 28 &&
-                  bytes[1] == AfInet6 && bytes[12] == 0xff && bytes[16] == 127,
+                  bytes[1] == AfInet6 && bytes[18] == 0xff && bytes[19] == 0xff &&
+                  bytes[20] == 127 && bytes[23] == 1,
               "an INET6 socket binds ::ffff:127.0.0.1 and names itself v4-mapped");
     }
     {
@@ -2330,7 +2451,7 @@ BSD_USA::BSD_USA(Core::System& system_, const char* name, bool is_user_)
         {1, &BSD_USA::StartMonitoring, "StartMonitoring"},
         {2, &BSD_USA::Socket, "Socket"},
         {3, &BSD_USA::SocketExempt, "SocketExempt"},
-        {4, nullptr, "Open"},
+        {4, &BSD_USA::Open, "Open"},
         {5, &BSD_USA::Select, "Select"},
         {6, &BSD_USA::Poll, "Poll"},
         {7, &BSD_USA::Sysctl, "Sysctl"},
@@ -2345,7 +2466,7 @@ BSD_USA::BSD_USA(Core::System& system_, const char* name, bool is_user_)
         {16, &BSD_USA::GetSockName, "GetSockName"},
         {17, &BSD_USA::GetSockOpt, "GetSockOpt"},
         {18, &BSD_USA::Listen, "Listen"},
-        {19, nullptr, "Ioctl"},
+        {19, &BSD_USA::Ioctl, "Ioctl"},
         {20, &BSD_USA::Fcntl, "Fcntl"},
         {21, &BSD_USA::SetSockOpt, "SetSockOpt"},
         {22, &BSD_USA::Shutdown, "Shutdown"},
@@ -2378,6 +2499,7 @@ BSD_USA::BSD_USA(Core::System& system_, const char* name, bool is_user_)
     RegisterHandlers(functions);
 
     state = AcquireSharedState(system_.Kernel());
+    InstallResolverEventFdSignal();
 
     if (auto room_member = Network::GetRoomMember().lock()) {
         proxy_packet_received = room_member->BindOnProxyPacketReceived(
@@ -2394,6 +2516,7 @@ BSD_USA::BSD_USA(Core::System& system_, const char* name, bool is_user_)
 }
 
 BSD_USA::~BSD_USA() {
+    state->RemoveManagers();
     if (auto room_member = Network::GetRoomMember().lock()) {
         room_member->Unbind(proxy_packet_received);
     }

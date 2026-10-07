@@ -32,6 +32,10 @@ namespace Kernel {
 class KernelCore;
 }
 
+namespace Service {
+class ServerManager;
+}
+
 namespace Network {
 class SocketBase;
 class Socket;
@@ -115,6 +119,9 @@ private:
 
 /// [Harbor] Bookkeeping of a request parked on host state. Lives while the request is deferred.
 struct ParkSlot {
+    /// The request this slot belongs to: a context address can be reused by a later request.
+    u64 thread_id = 0;
+    u32 command = 0;
     bool parked = false;
     bool connecting = false;
     bool deadline_overridden = false; ///< RecvMMsg's own timeval bounds the park
@@ -136,6 +143,11 @@ public:
     void StoreSlot(const void* key, const ParkSlot& slot);
     void ReleaseSlot(const void* key);
 
+    /// Server managers that hold parked bsd requests; WakeParked re-runs them at once.
+    void AddManager(ServerManager* manager);
+    void RemoveManagers();
+    void WakeParked();
+
 private:
     void SweepExitedLocked(u64 keep);
 
@@ -146,17 +158,23 @@ private:
 
     std::mutex slot_mutex;
     std::unordered_map<const void*, ParkSlot> slots;
+
+    std::mutex manager_mutex;
+    std::vector<ServerManager*> managers;
 };
 
 /// [Harbor] Adds 1 to the counter of eventfd `fd` in the descriptor table of `process_id` (the
 /// caller's KProcess::GetProcessId()), and returns false when that descriptor is not an eventfd
-/// of that process. Thread-safe; a bsd poll or select parked on the eventfd sees it within one
-/// deferral heartbeat (1 ms). For the fw23 resolver (sfdnsres 100/102/104).
+/// of that process. Thread-safe; parked bsd polls and selects are re-run at once. For the fw23
+/// resolver (sfdnsres 100/102/104).
 bool SignalGuestEventFd(u64 process_id, s32 fd);
 
-/// [Harbor] SignalGuestEventFd as the callback sfdnsres installs:
-/// `SFDNSRES::SetEventFdSignal(Service::Sockets::GuestEventFdSignalHook())`.
+/// [Harbor] SignalGuestEventFd as a callback.
 std::function<bool(u64 process_id, s32 fd)> GuestEventFdSignalHook();
+
+/// [Harbor] Hands GuestEventFdSignalHook to the resolver (SFDNSRES::SetEventFdSignal) when this
+/// build's sfdnsres has that hook; returns whether it did. Called by every bsd service at start.
+bool InstallResolverEventFdSignal();
 
 class BSD_USA final : public ServiceFramework<BSD_USA> {
 public:
@@ -186,6 +204,8 @@ public:
 private:
     void RegisterClient(HLERequestContext& ctx);
     void StartMonitoring(HLERequestContext& ctx);
+    void Open(HLERequestContext& ctx);
+    void Ioctl(HLERequestContext& ctx);
     void Socket(HLERequestContext& ctx);
     void SocketExempt(HLERequestContext& ctx);
     void Select(HLERequestContext& ctx);
