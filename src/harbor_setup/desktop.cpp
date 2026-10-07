@@ -145,6 +145,10 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
         }
     }
 
+    // Test harness runs (HARBOR_CONTROL) set up their data directory themselves and start --qlaunch.
+    if (!forced && std::getenv("HARBOR_CONTROL")) {
+        return -1;
+    }
     const auto readiness = CheckReadiness();
     if (!forced && readiness.Ready()) {
         return -1;

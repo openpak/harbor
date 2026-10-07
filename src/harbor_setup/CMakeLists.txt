@@ -79,6 +79,7 @@ add_custom_command(
 
 # The flow, the record and the installs: no Borealis, so the self-check runs without a window.
 add_library(harbor_setup_core STATIC
+    console_preset.cpp
     device_check.cpp
     device_check.h
     device_probe.cpp

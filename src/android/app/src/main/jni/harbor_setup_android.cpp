@@ -356,24 +356,7 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setConsoleMod
 
 /// What a console session needs every boot: the firmware's own applets, not Eden's stand-ins.
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_applyConsolePreset(JNIEnv*, jobject) {
-    using Settings::AppletMode;
-    auto& v = Settings::values;
-    v.cabinet_applet_mode.SetValue(AppletMode::LLE);
-    v.controller_applet_mode.SetValue(AppletMode::LLE);
-    v.data_erase_applet_mode.SetValue(AppletMode::LLE);
-    v.error_applet_mode.SetValue(AppletMode::LLE);
-    v.net_connect_applet_mode.SetValue(AppletMode::LLE);
-    v.player_select_applet_mode.SetValue(AppletMode::LLE);
-    v.swkbd_applet_mode.SetValue(AppletMode::LLE);
-    v.mii_edit_applet_mode.SetValue(AppletMode::LLE);
-    v.web_applet_mode.SetValue(AppletMode::LLE);
-    v.shop_applet_mode.SetValue(AppletMode::LLE);
-    v.photo_viewer_applet_mode.SetValue(AppletMode::LLE);
-    v.offline_web_applet_mode.SetValue(AppletMode::LLE);
-    v.login_share_applet_mode.SetValue(AppletMode::LLE);
-    v.wifi_web_auth_applet_mode.SetValue(AppletMode::LLE);
-    v.my_page_applet_mode.SetValue(AppletMode::LLE);
-    v.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
+    HarborSetup::ApplyConsolePreset();
     if (global_config) {
         global_config->SaveAllValues();
     }

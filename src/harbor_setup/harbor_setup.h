@@ -39,6 +39,10 @@ Readiness CheckReadiness();
 /// Call once per process: Borealis keeps static state. The SDL video subsystem is shut down on return.
 int RunWizard(Host& host);
 
+/// What a console session needs before every boot: the firmware's own library applets (no host
+/// stand-ins) and handheld mode. Changes Settings::values; the caller saves them if its config reloads.
+void ApplyConsolePreset();
+
 /// Android back: Back on the wizard's current page. Safe from any thread.
 void RequestBack();
 
