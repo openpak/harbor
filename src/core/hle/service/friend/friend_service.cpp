@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include "common/logging.h"
@@ -28,6 +29,7 @@
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/friend/friend_pictures.h"
 #include "core/hle/service/friend/friend_service.h"
+#include "core/hle/service/friend/friend_viewer.h"
 #include "core/hle/service/friend/friends_overlay_payloads.h"
 #include "core/hle/service/friend/friends_session.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -204,6 +206,46 @@ Fr::UserSettingImpl OfflineUserSetting(const Uid& user) {
     setting.friend_code_regenerable_at = 99999999999;
     std::strcpy(setting.friend_code.code, "0000-0000-0000");
     return setting;
+}
+
+/// A friend's cached presence as the viewer records carry it (friend_viewer.h): the module's
+/// basis (what 10101 would answer a viewer) moved into the 0xE8 block. Offline keeps only the
+/// title and the time, and nothing at all without a time.
+ViewerPresence ToViewerPresence(const Baas::Friend& friend_, const Fr::FriendPresenceImpl& basis) {
+    ViewerPresence presence{};
+    const auto state = static_cast<u8>(basis.status);
+    if (state == 0 && basis.last_update_timestamp <= 0) {
+        return presence;
+    }
+    presence.application_id = basis.application_id;
+    presence.acd_index = friend_.acd_index;
+    presence.presence_group_id = basis.presence_group_id;
+    presence.updated_at = basis.last_update_timestamp;
+    if (state == 0) {
+        return presence;
+    }
+    presence.state = state;
+    std::memcpy(presence.app_field, basis.app_key_value_storage, sizeof(presence.app_field));
+    return presence;
+}
+
+template <typename Record>
+Record ToViewerRecord(const Baas::Friend& friend_, const Uid& user, u64 own_group) {
+    const Fr::FriendImpl basis = Fr::ToFriendImpl(friend_, user, own_group, true);
+
+    Record record{};
+    record.user_id = user;
+    record.network_user_id = friend_.id;
+    record.nickname = basis.nickname;
+    Fr::FixedUtf8(std::span<char>{record.thumbnail_url}, friend_.thumbnail_url);
+    record.presence = ToViewerPresence(friend_, basis.presence);
+    if constexpr (std::is_same_v<Record, FriendForViewerV2>) {
+        Fr::FixedUtf8(std::span<char>{record.friend_note}, friend_.note);
+    }
+    record.is_favourite = friend_.is_favorite ? 1 : 0;
+    record.is_new = friend_.is_newly ? 1 : 0;
+    record.is_valid = 1;
+    return record;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -861,12 +903,45 @@ private:
         R_SUCCEED();
     }
 
+    // 20105/20106 and 20108/20109 (friends 23.0.1 0x19b990, 0x19ae90, 0x19bb90; friend_viewer.h).
+    // The whole buffer is zeroed first; an empty buffer or a null Uid is 2121-0002, and so is an
+    // id list that is not as long as the record buffer. An id not in the cache stays a zero
+    // record, which the reader drops (is_valid 0). A viewer reads the presence blob whatever
+    // group it belongs to.
+
     Result GetFriendListForViewer(
-        Out<s32> out_count, OutArray<Fr::FriendForViewerImpl, BufferAttr_HipcMapAlias> out_list,
+        Out<s32> out_count, OutArray<FriendForViewerV1, BufferAttr_HipcMapAlias> out_list,
         s32 offset, Uid user, Fr::SizedFriendFilter filter) {
+        R_RETURN(ListForViewer(out_count, std::span<FriendForViewerV1>{out_list}, offset, user,
+                               filter));
+    }
+
+    Result UpdateFriendInfoForViewer(
+        OutArray<FriendForViewerV1, BufferAttr_HipcMapAlias> out_info, Uid user,
+        InArray<NetworkServiceAccountId, BufferAttr_HipcPointer> friend_ids) {
+        R_RETURN(InfoForViewer(std::span<FriendForViewerV1>{out_info}, user, friend_ids));
+    }
+
+    Result GetFriendListForViewerV2(
+        Out<s32> out_count, OutArray<FriendForViewerV2, BufferAttr_HipcMapAlias> out_list,
+        s32 offset, Uid user, Fr::SizedFriendFilter filter) {
+        R_RETURN(ListForViewer(out_count, std::span<FriendForViewerV2>{out_list}, offset, user,
+                               filter));
+    }
+
+    Result UpdateFriendInfoForViewerV2(
+        OutArray<FriendForViewerV2, BufferAttr_HipcMapAlias> out_info, Uid user,
+        InArray<NetworkServiceAccountId, BufferAttr_HipcPointer> friend_ids) {
+        R_RETURN(InfoForViewer(std::span<FriendForViewerV2>{out_info}, user, friend_ids));
+    }
+
+    template <typename Record>
+    Result ListForViewer(Out<s32> out_count, std::span<Record> out_list, s32 offset, Uid user,
+                         const Fr::SizedFriendFilter& filter) {
         *out_count = 0;
         R_TRY(RequireViewer());
-        R_UNLESS(!IsNull(user), ResultInvalidArgument);
+        std::fill(out_list.begin(), out_list.end(), Record{});
+        R_UNLESS(!out_list.empty() && !IsNull(user), ResultInvalidArgument);
 
         if (!AvailableFor(user)) {
             R_SUCCEED();
@@ -878,46 +953,31 @@ private:
             if (static_cast<std::size_t>(count) == out_list.size()) {
                 break;
             }
-            out_list[count++] = Fr::ToFriendForViewerImpl(one, user, own_group);
+            out_list[count++] = ToViewerRecord<Record>(one, user, own_group);
         }
 
         *out_count = count;
         R_SUCCEED();
     }
 
-    Result UpdateFriendInfoForViewer(
-        OutArray<Fr::FriendForViewerImpl, BufferAttr_HipcMapAlias> out_info, Uid user,
-        InArray<NetworkServiceAccountId, BufferAttr_HipcPointer> friend_ids) {
+    template <typename Record>
+    Result InfoForViewer(std::span<Record> out_info, Uid user,
+                         std::span<const NetworkServiceAccountId> friend_ids) {
         R_TRY(RequireViewer());
+        std::fill(out_info.begin(), out_info.end(), Record{});
+        R_UNLESS(!IsNull(user) && friend_ids.size() == out_info.size(), ResultInvalidArgument);
 
-        const bool available = AvailableFor(user);
+        if (!AvailableFor(user)) {
+            R_SUCCEED();
+        }
+
         const u64 own_group = OwnPresenceGroupId();
-
-        for (std::size_t index = 0; index < friend_ids.size() && index < out_info.size();
-             index++) {
-            const auto found = available ? Baas::FindFriend(friend_ids[index]) : std::nullopt;
-            out_info[index] = found ? Fr::ToFriendForViewerImpl(*found, user, own_group)
-                                    : Fr::FriendForViewerImpl{};
+        for (std::size_t index = 0; index < friend_ids.size(); index++) {
+            if (const auto found = Baas::FindFriend(friend_ids[index])) {
+                out_info[index] = ToViewerRecord<Record>(*found, user, own_group);
+            }
         }
         R_SUCCEED();
-    }
-
-    // 20108 / 20109 are the 0x220 viewer shape. Its first part is the same, but the audit does
-    // not pin where the valid flag sits in it, and a friend written without one is a friend the
-    // caller drops -- so the commands exist (a missing id is a CMIF error the caller cannot tell
-    // from a real failure) and answer an empty list.
-    Result GetFriendListForViewerV2(Out<s32> out_count) {
-        *out_count = 0;
-        LOG_WARNING(Service_Friend, "unknown contract: friend 20108 GetFriendListForViewerV2 "
-                                    "(0x220 record layout not pinned), answered empty");
-        R_RETURN(RequireViewer());
-    }
-
-    Result UpdateFriendInfoForViewerV2() {
-        // overlayDisp reads the "is now online" nickname from this record (overlay-notes.md 4.1).
-        LOG_WARNING(Service_Friend, "unknown contract: friend 20109 UpdateFriendInfoForViewerV2 "
-                                    "(0x220 record layout not pinned), answered empty");
-        R_RETURN(RequireViewer());
     }
 
     Result LoadFriendSetting(
