@@ -41,4 +41,6 @@ set(HARBOR_OPENPAK_SOURCES
 
 target_sources(core PRIVATE
     ${HARBOR_OPENPAK_SOURCES}
+    openpak/async_worker.cpp
+    openpak/async_worker.h
 )
