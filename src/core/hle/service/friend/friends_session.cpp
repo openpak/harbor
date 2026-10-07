@@ -255,7 +255,9 @@ struct FriendsPush {
     /// nobody has the user cached.
     static void PrefetchPicture(u64 id) {
         std::string url = Pictures::UrlOf(id);
-        if (url.empty()) {
+        // Only a signed-in module looks a user up (WarmUsers marks the id as asked even when it
+        // cannot ask, so it must not be called before).
+        if (url.empty() && Baas::Ready()) {
             Baas::WarmUsers({id});
             url = Pictures::UrlOf(id);
         }
