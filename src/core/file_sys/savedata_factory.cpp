@@ -9,6 +9,7 @@
 #include "common/logging.h"
 #include "common/uuid.h"
 #include "core/core.h"
+#include "core/file_sys/errors.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/vfs/vfs.h"
 
@@ -25,6 +26,10 @@ bool ShouldSaveDataBeAutomaticallyCreated(SaveDataSpaceId space, const SaveDataA
             (attr.type == SaveDataType::Account || attr.type == SaveDataType::Device) &&
             attr.program_id == 0 && attr.system_save_data_id == 0);
 }
+
+// Owner records of system saves, one u64 file per save id. They live outside every save so no
+// program mounting or copying a save sees them; save enumeration skips dot directories.
+constexpr const char* SystemSaveDataOwnersPath = "/system/save/.harbor/owners";
 
 std::string GetFutureSaveDataPath(SaveDataSpaceId space_id, SaveDataType type, u64 title_id,
                                   u128 user_id) {
@@ -195,6 +200,43 @@ void SaveDataFactory::WriteSaveDataSize(SaveDataType type, u64 title_id, u128 us
 
 void SaveDataFactory::SetAutoCreate(bool state) {
     auto_create = state;
+}
+
+std::optional<u64> SaveDataFactory::ReadSystemSaveDataOwner(u64 save_id) const {
+    const auto owners = dir->GetDirectoryRelative(SystemSaveDataOwnersPath);
+    const auto file = owners != nullptr ? owners->GetFile(fmt::format("{:016X}", save_id)) : nullptr;
+    u64 owner_id{};
+    if (file == nullptr || file->ReadObject(&owner_id) != sizeof(owner_id)) {
+        return std::nullopt;
+    }
+    return owner_id;
+}
+
+void SaveDataFactory::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const {
+    const auto owners = GetOrCreateDirectoryRelative(dir, SystemSaveDataOwnersPath);
+    const auto file =
+        owners != nullptr ? owners->CreateFile(fmt::format("{:016X}", save_id)) : nullptr;
+    if (file == nullptr || !file->Resize(sizeof(owner_id))) {
+        LOG_WARNING(Service_FS, "Could not record the owner of system save {:016X}", save_id);
+        return;
+    }
+    file->WriteObject(owner_id);
+}
+
+Result SaveDataFactory::DeleteSystemSaveData(u64 save_id) const {
+    const auto save_root = dir->GetDirectoryRelative("/system/save");
+    const auto name = fmt::format("{:016X}", save_id);
+    if (save_root == nullptr || save_root->GetSubdirectory(name) == nullptr) {
+        return ResultTargetNotFound;
+    }
+    if (!save_root->DeleteSubdirectoryRecursive(name)) {
+        return ResultPermissionDenied;
+    }
+    if (const auto owners = dir->GetDirectoryRelative(SystemSaveDataOwnersPath);
+        owners != nullptr) {
+        owners->DeleteFile(name);
+    }
+    return ResultSuccess;
 }
 
 } // namespace FileSys

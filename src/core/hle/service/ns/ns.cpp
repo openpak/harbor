@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
+
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/ns/async_result.h"
 #include "core/hle/service/ns/develop_interface.h"
@@ -71,8 +73,15 @@ public:
     }
 
     Result GetSafeSystemVersionCheckInfo(Out<std::array<u8, 0x20>> out_system_version_check_info) {
-        LOG_WARNING(Service_NS, "(STUBBED)");
-        *out_system_version_check_info = {};
+        // The firmware web applets read this before they load a page. Layout from its consumer
+        // (systemWeb checkForNonWifiWebAuth / checkForWifiWebAuth): { s64 state; s64 age_ns; s64
+        // valid; s64 age_ns }. State 3 younger than 24 hours lets the page load; 1 and 2 end in the
+        // applet's own error; anything else after a refresh (3101) is an assertion. The state names
+        // are not public: 3 is taken as "checked, this system version is safe", the only true
+        // answer here. UNKNOWN CONTRACT for the field meanings. Follows the Ryujinx Harbor.
+        LOG_DEBUG(Service_NS, "unknown contract: ns:vm 3100 field meanings; reporting state 3");
+        const std::array<s64, 4> info{3, 0, 1, 0};
+        std::memcpy(out_system_version_check_info->data(), info.data(), sizeof(info));
         R_SUCCEED();
     }
 

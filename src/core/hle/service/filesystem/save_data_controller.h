@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/vfs/vfs_types.h"
@@ -26,6 +28,10 @@ public:
     void WriteSaveDataSize(FileSys::SaveDataType type, u64 title_id, u128 user_id,
                            FileSys::SaveDataSize new_value);
     void SetAutoCreate(bool state);
+
+    std::optional<u64> ReadSystemSaveDataOwner(u64 save_id) const;
+    void WriteSystemSaveDataOwner(u64 save_id, u64 owner_id);
+    Result DeleteSystemSaveData(u64 save_id);
 
 private:
     Core::System& system;

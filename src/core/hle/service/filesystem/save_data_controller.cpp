@@ -99,4 +99,16 @@ void SaveDataController::SetAutoCreate(bool state) {
     factory->SetAutoCreate(state);
 }
 
+std::optional<u64> SaveDataController::ReadSystemSaveDataOwner(u64 save_id) const {
+    return factory->ReadSystemSaveDataOwner(save_id);
+}
+
+void SaveDataController::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) {
+    factory->WriteSystemSaveDataOwner(save_id, owner_id);
+}
+
+Result SaveDataController::DeleteSystemSaveData(u64 save_id) {
+    return factory->DeleteSystemSaveData(save_id);
+}
+
 } // namespace Service::FileSystem
