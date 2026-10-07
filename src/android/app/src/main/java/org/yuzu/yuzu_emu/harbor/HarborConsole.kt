@@ -25,6 +25,9 @@ import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.model.MinimalDocumentFile
 import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.GameHelper
+import org.yuzu.yuzu_emu.utils.GpuDriverHelper
+import org.yuzu.yuzu_emu.features.settings.model.StringSetting
+import java.io.File
 import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
 import org.yuzu.yuzu_emu.utils.Log
@@ -53,6 +56,7 @@ object HarborConsole {
                 NativeLibrary.initializeSystem(true)
             }
             HarborNative.applyConsolePreset()
+            Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
             // The in-game drawer stays shut; the Harbor menu replaces it.
             IntSetting.LOCK_DRAWER.setInt(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
             IntSetting.RENDERER_SCREEN_LAYOUT.setInt(Settings.EmulationOrientation.SensorLandscape.int)
@@ -132,6 +136,24 @@ object HarborConsole {
 
     private val ADDON_EXTENSIONS = setOf("nsp", "xci")
     private const val ADDON_SCAN_DEPTH = 3
+
+    /**
+     * The chosen graphics driver unpacked where Eden loads it from (as Eden's game launch does), so
+     * HOME runs with it. Returns its name for the log.
+     */
+    private fun ensureDriver(): String {
+        val chosen = GpuDriverHelper.customDriverSettingData
+        if (GpuDriverHelper.installedCustomDriverData != chosen) {
+            val path = StringSetting.DRIVER_PATH.getString()
+            if (chosen.name == null || !File(path).exists()) {
+                GpuDriverHelper.installDefaultDriver()
+            } else if (!GpuDriverHelper.installCustomDriver(File(path))) {
+                Log.warning("[Harbor] the chosen graphics driver could not be unpacked")
+            }
+        }
+        val installed = GpuDriverHelper.installedCustomDriverData
+        return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
+    }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */
     fun openSetup(from: Activity) {

@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <ctime>
 #include <thread>
+#include <utility>
 
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -382,6 +383,7 @@ void Wizard::Enter() {
             ShowStatus("On Adreno 6xx GPUs the phone's own driver can crash the HOME menu. MrPurple's "
                        "Turnip T30 is recommended: browse GitHub drivers to install it.",
                        Tone::Warn);
+            ChooseRecommendedDriver();
         }
         break;
     default:
@@ -702,6 +704,30 @@ void Wizard::FillDriverChoices(const std::string& selected) {
     selected_driver = known ? selected : "";
 }
 
+/// Adreno 6xx: the phone's own driver crashes HOME, so MrPurple's Turnip T30 is the default, once
+/// per setup and only while the phone's driver is chosen: an installed T30 is selected, otherwise
+/// the GitHub listing is fetched and its recommended T30 downloaded and installed (which selects it).
+void Wizard::ChooseRecommendedDriver() {
+    if (driver_auto_tried || !selected_driver.empty() || busy) {
+        return;
+    }
+    driver_auto_tried = true;
+    const auto t30 = std::find_if(driver_choices.begin(), driver_choices.end(), [](const DriverChoice& c) {
+        return c.id.find("_T30-") != std::string::npos;
+    });
+    if (t30 != driver_choices.end()) {
+        selected_driver = t30->id;
+        LOG_INFO(Frontend, "harbor: driver {} chosen by default for this GPU", t30->id);
+        ShowStatus(t30->name + " is chosen for this GPU; the phone's driver stays one tap away.", Tone::Ok);
+        return;
+    }
+    if (CanBrowseDrivers()) {
+        LOG_INFO(Frontend, "harbor: fetching the recommended driver for this GPU");
+        driver_auto_download = true;
+        BrowseDrivers();
+    }
+}
+
 void Wizard::SelectDriver(size_t index) {
     if (busy || index >= driver_choices.size()) {
         return;
@@ -821,9 +847,19 @@ void Wizard::BrowseDrivers() {
             }
             EndWork();
             if (cancelled) {
+                driver_auto_download = false;
                 ShowStatus("Cancelled. Your selected driver is unchanged.", Tone::Warn);
             } else {
                 downloads = listing.releases;
+                if (std::exchange(driver_auto_download, false) && selected_driver.empty()) {
+                    const auto recommended =
+                        std::find_if(downloads.begin(), downloads.end(),
+                                     [](const DriverRelease& release) { return release.recommended; });
+                    if (recommended != downloads.end()) {
+                        Download(static_cast<size_t>(recommended - downloads.begin()));
+                        return;
+                    }
+                }
                 if (listing.notice) {
                     ShowStatus(*listing.notice, Tone::Warn);
                 } else if (downloads.empty()) {
