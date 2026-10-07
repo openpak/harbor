@@ -133,7 +133,7 @@ private:
     std::map<u64, std::shared_ptr<Applet>> m_applets{};
     std::optional<u64> m_pending_application_notification{};
     u64 m_logged_foreground_pid{};
-    std::atomic<s64> m_home_button_long_press_ms{500};
+    std::atomic<s64> m_home_button_long_press_ms{800};
     std::map<u32, std::shared_ptr<LockState>> m_lock_states{};
 
     // Callers whose ChangeIntoForeground waits for a completed library applet's accessor to close.
