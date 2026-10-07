@@ -22,7 +22,7 @@ class InputSubsystem;
  *
  *   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
  *   home   home-long   capture   power
- *   screenshot <png path>   threads   quit
+ *   screenshot <png path>   threads   quit   menu <name>
  *   type <text>   type-line <file> <n>   key <name>   detach   attach
  *
  * Buttons reach the guest through the virtual gamepad (the same input path the Android overlay
@@ -42,8 +42,11 @@ public:
         std::function<void()> quit;
         /// Runs on the control thread.
         std::function<void()> threads;
-        /// Runs on the GUI thread: Eden's Qt software keyboard dialog when it is showing, else null.
+        /// Runs on the GUI thread: Eden's Qt software keyboard dialog, or another modal host
+        /// dialog (the Harbor menu's), when one is showing, else null.
         std::function<QWidget*()> keyboard_dialog;
+        /// Runs on the GUI thread: opens a Harbor menu entry by name ("frame-gen").
+        std::function<void(const std::string& name)> menu;
         /// Runs on the GUI thread: the Joy-Cons off (true) or back on (false) the console's rails.
         std::function<void(bool detached)> joycons;
     };
