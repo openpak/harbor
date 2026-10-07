@@ -226,7 +226,7 @@ std::string Wizard::Lead() const {
         switch (account_state) {
         case AccountState::Waiting:
             return "Check your email to verify your account. Open the link in the mail from OpenPak; "
-                   "this page goes on by itself once it is done.";
+                   "this page notices by itself once it is done.";
         case AccountState::SignedIn:
             return "The console's first user is linked to this account when the console sets it up, "
                    "with its nickname and picture.";

@@ -99,9 +99,10 @@ Status ToStatus(const httplib::Result& result) {
     }
     const int status = result->status;
     const auto doc = nlohmann::json::parse(result->body, nullptr, false);
+    // {"error": English message, "code": stable id}: the code is what a client reads.
     const std::string error =
-        doc.is_object() && doc.contains("error") && doc.at("error").is_string()
-            ? doc.at("error").get<std::string>()
+        doc.is_object() && doc.contains("code") && doc.at("code").is_string()
+            ? doc.at("code").get<std::string>()
             : std::string{};
     if (status == 429 || error == "rate_limited") {
         return Status::RateLimited;
