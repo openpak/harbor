@@ -24,10 +24,19 @@ void ApplyConsolePreset() {
         mode->SetValue(AppletMode::LLE);
     }
     v.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
+    // Every log line reaches the file at once, so a console that crashes leaves its last lines.
+    v.log_flush_line.SetValue(true);
 }
 
 void ApplyRecordFolders(const Record& record) {
+#ifdef __ANDROID__
+    // The setup's DLC and update folders are SAF tree URIs, which core cannot walk: the launcher
+    // registers their files itself (HarborConsole.registerAddons, as Eden's game list does games).
+    static_cast<void>(record);
+    Settings::values.external_content_dirs.clear();
+#else
     Settings::values.external_content_dirs = record.AutoloadDirs();
+#endif
     Settings::values.ext_content_from_game_dirs.SetValue(true);
 }
 
