@@ -65,9 +65,10 @@ void ProbeTls(const std::string& address, const std::string& name) {
 // Test only, for the harness, until the frontends call OpenPak::BootConnection::Run before boot
 // (wizard stream): under the harness (HARBOR_CONTROL set) and with a `harbor-net-test` file in
 // the user directory, the boot connection runs here, then one TLS handshake to the console server
-// under a redirected name and one under a name its chain does not carry.
-void TestBootConnection() {
+// under a redirected name and one under a name its chain does not carry. True when it connected.
+bool TestBootConnection() {
     static std::once_flag once;
+    static bool connected = false;
     std::call_once(once, [] {
         const auto user_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
         std::error_code ec;
@@ -83,6 +84,7 @@ void TestBootConnection() {
         if (!result.enabled || !address) {
             return;
         }
+        connected = true;
         std::thread([address = *address] {
             ProbeTls(address, "dauth-lp1.ndas.srv.nintendo.net");
             // The server mints a leaf for any name it is asked for (SNI), so a wrong name is the
@@ -91,7 +93,10 @@ void TestBootConnection() {
             ProbeTls(address, address);
         }).detach();
     });
+    return connected;
 }
+
+void TestLookups();
 
 } // namespace
 
@@ -122,7 +127,9 @@ SFDNSRES::SFDNSRES(Core::System& system_) : ServiceFramework{system_, "sfdnsres"
     };
     RegisterHandlers(functions);
 
-    TestBootConnection();
+    if (TestBootConnection()) {
+        TestLookups();
+    }
     worker = std::thread([this] { WorkerLoop(); });
 }
 
@@ -269,6 +276,26 @@ static LookupResult ResolveName(std::string host, const std::optional<std::strin
     }
     return HostLookup(decision.host, service);
 }
+
+namespace {
+
+// Test only (see TestBootConnection): names through the guest's resolve path, below the IPC
+// layer, as a GetAddrInfo with nsd resolution would send them. None of them reaches a host
+// resolver: each is redirected or fails closed.
+void TestLookups() {
+    for (const char* name : {"dauth-lp1.ndas.srv.nintendo.net", "api.accounts.nintendo.com",
+                             "nncs2-lp1.n.n.srv.nintendo.net", "www.nintendo.co.uk",
+                             "ctest.cdn.n.nintendoswitch.cn", "store.nintendo.co.jp"}) {
+        const LookupResult result = ResolveName(name, std::string{"443"}, true);
+        const auto* entries = std::get_if<std::vector<Network::AddrInfo>>(&result);
+        LOG_INFO(Service, "net test: lookup {} -> {}", name,
+                 entries != nullptr && !entries->empty()
+                     ? Network::IPv4AddressToString(entries->front().addr.ip)
+                     : std::string{"no answer"});
+    }
+}
+
+} // namespace
 
 // We implement gethostbyname using the host's getaddrinfo rather than the
 // host's gethostbyname, because it simplifies portability: e.g., getaddrinfo
