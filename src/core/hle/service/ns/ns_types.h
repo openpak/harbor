@@ -191,6 +191,15 @@ struct UserIdAndValue {
 };
 static_assert(sizeof(UserIdAndValue) == 0x18, "UserIdAndValue has incorrect size.");
 
+/// The answer of IApplicationManagerInterface 936 (unknown contract): an s32, four bytes of padding
+/// and a 0x80-byte record.
+struct UnknownCountedRecord {
+    s32 count;
+    INSERT_PADDING_BYTES_NOINIT(4);
+    std::array<u8, 0x80> record;
+};
+static_assert(sizeof(UnknownCountedRecord) == 0x88, "UnknownCountedRecord has incorrect size.");
+
 /// The input of IReadOnlyApplicationControlDataInterface 20 (unknown contract): the input of 19
 /// (source, two flags, an option, the application id) and a trailing u32.
 struct GetApplicationControlData4Input {

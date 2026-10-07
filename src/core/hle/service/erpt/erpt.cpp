@@ -25,7 +25,7 @@ public:
             {2, C<&ErrorReportContext::SetInitialLaunchSettingsCompletionTime>, "SetInitialLaunchSettingsCompletionTime"},
             {3, nullptr, "ClearInitialLaunchSettingsCompletionTime"},
             {4, nullptr, "UpdatePowerOnTime"},
-            {5, D<&ErrorReportContext::UpdateAwakeTime>, "UpdateAwakeTime"},
+            {5, C<&ErrorReportContext::CreateReportWithAdditionalContext>, "CreateReportWithAdditionalContext"}, // 21.0.0+ ([3.0.0-11.0.1] UpdateAwakeTime)
             {6, C<&ErrorReportContext::SubmitMultipleContext>, "SubmitMultipleContext"},
             {7, C<&ErrorReportContext::RegisterRunningApplicationInfo>, "RegisterRunningApplicationInfo"},
             {8, C<&ErrorReportContext::UnregisterRunningApplicationInfo>, "UnregisterRunningApplicationInfo"},
@@ -138,11 +138,11 @@ private:
         R_SUCCEED();
     }
 
-    Result UpdateAwakeTime(InBuffer<BufferAttr_HipcMapAlias> data_a,
-                           InBuffer<BufferAttr_HipcMapAlias> data_b, u32 flag_a, u32 flag_b) {
-        LOG_WARNING(Service_SET,
-                    "(STUBBED) called, data_a_size={}, data_b_size={}, flag_a={}, flag_b={}",
-                    data_a.size(), data_b.size(), flag_a, flag_b);
+    // 21.0.0+ meaning of command 5 (it was UpdateAwakeTime up to 20.5.0). The arguments are not
+    // established, so none are parsed: the report is accepted and discarded, as the Ryujinx Harbor
+    // does.
+    Result CreateReportWithAdditionalContext() {
+        LOG_DEBUG(Service_SET, "error report with additional context discarded");
         R_SUCCEED();
     }
 };
