@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -19,6 +20,8 @@
 #include "core/hle/service/os/event.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
+#include "core/openpak/async_worker.h"
+#include "core/openpak/session.h"
 
 namespace Service::NIM {
 class IShopServiceAsync final : public ServiceFramework<IShopServiceAsync> {
@@ -104,26 +107,16 @@ private:
         LOG_DEBUG(Service_NIM, "(STUBBED) called");
         CancelImpl();
 
-        error_code.store(0);
-        completion_event->Clear(system.Kernel());
-
+        // [Harbor] Answered inline: there is no network call behind it, a caller already waiting
+        // must not find the event clear, and a host thread must not signal a guest event itself.
+        // `{}` is the smallest well-formed body; nn::ec hands what it reads to a JSON parser.
         {
             std::scoped_lock lock{data_mutex};
-            download_data.clear();
+            const std::string dummy_response = "{}";
+            download_data.assign(dummy_response.begin(), dummy_response.end());
         }
-
-        worker = std::jthread([this](const std::stop_token& stop_token) {
-            if (stop_token.stop_requested()) {
-                error_code.store(1);
-            } else {
-                std::scoped_lock lock{data_mutex};
-                // Dummy JSON response, else it fails...
-                const std::string dummy_response = "{}";
-                download_data.assign(dummy_response.begin(), dummy_response.end());
-                error_code.store(0);
-            }
-            completion_event->Signal(system.Kernel());
-        });
+        error_code.store(0);
+        completion_event->Signal(system.Kernel());
 
         R_SUCCEED();
     }
@@ -132,8 +125,9 @@ private:
         LOG_DEBUG(Service_NIM, "called");
         if (!in_path.empty()) {
             std::string url(in_path.data(), in_path.size());
-            LOG_INFO(Service_NIM, "Preparing request for URL: {}", url);
+            LOG_INFO(Service_NIM, "Preparing request for URL: {}", Common::RedactUrl(url));
         }
+        completion_event->Clear(system.Kernel());
         R_SUCCEED();
     }
 };
@@ -465,15 +459,105 @@ private:
     }
 };
 
+// [Harbor] nn::nim::detail::IAsyncValue: 0 GetSize, 1 Get, 2 Cancel, 3 GetErrorContext. systemWeb
+// waits on the event, then Get, GetErrorContext only when Get failed, and Cancel after either.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+class IAsyncValue final : public ServiceFramework<IAsyncValue> {
+public:
+    explicit IAsyncValue(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                         OpenPak::AsyncWorker::Work work)
+        : ServiceFramework{system_, "IAsyncValue"}, service_context{system_, "nim:IAsyncValue"},
+          worker{std::move(worker_)} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, &IAsyncValue::GetSize, "GetSize"},
+            {1, &IAsyncValue::Get, "Get"},
+            {2, &IAsyncValue::Cancel, "Cancel"},
+            {3, &IAsyncValue::GetErrorContext, "GetErrorContext"},
+        };
+        // clang-format on
+        RegisterHandlers(functions);
+
+        completion_event = service_context.CreateEvent("nim:IAsyncValue:Completion");
+        // The event is signalled however the work ends, so a Cancel followed by a wait
+        // (systemWeb 0x08669a90) always returns.
+        task = worker->Run(completion_event, ResultTokenRequestFailed, std::move(work));
+    }
+
+    ~IAsyncValue() override {
+        task->Detach();
+        service_context.CloseEvent(completion_event);
+    }
+
+    Kernel::KReadableEvent& GetEvent() const {
+        return completion_event->GetReadableEvent();
+    }
+
+    // The one result nim 22.5.0 itself puts on a failed dauth:0 token request
+    // (0x11a858..0x11a870); systemWeb maps it to its own error before the page sees it.
+    static constexpr Result ResultTokenRequestFailed{ErrorModule::NIM, 70};
+
+private:
+    void GetSize(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<u64>(task->IsDone() ? task->Value().size() : 0);
+    }
+
+    void Get(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        if (!task->IsDone()) {
+            // systemWeb asks only after the event; an IPC handler never waits on the network.
+            LOG_UNKNOWN_CONTRACT(Service_NIM, "nim IAsyncValue Get before the value is ready, "
+                                              "answered as a failed token request");
+            rb.Push(ResultTokenRequestFailed);
+            return;
+        }
+        const Result result = task->GetResult();
+        const std::vector<u8> value = task->Value();
+        if (result.IsError() || value.empty() || !ctx.CanWriteBuffer() ||
+            value.size() > ctx.GetWriteBufferSize()) {
+            rb.Push(result.IsError() ? result : ResultTokenRequestFailed);
+            return;
+        }
+        ctx.WriteBuffer(value);
+        rb.Push(ResultSuccess);
+    }
+
+    void Cancel(HLERequestContext& ctx) {
+        task->Cancel();
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetErrorContext(HLERequestContext& ctx) {
+        // No context: the failure is the result code alone. systemWeb asserts if this command
+        // fails (0x08669b70).
+        if (ctx.CanWriteBuffer()) {
+            std::vector<u8> zeros(ctx.GetWriteBufferSize());
+            ctx.WriteBuffer(zeros);
+        }
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* completion_event;
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::shared_ptr<OpenPak::AsyncTask> task;
+};
+
 class NIM_SHP final : public ServiceFramework<NIM_SHP> {
 public:
-    explicit NIM_SHP(Core::System& system_) : ServiceFramework{system_, "nim:shp"} {
+    explicit NIM_SHP(Core::System& system_)
+        : ServiceFramework{system_, "nim:shp"},
+          worker{std::make_shared<OpenPak::AsyncWorker>(system_, "nim:OpenPak")} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, nullptr, "RequestDeviceAuthenticationToken"},
-            {1, nullptr, "RequestCachedDeviceAuthenticationToken"},
+            {1, &NIM_SHP::RequestCachedDeviceAuthenticationToken, "RequestCachedDeviceAuthenticationToken"},
             {2, nullptr, "RequestEdgeToken"},
-            {3, nullptr, "RequestCachedEdgeToken"},
+            {3, &NIM_SHP::RequestCachedEdgeToken, "RequestCachedEdgeToken"},
             {100, nullptr, "RequestRegisterDeviceAccount"},
             {101, nullptr, "RequestUnregisterDeviceAccount"},
             {102, nullptr, "RequestDeviceAccountStatus"},
@@ -503,6 +587,52 @@ public:
 
         RegisterHandlers(functions);
     }
+
+private:
+    // The dauth client NIM asks dauth:0 for both tokens with, compiled into nim 22.5.0
+    // (0x11a82c, 0x11a8ec).
+    static constexpr const char* ShopClientId = "93af0acb26258de9";
+
+    // Both take how close to expiry a cached token may be (systemWeb sends 3 hours). Nothing is
+    // cached here: every request mints a fresh token, which is never that close. The longest
+    // token accepted is NIM's own dauth:0 buffer less its NUL (0x801 and 0x401 bytes).
+    void RequestCachedDeviceAuthenticationToken(HLERequestContext& ctx) {
+        RequestToken(ctx, "", 0x800);
+    }
+
+    void RequestCachedEdgeToken(HLERequestContext& ctx) {
+        // NIM passes vendor index 0 to dauth:0; that index 0 is the module's "akamai" (beside
+        // "fastly") is inferred from the string order, not traced.
+        RequestToken(ctx, "akamai", 0x400);
+    }
+
+    void RequestToken(HLERequestContext& ctx, std::string vendor, std::size_t max_length) {
+        LOG_DEBUG(Service_NIM, "called, {}", vendor.empty() ? "device token" : "edge token");
+        auto value = std::make_shared<IAsyncValue>(
+            system, worker,
+            [vendor, max_length](std::stop_token, std::vector<u8>& out) -> Result {
+                if (!OpenPak::Session::Enabled()) {
+                    LOG_WARNING(Service_NIM, "nim:shp token: no OpenPak server configured");
+                    return IAsyncValue::ResultTokenRequestFailed;
+                }
+                const std::string token = OpenPak::Session::DauthToken(ShopClientId, vendor);
+                if (token.empty() || token.size() > max_length) {
+                    LOG_WARNING(Service_NIM, "nim:shp token request failed ({} bytes, {} taken)",
+                                token.size(), max_length);
+                    return IAsyncValue::ResultTokenRequestFailed;
+                }
+                out.assign(token.begin(), token.end());
+                out.push_back(0);
+                return ResultSuccess;
+            });
+
+        IPC::ResponseBuilder rb{ctx, 2, 1, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, value->GetEvent());
+        rb.PushIpcInterface<IAsyncValue>(ctx, std::move(value));
+    }
+
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
 class IEnsureNetworkClockAvailabilityService final
