@@ -53,6 +53,8 @@ std::int64_t Now() {
         .count();
 }
 
+std::string DecodeRecord(const std::string& stored);
+
 struct Globals {
     std::mutex mutex;
     std::map<std::string, std::unique_ptr<Pairing>> pairings;
@@ -223,7 +225,7 @@ void Pairing::Impl::Load() {
         return;
     }
     LOG_INFO(Service_PCTL, "pctl: record read ({} bytes)", secret->size());
-    const json root = json::parse(*secret, nullptr, false);
+    const json root = json::parse(DecodeRecord(*secret), nullptr, false);
     try {
         if (root.is_discarded() || !root.is_object()) {
             throw std::runtime_error("not an object");
@@ -286,6 +288,60 @@ void Pairing::Impl::Load() {
 
 namespace {
 
+// The record goes to the password store as base64 under a "pctl1:" prefix: libsecret with
+// GNOME Keyring was seen answering an empty secret for a JSON text full of \" escapes (the
+// setting document is kept inside the record as a string), and persistently so across restarts.
+constexpr std::string_view RecordPrefix = "pctl1:";
+constexpr std::string_view Base64Chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string EncodeRecord(const std::string& json_text) {
+    std::string out{RecordPrefix};
+    std::size_t i = 0;
+    for (; i + 2 < json_text.size(); i += 3) {
+        const unsigned n = (static_cast<unsigned char>(json_text[i]) << 16) |
+                           (static_cast<unsigned char>(json_text[i + 1]) << 8) |
+                           static_cast<unsigned char>(json_text[i + 2]);
+        out += {Base64Chars[(n >> 18) & 63], Base64Chars[(n >> 12) & 63],
+                Base64Chars[(n >> 6) & 63], Base64Chars[n & 63]};
+    }
+    if (const std::size_t rest = json_text.size() - i; rest != 0) {
+        unsigned n = static_cast<unsigned char>(json_text[i]) << 16;
+        if (rest == 2) {
+            n |= static_cast<unsigned char>(json_text[i + 1]) << 8;
+        }
+        out += Base64Chars[(n >> 18) & 63];
+        out += Base64Chars[(n >> 12) & 63];
+        out += rest == 2 ? Base64Chars[(n >> 6) & 63] : '=';
+        out += '=';
+    }
+    return out;
+}
+
+/// The JSON text of a stored record: decoded when it carries the prefix, as is otherwise (an
+/// earlier build kept plain JSON). Empty when the base64 is bad.
+std::string DecodeRecord(const std::string& stored) {
+    if (stored.compare(0, RecordPrefix.size(), RecordPrefix) != 0) {
+        return stored;
+    }
+    std::string out;
+    unsigned bits = 0;
+    int count = 0;
+    for (std::size_t i = RecordPrefix.size(); i < stored.size() && stored[i] != '='; ++i) {
+        const auto position = Base64Chars.find(stored[i]);
+        if (position == std::string_view::npos) {
+            return {};
+        }
+        bits = (bits << 6) | static_cast<unsigned>(position);
+        count += 6;
+        if (count >= 8) {
+            count -= 8;
+            out += static_cast<char>((bits >> count) & 0xff);
+        }
+    }
+    return out;
+}
+
 /// Keep `text` and read it back. The system password store has answered an empty secret for one
 /// it just accepted (seen with libsecret, in a store/lookup loop: roughly one write in five), which
 /// would drop the PIN at the next start. A few more writes make it stick.
@@ -343,7 +399,7 @@ void Pairing::Impl::SaveLocked() {
         }
     }
     out["owners"] = std::move(owners);
-    const std::string text = out.dump();
+    const std::string text = EncodeRecord(out.dump());
     if (!StoreVerified(SecretKey(), text)) {
         LOG_WARNING(Service_PCTL, "pctl: the secret store did not keep the pairing record");
     } else {

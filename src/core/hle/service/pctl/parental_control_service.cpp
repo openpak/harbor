@@ -289,7 +289,7 @@ IParentalControlService::IParentalControlService(Core::System& system_, Capabili
         {1458, &IParentalControlService::IsPlayTimerAlarmDisabled, "IsPlayTimerAlarmDisabled"},
         {1459, &IParentalControlService::GetPlayTimerRemainingTimeDisplayInfo, "GetPlayTimerRemainingTimeDisplayInfo"},
         {1460, &IParentalControlService::GetWatcherStatusDisplayInfo, "GetWatcherStatusDisplayInfo"}, // 23.0.0+
-        {1471, nullptr, "NotifyWrongPinCodeInputManyTimes"},
+        {1471, &IParentalControlService::NotifyWrongPinCodeInputManyTimes, "NotifyWrongPinCodeInputManyTimes"},
         {1472, nullptr, "CancelNetworkRequest"},
         {1473, &IParentalControlService::GetUnlinkedEvent, "GetUnlinkedEvent"},
         {1474, nullptr, "ClearUnlinkedEvent"},
@@ -839,6 +839,15 @@ void IParentalControlService::GetPinCodeLength(HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
     rb.Push(static_cast<s32>(Pairing::Current().InForce().pin.size()));
+}
+
+void IParentalControlService::NotifyWrongPinCodeInputManyTimes(HLERequestContext& ctx) {
+    // The firmware's PIN applet calls this after repeated wrong entries; leaving it out made the
+    // applet assert on its first wrong PIN. pctl records an event for the parent app to see; with
+    // no events upload here nothing is kept.
+    LOG_UNKNOWN_CONTRACT(Service_PCTL, "pctl 1471 NotifyWrongPinCodeInputManyTimes: no event is "
+                                       "recorded or uploaded; answered success");
+    PushResult(ctx, ResultSuccess);
 }
 
 void IParentalControlService::GetPinCodeChangedEvent(HLERequestContext& ctx) {

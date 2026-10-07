@@ -85,6 +85,7 @@ private:
     void GenerateInquiryCode(HLERequestContext& ctx);
     void CheckMasterKey(HLERequestContext& ctx);
     void GetPinCodeLength(HLERequestContext& ctx);
+    void NotifyWrongPinCodeInputManyTimes(HLERequestContext& ctx);
     void GetPinCodeChangedEvent(HLERequestContext& ctx);
     void GetPinCode(HLERequestContext& ctx);
 
