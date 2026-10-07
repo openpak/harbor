@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <queue>
+#include <vector>
 #include "common/logging.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -28,8 +29,8 @@ public:
             {1, &IFriendService::Cancel, "Cancel"},
             {10100, nullptr, "GetFriendListIds"},
             {10101, &IFriendService::GetFriendList, "GetFriendList"},
-            {10102, nullptr, "UpdateFriendInfo"},
-            {10110, nullptr, "GetFriendProfileImage"},
+            {10102, &IFriendService::UpdateFriendInfo, "UpdateFriendInfo"},
+            {10110, &IFriendService::GetFriendProfileImage, "GetFriendProfileImage"},
             {10111, nullptr, "GetFriendProfileImageWithImageSize"}, // 18.0.0+
             {10120, &IFriendService::CheckFriendListAvailability, "CheckFriendListAvailability"},
             {10121, nullptr, "EnsureFriendListAvailable"},
@@ -210,6 +211,31 @@ private:
 
         rb.Push<u32>(0); // Friend count
         // TODO(ogniK): Return a buffer of u64s which are the "NetworkServiceAccountId"
+    }
+
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base) when no account is linked:
+    // no friend profiles and no picture. The overlay applet asks both for every pop-up and drops
+    // the pop-up on an empty answer, as a console without a friend list does.
+    void UpdateFriendInfo(HLERequestContext& ctx) {
+        // No account ids in the log: the overlay applet asks this for every pop-up.
+        LOG_DEBUG(Service_Friend, "(STUBBED) called, no linked account: no friend profiles");
+
+        // Out slots are left empty (an all-zero profile is an invalid one the caller drops).
+        if (const auto size = ctx.GetWriteBufferSize(); size > 0) {
+            const std::vector<u8> empty(size);
+            ctx.WriteBuffer(empty);
+        }
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetFriendProfileImage(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_Friend, "(STUBBED) called, no linked account: no profile image");
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<s32>(0); // Image size
     }
 
     void CheckFriendListAvailability(HLERequestContext& ctx) {
