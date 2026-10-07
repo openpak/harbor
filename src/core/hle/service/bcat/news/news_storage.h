@@ -1,100 +1,58 @@
-// SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
-
-// SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 tobagin
+// SPDX-License-Identifier: AGPL-3.0-only
 
 #pragma once
 
-#include <array>
-#include <functional>
+#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
-#include "common/container/unordered_map.h"
+#include <string_view>
 #include <vector>
 
 #include "common/common_types.h"
+#include "core/hle/service/bcat/news/news_record.h"
 
 namespace Service::News {
 
-struct GithubNewsMeta {
-    std::string news_id;
-    std::string topic_id;
-    u64 published_at{};
-    u64 pickup_limit{};
-    u64 essential_pickup_limit{};
-    u64 expire_at{};
-    u32 priority{};
-    u32 deletion_priority{100};
-    u32 decoration_type{1};
-    u32 opted_in{1};
-    u32 essential_pickup_limit_flag{1};
-    u32 category{};
-    u32 language_mask{1};
-};
-
-struct NewsRecordV1 {
-    std::array<char, 24> news_id{};
-    std::array<char, 24> user_id{};
-    s64 received_time{};
-    s32 read{};
-    s32 newly{};
-    s32 displayed{};
-    s32 extra1{};
-};
-static_assert(sizeof(NewsRecordV1) == 72);
-
-struct NewsRecord {
-    std::array<char, 24> news_id{};
-    std::array<char, 24> user_id{};
-    std::array<char, 32> topic_id{};
-    s64 received_time{};
-    std::array<u8, 12> _pad1{};
-    s32 read{};
-    s32 newly{};
-    s32 displayed{};
-    std::array<u8, 8> _pad2{};
-    s32 extra1{};
-    s32 extra2{};
-};
-static_assert(sizeof(NewsRecord) == 128);
-
-struct StoredNews {
-    NewsRecord record{};
-    std::vector<u8> payload;
-};
-
+// The news database HOME's News queries and the article files it opens. A console keeps them in an
+// SQLite database and news:/data on save 0x8000000000000090; here they are one JSON file of rows and
+// one file per article in the Harbor data directory. PostLocalNews writes into it, and so does the
+// OpenPak fill, which takes the news server's local surface rather than BCAT delivery.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 class NewsStorage {
 public:
-    static NewsStorage& Instance();
+    explicit NewsStorage(std::filesystem::path directory_);
 
+    // Store an article payload; false (logged) when it is not a news msgpack or cannot be written. A
+    // repost replaces the row whole, the reader's read/displayed state included.
+    bool Post(std::span<const u8> payload, s64 received_at);
+
+    // The stored payload size of the delivered article `news_id`, or -1 when it is not stored.
+    s64 StoredSize(std::string_view news_id) const;
+
+    // The rows `where` matches, in `order`. Throws QueryError.
+    std::vector<NewsRow> Query(std::string_view where, std::string_view order) const;
+
+    // Set, or add to, an integer column of every matching row; the number changed. Throws QueryError.
+    int Update(std::string_view column, s64 value, bool add, std::string_view where);
+
+    // An article by its news:/data name. Only names of stored rows are looked up.
+    std::optional<std::vector<u8>> Payload(std::string_view file_name) const;
+
+    std::vector<std::string> Topics() const;
+    u64 UsedBytes() const;
     void Clear();
-    StoredNews& Upsert(std::string_view news_id, std::string_view user_id,
-                       std::string_view topic_id, s64 time, std::vector<u8> payload);
-    StoredNews& UpsertRaw(const GithubNewsMeta& meta, std::vector<u8> payload);
-
-    std::vector<NewsRecord> ListAll() const;
-    std::optional<StoredNews> FindByNewsId(std::string_view news_id,
-                                           std::string_view user_id = {}) const;
-    bool UpdateRecord(std::string_view news_id, std::string_view user_id,
-                      const std::function<void(NewsRecord&)>& updater);
-    void MarkAsRead(std::string_view news_id);
-
-    size_t GetAndIncrementOpenCounter();
-    void ResetOpenCounter();
 
 private:
-    NewsStorage() = default;
+    std::filesystem::path RecordsPath() const;
+    void Load();
+    void Save() const;
 
-    static std::string MakeKey(std::string_view news_id, std::string_view user_id);
-    static void CopyZ(std::span<char> dst, std::string_view src);
-    static s64 Now();
-
-    mutable std::mutex mtx;
-    ::Common::unordered_map<std::string, StoredNews> items;
-    size_t open_counter{};
+    std::filesystem::path directory;
+    mutable std::mutex mutex;
+    std::vector<NewsRow> rows;
 };
 
 } // namespace Service::News
