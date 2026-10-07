@@ -6,6 +6,7 @@
 
 #include "common/logging.h"
 #include "core/frontend/applets/general.h"
+#include "core/hle/service/pctl/pctl_pairing.h"
 
 namespace Core::Frontend {
 
@@ -15,28 +16,35 @@ DefaultParentalControlsApplet::~DefaultParentalControlsApplet() = default;
 
 void DefaultParentalControlsApplet::Close() const {}
 
+// [Harbor] Eden's host applet accepted every PIN. Harbor has no host stand-in for the firmware's
+// PIN entry: with no PIN set there is nothing to verify; with one set the host cannot answer for
+// the user and refuses (the firmware's own Auth applet asks in a HOME session).
+static bool NoPinSet() {
+    return Service::PCTL::Pairing::Current().InForce().pin.empty();
+}
+
 void DefaultParentalControlsApplet::VerifyPIN(std::function<void(bool)> finished,
-                                              bool suspend_future_verification_temporarily) {
-    LOG_INFO(Service_AM,
-             "Application requested frontend to verify PIN (normal), "
-             "suspend_future_verification_temporarily={}, verifying as correct.",
-             suspend_future_verification_temporarily);
-    finished(true);
+                                              [[maybe_unused]] bool suspend_future_verification_temporarily) {
+    const bool verified = NoPinSet();
+    LOG_INFO(Service_AM, "Host PIN check (normal): {}",
+             verified ? "no PIN is set" : "a PIN is set, refused without the firmware applet");
+    finished(verified);
 }
 
 void DefaultParentalControlsApplet::VerifyPINForSettings(std::function<void(bool)> finished) {
-    LOG_INFO(Service_AM,
-             "Application requested frontend to verify PIN (settings), verifying as correct.");
-    finished(true);
+    const bool verified = NoPinSet();
+    LOG_INFO(Service_AM, "Host PIN check (settings): {}",
+             verified ? "no PIN is set" : "a PIN is set, refused without the firmware applet");
+    finished(verified);
 }
 
 void DefaultParentalControlsApplet::RegisterPIN(std::function<void()> finished) {
-    LOG_INFO(Service_AM, "Application requested frontend to register new PIN");
+    LOG_WARNING(Service_AM, "Host PIN registration is not offered; no PIN was registered");
     finished();
 }
 
 void DefaultParentalControlsApplet::ChangePIN(std::function<void()> finished) {
-    LOG_INFO(Service_AM, "Application requested frontend to change PIN to new value");
+    LOG_WARNING(Service_AM, "Host PIN change is not offered; the PIN is unchanged");
     finished();
 }
 
