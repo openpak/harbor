@@ -23,7 +23,7 @@ export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export GRADLE_USER_HOME="$SCR/gradle-home"
 export GRADLE_RO_DEP_CACHE=$HOME/.gradle/caches
-JOBS="${NUM_JOBS:-6}"
+JOBS="${NUM_JOBS:-5}"
 
 # The Android Gradle plugin runs ninja without -j, which exhausts memory here, so the
 # compile and link steps are limited with CMake job pools instead.
