@@ -37,10 +37,25 @@ export -f refuse_while_emulator_runs
 export TMPDIR="$SCR/tmp"
 mkdir -p "$TMPDIR"
 
-# Run a command under the machine-wide build lock, at the lowest CPU priority. The emulator
-# check runs again inside the lock, because waiting for the lock can take a long time.
+# Run a command under a build slot, at the lowest CPU priority. Harbor has two slots: the machine-wide
+# OpenPak lock (shared with every other project's builds) and one Harbor-only lock, so at most two builds
+# run at once and other projects still wait for one slot only. A build also waits for 6 GiB of free RAM.
+# The emulator check runs again inside the slot, because waiting can take a long time.
+# ponytail: two slots and a fixed RAM floor; tune MIN_FREE_KB/slots if the machine changes.
+MIN_FREE_KB=$((6 * 1024 * 1024))
 locked() {
-    flock --close "$LOCK" nice -n 19 bash -c 'refuse_while_emulator_runs; exec "$@"' _ "$@"
+    local slot rc
+    while :; do
+        for slot in "$LOCK" "$LOCK.harbor2"; do
+            if [ "$(awk '/MemAvailable/ {print $2}' /proc/meminfo)" -lt "$MIN_FREE_KB" ]; then
+                break
+            fi
+            rc=0
+            flock -n -E 200 --close "$slot" nice -n 19 bash -c 'refuse_while_emulator_runs; exec "$@"' _ "$@" || rc=$?
+            [ "$rc" -ne 200 ] && return "$rc"
+        done
+        sleep 10
+    done
 }
 
 # Each worktree builds into its own directory; the main checkout keeps $SCR/build/desktop.
