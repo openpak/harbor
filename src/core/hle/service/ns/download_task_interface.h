@@ -13,6 +13,7 @@ public:
     ~IDownloadTaskInterface() override;
 
 private:
+    Result ClearTaskStatusList();
     Result EnableAutoCommit();
     Result DisableAutoCommit();
 };

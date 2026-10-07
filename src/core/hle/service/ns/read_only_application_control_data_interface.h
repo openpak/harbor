@@ -34,6 +34,12 @@ public:
         u8 flag1,
         u8 flag2,
         u64 application_id);
+    Result ConvertLanguageCodeToApplicationLanguage(
+        Out<ApplicationLanguage> out_application_language, u64 language_code);
+    Result GetApplicationControlData4(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                                      Out<u32> out_flags_a, Out<u32> out_flags_b,
+                                      Out<u32> out_actual_size,
+                                      GetApplicationControlData4Input input);
     void ListApplicationIcon(HLERequestContext& ctx);
     void ListApplicationTitle(HLERequestContext& ctx);
     Result GetApplicationControlData3(

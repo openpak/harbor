@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 
@@ -37,6 +38,11 @@ struct FrontendAppletParameters {
     s32 previous_program_index{-1};
 };
 
+// The frontend booted qlaunch: a HOME session.
+inline bool IsHomeSessionRoot(const FrontendAppletParameters& params) {
+    return params.applet_id == AppletId::QLaunch;
+}
+
 class AppletManager {
 public:
     explicit AppletManager(Core::System& system);
@@ -51,6 +57,10 @@ public:
     void SetWindowSystem(WindowSystem* window_system);
     [[nodiscard]] WindowSystem* GetWindowSystem() const { return m_window_system; }
 
+    // HOME session: the frontend booted qlaunch, so am behaves like a console's (firmware
+    // library applets, the overlay applet, no host-made user). Stock behaviour otherwise.
+    [[nodiscard]] bool IsHomeSession() const { return m_home_session.load(); }
+
 private:
     Core::System& m_system;
 
@@ -58,6 +68,7 @@ private:
     std::condition_variable m_cv;
 
     WindowSystem* m_window_system{};
+    std::atomic<bool> m_home_session{};
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};

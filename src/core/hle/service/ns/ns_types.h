@@ -183,4 +183,45 @@ struct LogoPath {
 };
 static_assert(std::is_trivially_copyable_v<LogoPath>, "LogoPath must be trivially copyable.");
 
+/// The input of IApplicationManagerInterface 4008 (unknown contract): a user id and a u32.
+struct UserIdAndValue {
+    Common::UUID user_id;
+    u32 value;
+    INSERT_PADDING_BYTES_NOINIT(4);
+};
+static_assert(sizeof(UserIdAndValue) == 0x18, "UserIdAndValue has incorrect size.");
+
+/// The answer of IApplicationManagerInterface 936 (unknown contract): an s32, four bytes of padding
+/// and a 0x80-byte record.
+struct UnknownCountedRecord {
+    s32 count;
+    INSERT_PADDING_BYTES_NOINIT(4);
+    std::array<u8, 0x80> record;
+};
+static_assert(sizeof(UnknownCountedRecord) == 0x88, "UnknownCountedRecord has incorrect size.");
+
+/// The input of IReadOnlyApplicationControlDataInterface 20 (unknown contract): the input of 19
+/// (source, two flags, an option, the application id) and a trailing u32.
+struct GetApplicationControlData4Input {
+    ApplicationControlSource control_source;
+    u8 flag1;
+    u8 flag2;
+    INSERT_PADDING_BYTES_NOINIT(1);
+    u32 option;
+    u64 application_id;
+    u32 extra;
+    INSERT_PADDING_BYTES_NOINIT(4);
+};
+static_assert(sizeof(GetApplicationControlData4Input) == 0x18,
+              "GetApplicationControlData4Input has incorrect size.");
+
+/// The answer of a try-pop style command (IApplicationManagerInterface 4089, unknown contract):
+/// a bool, seven bytes of padding and a 0x50-byte record.
+struct UnknownTryPopRecord {
+    bool has_record;
+    INSERT_PADDING_BYTES_NOINIT(7);
+    std::array<u8, 0x50> record;
+};
+static_assert(sizeof(UnknownTryPopRecord) == 0x58, "UnknownTryPopRecord has incorrect size.");
+
 } // namespace Service::NS

@@ -37,6 +37,8 @@ add_library(core STATIC
     crypto/partition_data_manager.h
     crypto/xts_encryption_layer.cpp
     crypto/xts_encryption_layer.h
+    debug/thread_dump.cpp
+    debug/thread_dump.h
     debugger/debugger.cpp
     debugger/debugger.h
     debugger/debugger_interface.h
@@ -958,6 +960,8 @@ add_library(core STATIC
     hle/service/pm/pm.h
     hle/service/prepo/prepo.cpp
     hle/service/prepo/prepo.h
+    hle/service/psc/ovln/ovln_agent.h
+    hle/service/psc/ovln/ovln_result.h
     hle/service/psc/ovln/ovln_types.h
     hle/service/psc/ovln/receiver_service.cpp
     hle/service/psc/ovln/receiver_service.h

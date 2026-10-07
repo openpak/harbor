@@ -10,7 +10,7 @@ IDownloadTaskInterface::IDownloadTaskInterface(Core::System& system_)
     : ServiceFramework{system_, "IDownloadTaskInterface"} {
     // clang-format off
     static const FunctionInfo functions[] = {
-        {701, nullptr, "ClearTaskStatusList"},
+        {701, D<&IDownloadTaskInterface::ClearTaskStatusList>, "ClearTaskStatusList"},
         {702, nullptr, "RequestDownloadTaskList"},
         {703, nullptr, "RequestEnsureDownloadTask"},
         {704, nullptr, "ListDownloadTaskStatus"},
@@ -26,6 +26,12 @@ IDownloadTaskInterface::IDownloadTaskInterface(Core::System& system_)
 }
 
 IDownloadTaskInterface::~IDownloadTaskInterface() = default;
+
+Result IDownloadTaskInterface::ClearTaskStatusList() {
+    // There are no download tasks on this unit.
+    LOG_DEBUG(Service_NS, "called");
+    R_SUCCEED();
+}
 
 Result IDownloadTaskInterface::EnableAutoCommit() {
     LOG_WARNING(Service_NS, "(STUBBED) called");

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
+#include "core/core.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_data_broker.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -29,7 +30,8 @@ void EnableSingleUserPlay(const std::shared_ptr<LibraryAppletStorage>& impl) {
     impl->Write(DisplayOptionsOffset + ShowSkipButtonOffset, &enabled, sizeof(enabled));
 }
 
-void ReplaceEmptyUuidWithCurrentUser(const std::shared_ptr<LibraryAppletStorage>& impl) {
+void ReplaceEmptyUuidWithCurrentUser(Core::System& system,
+                                     const std::shared_ptr<LibraryAppletStorage>& impl) {
     Frontend::UiReturnArg return_arg{};
     impl->Read(0, &return_arg, sizeof(return_arg));
 
@@ -37,7 +39,7 @@ void ReplaceEmptyUuidWithCurrentUser(const std::shared_ptr<LibraryAppletStorage>
         return;
     }
 
-    Service::Account::ProfileManager profile_manager;
+    const auto& profile_manager = system.GetProfileManager();
     const auto current_user_idx = Settings::values.current_user.GetValue();
 
     if (auto uuid = profile_manager.GetUser(current_user_idx)) {
@@ -168,16 +170,18 @@ Result ILibraryAppletAccessor::PopOutData(Out<SharedPointer<IStorage>> out_stora
     if (auto caller_applet = m_applet->caller_applet.lock(); caller_applet) {
         std::scoped_lock lk{caller_applet->lock};
         const bool focus_state_changed = caller_applet->lifecycle_manager.UpdateRequestedFocusState();
-        const bool is_front_app = m_applet->frontend && caller_applet->lifecycle_manager.IsApplication();
+        const bool is_front_app = m_applet->frontend && caller_applet->lifecycle_manager.UsesFocusStateChanged();
         if (focus_state_changed) caller_applet->lifecycle_manager.SignalSystemEventIfNeeded(system.Kernel());
         else if (is_front_app) caller_applet->lifecycle_manager.RequestFocusStateChangedNotification(system.Kernel());
     }
 
-    if (m_applet->applet_id == AppletId::ProfileSelect && *out_storage) {
+    // In a HOME session the firmware's PlayerSelect answers for itself (a cancel stays a cancel).
+    if (m_applet->applet_id == AppletId::ProfileSelect && *out_storage &&
+        !system.GetAppletManager().IsHomeSession()) {
         auto impl = (*out_storage)->GetImpl();
 
         if (impl->GetSize() == sizeof(Frontend::UiReturnArg)) {
-            ReplaceEmptyUuidWithCurrentUser(impl);
+            ReplaceEmptyUuidWithCurrentUser(system, impl);
         }
     }
 

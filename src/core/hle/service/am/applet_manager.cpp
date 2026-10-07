@@ -237,6 +237,7 @@ void AppletManager::CreateAndInsertByFrontendAppletParameters(
         std::scoped_lock lk{m_lock};
         m_pending_process = std::move(process);
         m_pending_parameters = params;
+        m_home_session = IsHomeSessionRoot(params);
     }
     m_cv.notify_all();
 }
@@ -265,20 +266,40 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
 
     m_cv.wait(lk, [&] { return m_pending_process != nullptr; });
 
-    if (Settings::values.enable_overlay && m_window_system->GetOverlayDisplayApplet() == nullptr) {
-        if (auto overlay_process = CreateProcess(m_system, static_cast<u64>(AppletProgramId::OverlayDisplay), 0, 0)) {
-            auto overlay_applet = std::make_shared<Applet>(m_system, std::move(overlay_process), false);
-            overlay_applet->program_id = static_cast<u64>(AppletProgramId::OverlayDisplay);
-            overlay_applet->applet_id = AppletId::OverlayDisplay;
-            overlay_applet->type = AppletType::OverlayApplet;
-            overlay_applet->library_applet_mode = LibraryAppletMode::PartialForeground;
-            overlay_applet->window_visible = true;
-            overlay_applet->home_button_short_pressed_blocked = false;
-            overlay_applet->home_button_long_pressed_blocked = false;
-            m_window_system->TrackApplet(overlay_applet, false);
-            overlay_applet->process->Run();
-            LOG_INFO(Service_AM, "called, Overlay applet launched before application (initially hidden, watching home button)");
+    const bool home_session = m_home_session.load();
+    if (home_session) {
+        LOG_INFO(Service_AM, "HOME session: firmware library applets, overlay applet on");
+    }
+
+    const auto launch_overlay = [&] {
+        if (m_window_system->GetOverlayDisplayApplet() != nullptr) {
+            return;
         }
+        auto overlay_process =
+            CreateProcess(m_system, static_cast<u64>(AppletProgramId::OverlayDisplay), 0, 0);
+        if (!overlay_process) {
+            LOG_WARNING(Service_AM, "am: overlay applet {:016x} not started; system pop-ups will not show",
+                        static_cast<u64>(AppletProgramId::OverlayDisplay));
+            return;
+        }
+        auto overlay_applet = std::make_shared<Applet>(m_system, std::move(overlay_process), false);
+        overlay_applet->program_id = static_cast<u64>(AppletProgramId::OverlayDisplay);
+        overlay_applet->applet_id = AppletId::OverlayDisplay;
+        overlay_applet->type = AppletType::OverlayApplet;
+        overlay_applet->library_applet_mode = LibraryAppletMode::PartialForeground;
+        overlay_applet->window_visible = true;
+        overlay_applet->home_button_short_pressed_blocked = false;
+        overlay_applet->home_button_long_pressed_blocked = false;
+        (void)m_window_system->TrackApplet(overlay_applet, false);
+        overlay_applet->process->Run();
+        LOG_INFO(Service_AM, "am: overlay applet {:016x} started as pid {}",
+                 overlay_applet->program_id, overlay_applet->aruid.pid);
+    };
+
+    // Stock order: the opt-in overlay starts before the frontend's applet. A HOME session follows
+    // the console, where am creates the overlay right after the HOME menu applet.
+    if (!home_session && Settings::values.enable_overlay) {
+        launch_overlay();
     }
 
     const auto& params = m_pending_parameters;
@@ -297,21 +318,22 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
 
     // TODO: Read whether we need a preselected user from NACP?
     // TODO: This can be done quite easily from loader
-    {
+    // A console with no user yet (first boot of a HOME session) gets no preselected user.
+    if (const auto uuid = m_system.GetProfileManager().GetUser(
+            static_cast<std::size_t>(Settings::values.current_user.GetValue()));
+        uuid.has_value() && uuid->IsValid()) {
         LaunchParameterAccountPreselectedUser lp{};
 
         lp.magic = LaunchParameterAccountPreselectedUserMagic;
         lp.is_account_selected = 1;
-
-        Account::ProfileManager profile_manager{};
-        const auto uuid = profile_manager.GetUser(static_cast<s32>(Settings::values.current_user));
-        ASSERT(uuid.has_value() && uuid->IsValid());
         lp.current_user = *uuid;
 
         std::vector<u8> buffer(sizeof(LaunchParameterAccountPreselectedUser));
         std::memcpy(buffer.data(), &lp, buffer.size());
 
         applet->preselected_user_launch_parameter.push_back(std::move(buffer));
+    } else {
+        LOG_INFO(Service_AM, "no user on this console: no preselected user launch parameter");
     }
 
     // Starting from frontend, some applets require input data.
@@ -344,14 +366,22 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     if (applet->applet_id == AppletId::QLaunch) {
         applet->lifecycle_manager.SetFocusHandlingMode(false);
         applet->lifecycle_manager.SetOutOfFocusSuspendingEnabled(false);
-        m_window_system->TrackApplet(applet, false);
+        if (!m_window_system->TrackApplet(applet, false)) {
+            return;
+        }
         m_window_system->RequestHomeMenuToGetForeground();
     } else {
-        m_window_system->TrackApplet(applet, true);
+        if (!m_window_system->TrackApplet(applet, true)) {
+            return;
+        }
         m_window_system->RequestApplicationToGetForeground();
     }
 
     applet->process->Run();
+
+    if (home_session) {
+        launch_overlay();
+    }
 }
 
 } // namespace Service::AM

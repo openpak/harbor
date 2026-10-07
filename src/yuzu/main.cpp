@@ -14,6 +14,7 @@
 
 #ifndef _WIN32
 #include <sys/resource.h>
+#include <unistd.h>
 #endif
 
 #if defined(__APPLE__)
@@ -22,6 +23,7 @@
 #include <cstring>
 #endif
 
+#include "common/logging.h"
 #include "main_window.h"
 
 #ifdef _WIN32
@@ -161,7 +163,11 @@ int main(int argc, char* argv[]) {
 
     // Fix the Wayland appId. This needs to match the name of the .desktop file without the .desktop
     // suffix.
-    QGuiApplication::setDesktopFileName(QStringLiteral("org.openpak.harbor"));
+    // Test runs (HARBOR_CONTROL) use their own app id so a window rule keeps every window of the
+    // run, dialogs included, on a hidden workspace.
+    QGuiApplication::setDesktopFileName(qEnvironmentVariableIsEmpty("HARBOR_CONTROL")
+                                            ? QStringLiteral("org.openpak.harbor")
+                                            : QStringLiteral("org.openpak.harbor.harness"));
 #endif
 
     auto rounding_policy = GetHighDpiRoundingPolicy();
@@ -205,5 +211,14 @@ int main(int argc, char* argv[]) {
     main_window.show();
 
     app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window, &MainWindow::OnAppFocusStateChanged);
-    return app.exec();
+    const int exit_code = app.exec();
+#ifdef __unix__
+    if (!qEnvironmentVariableIsEmpty("HARBOR_CONTROL")) {
+        // Test runs: the static destructors crash after a HOME session (Service::Event teardown) and
+        // leave a core dump per run. Everything is saved by now, so leave without them.
+        Common::Log::Stop();
+        _exit(exit_code);
+    }
+#endif
+    return exit_code;
 }

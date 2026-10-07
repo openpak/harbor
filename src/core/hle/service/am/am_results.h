@@ -13,6 +13,7 @@ namespace Service::AM {
 constexpr Result ResultNoDataInChannel{ErrorModule::AM, 2};
 constexpr Result ResultNoMessages{ErrorModule::AM, 3};
 constexpr Result ResultLibraryAppletTerminated{ErrorModule::AM, 22};
+constexpr Result ResultAppletLaunchFailed{ErrorModule::AM, 35};
 constexpr Result ResultApplicationRecordNotFound{ErrorModule::AM, 37};
 constexpr Result ResultInvalidOffset{ErrorModule::AM, 503};
 constexpr Result ResultInvalidStorageType{ErrorModule::AM, 511};

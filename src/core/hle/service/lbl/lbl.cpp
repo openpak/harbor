@@ -25,8 +25,8 @@ public:
             {1, &LBL::LoadCurrentSetting, "LoadCurrentSetting"},
             {2, &LBL::SetCurrentBrightnessSetting, "SetCurrentBrightnessSetting"},
             {3, &LBL::GetCurrentBrightnessSetting, "GetCurrentBrightnessSetting"},
-            {4, nullptr, "ApplyCurrentBrightnessSettingToBacklight"},
-            {5, nullptr, "GetBrightnessSettingAppliedToBacklight"},
+            {4, &LBL::ApplyCurrentBrightnessSettingToBacklight, "ApplyCurrentBrightnessSettingToBacklight"},
+            {5, &LBL::GetBrightnessSettingAppliedToBacklight, "GetBrightnessSettingAppliedToBacklight"},
             {6, &LBL::SwitchBacklightOn, "SwitchBacklightOn"},
             {7, &LBL::SwitchBacklightOff, "SwitchBacklightOff"},
             {8, &LBL::GetBacklightSwitchStatus, "GetBacklightSwitchStatus"},
@@ -99,6 +99,29 @@ private:
         auto brightness = current_brightness;
         if (!std::isfinite(brightness)) {
             LOG_ERROR(Service_LBL, "Brightness is infinite!");
+            brightness = 0.0f;
+        }
+
+        LOG_DEBUG(Service_LBL, "called brightness={}", brightness);
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(brightness);
+    }
+
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    void ApplyCurrentBrightnessSettingToBacklight(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_LBL, "called");
+
+        applied_brightness = current_brightness;
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetBrightnessSettingAppliedToBacklight(HLERequestContext& ctx) {
+        auto brightness = applied_brightness;
+        if (!std::isfinite(brightness)) {
             brightness = 0.0f;
         }
 
@@ -337,6 +360,7 @@ private:
 
     bool vr_mode_enabled = false;
     float current_brightness = 1.0f;
+    float applied_brightness = 1.0f;
     float ambient_light_value = 0.0f;
     float current_vr_brightness = 1.0f;
     bool dimming = true;

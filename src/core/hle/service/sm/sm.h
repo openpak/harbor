@@ -9,10 +9,14 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 #include "common/container/unordered_map.h"
 #include <concepts>
 
+#include "core/file_sys/program_metadata.h"
 #include "core/hle/kernel/k_port.h"
 #include "core/hle/kernel/svc.h"
 #include "core/hle/result.h"
@@ -52,9 +56,16 @@ private:
     Result GetServiceImpl(Kernel::KClientSession** out_client_session, HLERequestContext& ctx);
     void RegisterServiceImpl(HLERequestContext& ctx, std::string name, u32 max_session_count,
                              bool is_light);
+    bool IsAccessAllowed(HLERequestContext& ctx, std::string_view name, bool is_host);
 
     ServiceManager& service_manager;
     Kernel::KernelCore& kernel;
+
+    /// Service access control of each firmware program that asked, by program id; nullopt when
+    /// its NPDM could not be read (the program is then not checked).
+    std::mutex access_lock;
+    ::Common::unordered_map<u64, std::optional<std::vector<FileSys::ProgramMetadata::ServiceAccessEntry>>>
+        access_lists;
 };
 
 class ServiceManager {
@@ -66,6 +77,7 @@ public:
                            u32 max_sessions, SessionRequestHandlerFactory handler_factory);
     Result UnregisterService(const std::string& name);
     Result GetServicePort(Kernel::KClientPort** out_client_port, const std::string& name);
+    bool HasService(const std::string& name) const;
 
     template <std::derived_from<SessionRequestHandler> T>
     std::shared_ptr<T> GetService(const std::string& name, bool block = false) const {

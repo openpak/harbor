@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <utility>
 
 #include "common/settings.h"
@@ -45,6 +46,16 @@ void WindowSystem::Update() {
         // Loop through all applets and remove terminated applets.
         this->PruneTerminatedAppletsLocked();
 
+        // Same wording as the Ryujinx Harbor's log, so the two diff side by side.
+        const u64 foreground_pid =
+            m_foreground_requested_applet ? m_foreground_requested_applet->aruid.pid : 0;
+        if (foreground_pid != m_logged_foreground_pid) {
+            LOG_INFO(Service_AM, "am: foreground pid {} -> pid {}",
+                     m_logged_foreground_pid ? fmt::format("{}", m_logged_foreground_pid) : "none",
+                     foreground_pid ? fmt::format("{}", foreground_pid) : "none");
+            m_logged_foreground_pid = foreground_pid;
+        }
+
         // If the home menu is being locked into the foreground, handle that.
         if (!this->LockHomeMenuIntoForegroundLocked()) {
             const bool overlay_takes_input = this->DoesOverlayTakeInputLocked();
@@ -58,17 +69,27 @@ void WindowSystem::Update() {
     this->NotifyApplicationChangedIfNeeded();
 }
 
-void WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_application) {
+bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_application) {
     {
         std::scoped_lock lk{m_lock};
 
         if (applet->applet_id == AppletId::QLaunch) {
-            ASSERT(m_home_menu == nullptr);
+            if (m_home_menu != nullptr) {
+                LOG_ERROR(Service_AM, "am: a home menu is already tracked (pid {}); pid {} refused",
+                          m_home_menu->aruid.pid, applet->aruid.pid);
+                return false;
+            }
             m_home_menu = applet.get();
         } else if (applet->applet_id == AppletId::OverlayDisplay) {
             m_overlay_display = applet.get();
         } else if (is_application) {
-            ASSERT(m_application == nullptr);
+            if (m_application != nullptr) {
+                LOG_WARNING(Service_AM,
+                            "am: application pid {} ({:016x}) has not completed; pid {} refused",
+                            m_application->aruid.pid, m_application->program_id,
+                            applet->aruid.pid);
+                return false;
+            }
             m_application = applet.get();
         }
 
@@ -79,6 +100,12 @@ void WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_applicati
     }
 
     this->NotifyApplicationChangedIfNeeded();
+    return true;
+}
+
+bool WindowSystem::HasApplication() {
+    std::scoped_lock lk{m_lock};
+    return m_application != nullptr;
 }
 
 void WindowSystem::UpdateCurrentApplicationLocked() {
@@ -249,6 +276,7 @@ void WindowSystem::SendButtonAppletMessageLocked(AppletMessage message) {
 }
 
 void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
+    LOG_INFO(Service_AM, "system button press, type={}", static_cast<u32>(type));
     std::scoped_lock lk{m_lock};
     switch (type) {
     case SystemButtonType::HomeButtonShortPressing:
@@ -456,7 +484,8 @@ bool WindowSystem::DoesOverlayTakeInputLocked() const {
     return this->IsOverlayOpenLocked(*m_overlay_display);
 }
 
-void WindowSystem::UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input) {
+void WindowSystem::UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input,
+                                           s32 caller_z_index) {
     // With no applet, we don't have anything to do.
     if (!applet) {
         return;
@@ -517,15 +546,24 @@ void WindowSystem::UpdateAppletStateLocked(Applet* applet, bool is_foreground, b
     // Layer ordering. Composition sorts back-to-front. Now with enums for calrity.
     s32 z_index = Background;
     if (is_overlay) {
-        z_index = this->IsOverlayOpenLocked(*applet) ? Overlay : Background;
+        // In a HOME session the overlay's pop-ups draw over everything, as on a console.
+        z_index = (this->IsOverlayOpenLocked(*applet) ||
+                   (m_system.GetAppletManager().IsHomeSession() && applet->window_visible))
+                      ? Overlay
+                      : Background;
     } else if (inherited_foreground) {
         z_index = is_obscured ? Foreground : ForegroundVisible;
+        // A visible child draws above its caller, explicitly rather than by layer creation order.
+        if (caller_z_index >= Foreground && applet->window_visible) {
+            z_index = (std::max)(z_index, caller_z_index + 1);
+        }
     }
     applet->display_layer_manager.SetOverlayZIndex(z_index);
 
     // Recurse into child applets.
     for (const auto& child_applet : applet->child_applets) {
-        this->UpdateAppletStateLocked(child_applet.get(), is_foreground, overlay_takes_input);
+        this->UpdateAppletStateLocked(child_applet.get(), is_foreground, overlay_takes_input,
+                                      z_index);
     }
 }
 

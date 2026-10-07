@@ -22,21 +22,23 @@ public:
         static const FunctionInfo functions[] = {
             {0, C<&ErrorReportContext::SubmitContext>, "SubmitContext"},
             {1, C<&ErrorReportContext::CreateReportV0>, "CreateReportV0"},
-            {2, nullptr, "SetInitialLaunchSettingsCompletionTime"},
+            {2, C<&ErrorReportContext::SetInitialLaunchSettingsCompletionTime>, "SetInitialLaunchSettingsCompletionTime"},
             {3, nullptr, "ClearInitialLaunchSettingsCompletionTime"},
             {4, nullptr, "UpdatePowerOnTime"},
-            {5, D<&ErrorReportContext::UpdateAwakeTime>, "UpdateAwakeTime"},
-            {6, nullptr, "SubmitMultipleCategoryContext"},
-            {7, nullptr, "UpdateApplicationLaunchTime"},
-            {8, nullptr, "ClearApplicationLaunchTime"},
+            {5, C<&ErrorReportContext::CreateReportWithAdditionalContext>, "CreateReportWithAdditionalContext"}, // 21.0.0+ ([3.0.0-11.0.1] UpdateAwakeTime)
+            {6, C<&ErrorReportContext::SubmitMultipleContext>, "SubmitMultipleContext"},
+            {7, C<&ErrorReportContext::RegisterRunningApplicationInfo>, "RegisterRunningApplicationInfo"},
+            {8, C<&ErrorReportContext::UnregisterRunningApplicationInfo>, "UnregisterRunningApplicationInfo"},
             {9, nullptr, "SubmitAttachment"},
-            {10, nullptr, "CreateReportWithAttachments"},
+            {10, C<&ErrorReportContext::CreateReportWithAttachments>, "CreateReportWithAttachments"},
             {11, C<&ErrorReportContext::CreateReportV1>, "CreateReportV1"},
             {12, C<&ErrorReportContext::CreateReport>, "CreateReport"},
-            {20, nullptr, "RegisterRunningApplet"},
-            {21, nullptr, "UnregisterRunningApplet"},
-            {22, nullptr, "UpdateAppletSuspendedDuration"},
-            {30, nullptr, "InvalidateForcedShutdownDetection"},
+            {14, C<&ErrorReportContext::CreateReportWithSpecifiedReportId>, "CreateReportWithSpecifiedReportId"}, // 20.0.0+
+            {20, C<&ErrorReportContext::RegisterRunningApplet>, "RegisterRunningApplet"},
+            {21, C<&ErrorReportContext::UnregisterRunningApplet>, "UnregisterRunningApplet"},
+            {22, C<&ErrorReportContext::UpdateAppletSuspendedDuration>, "UpdateAppletSuspendedDuration"},
+            {30, C<&ErrorReportContext::InvalidateForcedShutdownDetection>, "InvalidateForcedShutdownDetection"},
+            {40, C<&ErrorReportContext::WaitForReportCreation>, "WaitForReportCreation"}, // 21.0.0+
         };
         // clang-format on
 
@@ -78,11 +80,69 @@ private:
         R_SUCCEED();
     }
 
-    Result UpdateAwakeTime(InBuffer<BufferAttr_HipcMapAlias> data_a,
-                           InBuffer<BufferAttr_HipcMapAlias> data_b, u32 flag_a, u32 flag_b) {
-        LOG_WARNING(Service_SET,
-                    "(STUBBED) called, data_a_size={}, data_b_size={}, flag_a={}, flag_b={}",
-                    data_a.size(), data_b.size(), flag_a, flag_b);
+    // Error reports never leave this unit: the commands below are accepted and discarded, and no
+    // report file is written. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    Result SetInitialLaunchSettingsCompletionTime() {
+        LOG_DEBUG(Service_SET, "initial launch settings completion time recorded (discarded)");
+        R_SUCCEED();
+    }
+
+    Result SubmitMultipleContext() {
+        LOG_DEBUG(Service_SET, "multiple error report contexts submitted (discarded)");
+        R_SUCCEED();
+    }
+
+    Result RegisterRunningApplicationInfo() {
+        LOG_DEBUG(Service_SET, "running application info registered (discarded)");
+        R_SUCCEED();
+    }
+
+    Result UnregisterRunningApplicationInfo() {
+        LOG_DEBUG(Service_SET, "running application info unregistered (discarded)");
+        R_SUCCEED();
+    }
+
+    Result CreateReportWithAttachments() {
+        LOG_DEBUG(Service_SET, "error report with attachments discarded");
+        R_SUCCEED();
+    }
+
+    Result CreateReportWithSpecifiedReportId() {
+        LOG_DEBUG(Service_SET, "error report discarded");
+        R_SUCCEED();
+    }
+
+    Result RegisterRunningApplet(u32 applet_id) {
+        LOG_DEBUG(Service_SET, "running applet {} registered (discarded)", applet_id);
+        R_SUCCEED();
+    }
+
+    Result UnregisterRunningApplet(u32 applet_id) {
+        LOG_DEBUG(Service_SET, "running applet {} unregistered (discarded)", applet_id);
+        R_SUCCEED();
+    }
+
+    Result UpdateAppletSuspendedDuration() {
+        LOG_DEBUG(Service_SET, "applet suspended duration updated (discarded)");
+        R_SUCCEED();
+    }
+
+    Result InvalidateForcedShutdownDetection() {
+        LOG_DEBUG(Service_SET, "forced shutdown detection invalidated (discarded)");
+        R_SUCCEED();
+    }
+
+    Result WaitForReportCreation() {
+        // Every report above is "created" at once; there is no output.
+        LOG_DEBUG(Service_SET, "report creation waited for");
+        R_SUCCEED();
+    }
+
+    // 21.0.0+ meaning of command 5 (it was UpdateAwakeTime up to 20.5.0). The arguments are not
+    // established, so none are parsed: the report is accepted and discarded, as the Ryujinx Harbor
+    // does.
+    Result CreateReportWithAdditionalContext() {
+        LOG_DEBUG(Service_SET, "error report with additional context discarded");
         R_SUCCEED();
     }
 };

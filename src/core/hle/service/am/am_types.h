@@ -94,7 +94,11 @@ enum class AppletId : u32 {
     LoginShare = 0x18,
     WebAuth = 0x19,
     MyPage = 0x1A,
-    Lhub = 0x35
+    OfflineWebApp3 = 0x32,
+    OfflineWebSystem = 0x33,
+    Lhub = 0x35,
+    Login = 0x36,
+    Share = 0x37,
 };
 
 enum class AppletProgramId : u64 {
@@ -118,6 +122,10 @@ enum class AppletProgramId : u64 {
     WebAuth = 0x0100000000001011ull,
     Starter = 0x0100000000001012ull,
     MyPage = 0x0100000000001013ull,
+    // Firmware 22.0.0+: the web applets moved into two programs, and 0x100A, 0x100B, 0x1010 and
+    // 0x1011 became stubs that exit at once.
+    WebSystemPages = 0x0100000000001042ull, // Shop, LoginShare, Lhub, Login, Share
+    WebOpen = 0x0100000000001043ull,        // Web, WifiWebAuth
     MaxProgramId = 0x0100000000001FFFull,
 };
 
@@ -203,11 +211,13 @@ enum class ProgramSpecifyKind : u32 {
 };
 
 // Maufeat: Use enums for zindex instead of using random zindex numbers
+// A visible child applet draws one step above its caller (partial-foreground applets such as an
+// inline keyboard keep their caller on screen), so Overlay sits well above any applet chain.
 enum AppletZIndex : s32 {
     Background = 0,
     Foreground = 1,
     ForegroundVisible = 2,
-    Overlay = 3,
+    Overlay = 0x100,
 };
 
 struct CommonArguments {

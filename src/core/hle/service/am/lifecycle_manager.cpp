@@ -12,7 +12,8 @@ namespace Service::AM {
 LifecycleManager::LifecycleManager(Core::System& system, KernelHelpers::ServiceContext& context,
                                    bool is_application)
     : m_system_event(context), m_operation_mode_changed_system_event(context),
-      m_hdcp_state_changed_event(context), m_is_application(is_application) {}
+      m_hdcp_state_changed_event(context), m_is_application(is_application),
+      m_uses_focus_state_changed(is_application) {}
 
 LifecycleManager::~LifecycleManager() = default;
 
@@ -45,7 +46,7 @@ AppletMessage LifecycleManager::PopMessageInOrderOfPriority() {
     }
 
     if (m_focus_state_changed_notification_enabled) {
-        if (!m_is_application) {
+        if (!m_uses_focus_state_changed) {
             if (m_requested_focus_state != m_acknowledged_focus_state) {
                 m_acknowledged_focus_state = m_requested_focus_state;
                 switch (m_requested_focus_state) {
@@ -124,7 +125,7 @@ AppletMessage LifecycleManager::PopMessageInOrderOfPriority() {
 
 bool LifecycleManager::ShouldSignalSystemEvent() {
     if (m_focus_state_changed_notification_enabled) {
-        if (!m_is_application) {
+        if (!m_uses_focus_state_changed) {
             if (m_requested_focus_state != m_acknowledged_focus_state) {
                 return true;
             }
@@ -345,7 +346,7 @@ FocusState LifecycleManager::GetFocusStateWhileBackground(bool is_obscured) cons
 
     case FocusHandlingMode::NoSuspend:
         // The applet always learns it has lost focus.
-        return m_is_application ? FocusState::Background : FocusState::NotInFocus;
+        return m_uses_focus_state_changed ? FocusState::Background : FocusState::NotInFocus;
 
     default:
         UNREACHABLE();
@@ -387,7 +388,7 @@ bool LifecycleManager::UpdateRequestedFocusState() {
         // Mark the focus state as ready for update.
         m_requested_focus_state = new_state;
 
-        if (m_is_application) {
+        if (m_uses_focus_state_changed) {
             m_has_focus_state_changed = true;
         }
 

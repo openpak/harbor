@@ -684,7 +684,9 @@ struct Memory::Impl {
         if (!gpu_device_memory) [[unlikely]] {
             gpu_device_memory = &system.Host1x().MemoryManager();
         }
-        const size_t core = system.GetCurrentHostThreadID();
+        // Threads that are not guest cores (the debug dump, frontends) have ids past the array.
+        const size_t core =
+            (std::min)(system.GetCurrentHostThreadID(), size_t{Core::Hardware::NUM_CPU_CORES} - 1);
         auto& current_area = rasterizer_read_areas[core];
         gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
             const DAddr end_address = address + size;

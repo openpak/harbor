@@ -31,11 +31,14 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
       record_update_system_event{service_context}, sd_card_mount_status_event{service_context},
       gamecard_update_detection_event{service_context},
       gamecard_mount_status_event{service_context}, gamecard_mount_failure_event{service_context},
-      gamecard_waken_ready_event{service_context}, unknown_event{service_context} {
+      gamecard_waken_ready_event{service_context}, unknown_event{service_context},
+      gamecard_attachment_event{service_context}, sd_card_removed_event{service_context},
+      application_shell_event{service_context}, unknown518_event{service_context},
+      unknown1508_event{service_context}, async_completed_event{service_context} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListApplicationRecord"},
-        {1, nullptr, "GenerateApplicationRecordCount"},
+        {1, D<&IApplicationManagerInterface::GenerateApplicationRecordCount>, "GenerateApplicationRecordCount"},
         {2, D<&IApplicationManagerInterface::GetApplicationRecordUpdateSystemEvent>, "GetApplicationRecordUpdateSystemEvent"},
         {3, nullptr, "GetApplicationViewDeprecated"},
         {4, D<&IApplicationManagerInterface::DeleteApplicationEntity>, "DeleteApplicationEntity"},
@@ -67,11 +70,11 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {42, nullptr, "CleanupSdCard"},
         {43, D<&IApplicationManagerInterface::CheckSdCardMountStatus>, "CheckSdCardMountStatus"},
         {44, D<&IApplicationManagerInterface::GetSdCardMountStatusChangedEvent>, "GetSdCardMountStatusChangedEvent"},
-        {45, nullptr, "GetGameCardAttachmentEvent"},
+        {45, D<&IApplicationManagerInterface::GetGameCardAttachmentEvent>, "GetGameCardAttachmentEvent"},
         {46, nullptr, "GetGameCardAttachmentInfo"},
         {47, D<&IApplicationManagerInterface::GetTotalSpaceSize>, "GetTotalSpaceSize"},
         {48, D<&IApplicationManagerInterface::GetFreeSpaceSize>, "GetFreeSpaceSize"},
-        {49, nullptr, "GetSdCardRemovedEvent"},
+        {49, D<&IApplicationManagerInterface::GetSdCardRemovedEvent>, "GetSdCardRemovedEvent"},
         {52, D<&IApplicationManagerInterface::GetGameCardUpdateDetectionEvent>, "GetGameCardUpdateDetectionEvent"},
         {53, nullptr, "DisableApplicationAutoDelete"},
         {54, nullptr, "EnableApplicationAutoDelete"},
@@ -123,7 +126,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {211, nullptr, "DeleteSaveData"},
         {220, nullptr, "UnregisterNetworkServiceAccount"},
         {221, D<&IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSaveDataDeletion>, "UnregisterNetworkServiceAccountWithUserSaveDataDeletion"},
-        {300, nullptr, "GetApplicationShellEvent"},
+        {300, D<&IApplicationManagerInterface::GetApplicationShellEvent>, "GetApplicationShellEvent"},
         {301, nullptr, "PopApplicationShellEventInfo"},
         {302, nullptr, "LaunchLibraryApplet"},
         {303, nullptr, "TerminateLibraryApplet"},
@@ -176,7 +179,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {515, nullptr, "Unknown515"}, //20.0.0+
         {516, nullptr, "Unknown516"}, //21.0.0+
         {517, nullptr, "Unknown517"}, //21.0.0+
-        {518, nullptr, "Unknown518"}, //21.0.0+
+        {518, D<&IApplicationManagerInterface::Unknown518>, "Unknown518"}, //21.0.0+
         {519, nullptr, "Unknown519"}, //21.0.0+
         {600, nullptr, "CountApplicationContentMeta"},
         {601, nullptr, "ListApplicationContentMetaStatus"},
@@ -229,7 +232,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {931, nullptr, "Unknown931"}, //20.0.0+
         {933, nullptr, "Unknown933"}, //20.0.0+
         {934, nullptr, "Unknown934"}, //21.0.0+
-        {935, nullptr, "Unknown935"}, //21.0.0+
+        {935, D<&IApplicationManagerInterface::Unknown935>, "Unknown935"}, //21.0.0+
         {936, D<&IApplicationManagerInterface::Unknown936>, "Unknown936"}, //21.0.0+
         {1000, nullptr, "RequestVerifyApplicationDeprecated"},
         {1001, nullptr, "CorruptApplicationForDebug"},
@@ -259,7 +262,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {1504, nullptr, "InsertSdCard"},
         {1505, nullptr, "RemoveSdCard"},
         {1506, nullptr, "GetSdCardStartupStatus"},
-        {1508, nullptr, "Unknown1508"}, //20.0.0+
+        {1508, D<&IApplicationManagerInterface::Unknown1508>, "Unknown1508"}, //20.0.0+
         {1509, nullptr, "Unknown1509"}, //20.0.0+
         {1510, nullptr, "Unknown1510"}, //20.0.0+
         {1511, nullptr, "Unknown1511"}, //20.0.0+
@@ -344,7 +347,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {2363, nullptr, "Unknown2363"}, //20.0.0+
         {2364, nullptr, "Unknown2364"}, //20.0.0+
         {2365, nullptr, "Unknown2365"}, //20.0.0+
-        {2366, nullptr, "Unknown2366"}, //20.0.0+
+        {2366, D<&IApplicationManagerInterface::Unknown2366>, "Unknown2366"}, //20.0.0+
         {2367, nullptr, "Unknown2367"}, //20.0.0+
         {2368, nullptr, "Unknown2368"}, //20.0.0+
         {2369, nullptr, "Unknown2369"}, //21.0.0+
@@ -392,7 +395,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {4004, nullptr, "Unknown4004"}, //20.0.0+
         {4006, nullptr, "Unknown4006"}, //20.0.0+
         {4007, nullptr, "Unknown4007"}, //20.0.0+
-        {4008, nullptr, "Unknown4008"}, //20.0.0+
+        {4008, D<&IApplicationManagerInterface::Unknown4008>, "Unknown4008"}, //20.0.0+
         {4009, nullptr, "Unknown4009"}, //20.0.0+
         {4010, nullptr, "Unknown4010"}, //20.0.0+
         {4011, nullptr, "Unknown4011"}, //20.0.0+
@@ -436,7 +439,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {4055, nullptr, "Unknown4055"}, //20.0.0+
         {4056, nullptr, "Unknown4056"}, //20.0.0+
         {4057, nullptr, "Unknown4057"}, //20.0.0+
-        {4058, nullptr, "Unknown4058"}, //20.0.0+
+        {4058, D<&IApplicationManagerInterface::Unknown4058>, "Unknown4058"}, //20.0.0+
         {4059, nullptr, "Unknown4059"}, //20.0.0+
         {4060, nullptr, "Unknown4060"}, //20.0.0+
         {4061, nullptr, "Unknown4061"}, //20.0.0+
@@ -461,19 +464,19 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {4080, nullptr, "Unknown4080"}, //20.0.0+
         {4081, nullptr, "Unknown4081"}, //20.0.0+
         {4083, nullptr, "Unknown4083"}, //20.0.0+
-        {4084, nullptr, "Unknown4084"}, //20.0.0+
+        {4084, D<&IApplicationManagerInterface::Unknown4084>, "Unknown4084"}, //20.0.0+
         {4085, nullptr, "Unknown4085"}, //20.0.0+
         {4086, nullptr, "Unknown4086"}, //20.0.0+
         {4087, nullptr, "Unknown4087"}, //20.0.0+
         {4088, D<&IApplicationManagerInterface::Unknown4022>, "Unknown4088"}, //20.0.0+
-        {4089, nullptr, "Unknown4089"}, //20.0.0+
+        {4089, D<&IApplicationManagerInterface::Unknown4089>, "Unknown4089"}, //20.0.0+
         {4090, nullptr, "Unknown4090"}, //20.0.0+
         {4091, nullptr, "Unknown4091"}, //20.0.0+
         {4092, nullptr, "Unknown4092"}, //20.0.0+
         {4093, nullptr, "Unknown4093"}, //20.0.0+
         {4094, nullptr, "Unknown4094"}, //20.0.0+
         {4095, nullptr, "Unknown4095"}, //20.0.0+
-        {4096, nullptr, "Unknown4096"}, //20.0.0+
+        {4096, D<&IApplicationManagerInterface::Unknown4096>, "Unknown4096"}, //20.0.0+
         {4097, nullptr, "Unknown4097"}, //20.0.0+
         {4099, nullptr, "Unknown4099"}, //21.0.0+
         {4105, D<&IApplicationManagerInterface::Unknown4105>, "Unknown4105"}, //23.0.0+
@@ -639,9 +642,13 @@ Result IApplicationManagerInterface::IsGameCardApplicationRunning(Out<bool> out_
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown936(Out<u64> out_result) {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
-    *out_result = 0;
+Result IApplicationManagerInterface::Unknown936(Out<UnknownCountedRecord> out_record) {
+    // Unnamed; the qlaunch proxy stub is "no input -> (s32, 0x80-byte record)". Nothing to report.
+    // Shape follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
+                "0x80-byte record");
+    *out_record = {};
     R_SUCCEED();
 }
 
@@ -862,9 +869,13 @@ Result IApplicationManagerInterface::Unknown4022(
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4023(Out<u64> out_result) {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
-    *out_result = 0;
+Result IApplicationManagerInterface::Unknown4023(Out<UnknownTryPopRecord> out_record) {
+    // Pairs with the 4022 event: a try-pop answering (bool, 0x50-byte record), as the Ryujinx
+    // Harbor does. The shape is inferred from the client proxy stub, not proven.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 4023; returning false and an empty "
+                "0x50-byte record");
+    *out_record = {};
     R_SUCCEED();
 }
 
@@ -879,6 +890,119 @@ Result IApplicationManagerInterface::Unknown4042(OutInterface<IAsyncResult> out_
 
 Result IApplicationManagerInterface::Unknown4053() {
     LOG_WARNING(Service_NS, "(STUBBED) called.");
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GenerateApplicationRecordCount(Out<u64> out_count) {
+    // The same library ListApplicationRecord reports.
+    const auto& cache = system.GetContentProviderUnion();
+    const auto installed_games = cache.ListEntriesFilterOrigin(
+        std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
+
+    u64 count = 0;
+    for (const auto& [slot, game] : installed_games) {
+        if (game.title_id == 0 || game.title_id < 0x0100000000001FFFull ||
+            (game.title_id & 0xFFF) != 0) {
+            continue;
+        }
+        ++count;
+    }
+
+    LOG_DEBUG(Service_NS, "called, count={}", count);
+    *out_count = count;
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetGameCardAttachmentEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_NS, "called");
+    *out_event = gamecard_attachment_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetSdCardRemovedEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_NS, "called");
+    *out_event = sd_card_removed_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::GetApplicationShellEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_NS, "called");
+    *out_event = application_shell_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown518(OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 518; returning an event that never "
+                "signals");
+    *out_event = unknown518_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown1508(OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 1508; returning an event that "
+                "never signals");
+    *out_event = unknown1508_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown935() {
+    // Unnamed; the qlaunch proxy stub is the "no input, no output" trampoline.
+    LOG_WARNING(Service_NS, "unknown contract: IApplicationManagerInterface 935; returning success");
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown2366(OutInterface<IAsyncResult> out_interface,
+                                                 OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                 Common::UUID user_id) {
+    // ns 23.0.1 starts nim command 164 with this user and a hard-coded true flag and exposes its
+    // completion through IAsyncResult (2367 is the same with false). The operation's purpose is
+    // unknown. There is no Nintendo network-install backend to synchronize with, so it completes
+    // unchanged and never claims licences were synchronized.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 2366; Nintendo network-install "
+                "work is unavailable, completed unchanged");
+    async_completed_event.Signal(system.Kernel());
+    *out_event = async_completed_event.GetHandle();
+    *out_interface = std::make_shared<IAsyncResult>(system, &async_completed_event);
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown4008(UserIdAndValue input) {
+    // A user id and a u32 (seen as 0x300000), no buffers or output; the first-time setup calls it
+    // right after a user is created from an account.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 4008; answered as a no-op, "
+                "value={:#x}",
+                input.value);
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown4058() {
+    LOG_WARNING(Service_NS, "unknown contract: IApplicationManagerInterface 4058; returning success");
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown4084() {
+    LOG_WARNING(Service_NS, "unknown contract: IApplicationManagerInterface 4084; returning success");
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown4096() {
+    LOG_WARNING(Service_NS, "unknown contract: IApplicationManagerInterface 4096; returning success");
+    R_SUCCEED();
+}
+
+Result IApplicationManagerInterface::Unknown4089(Out<UnknownTryPopRecord> out_record) {
+    // The shape of a try-pop: (bool, 0x50-byte record). Nothing to report.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 4089; returning false and an empty "
+                "0x50-byte record");
+    *out_record = {};
     R_SUCCEED();
 }
 

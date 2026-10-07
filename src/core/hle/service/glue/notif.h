@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <vector>
 
 #include "common/uuid.h"
@@ -58,6 +59,15 @@ struct NotificationPresentationSetting {
 };
 static_assert(sizeof(NotificationPresentationSetting) == 0x10,
               "NotificationPresentationSetting is an invalid size");
+
+/// The input of INotificationServices 1500: a u32 channel, four bytes of padding, the setting.
+struct SetNotificationPresentationSettingInput {
+    u32 channel;
+    INSERT_PADDING_BYTES_NOINIT(4);
+    NotificationPresentationSetting setting;
+};
+static_assert(sizeof(SetNotificationPresentationSettingInput) == 0x18,
+              "SetNotificationPresentationSettingInput is an invalid size");
 
 class NotificationServiceImpl {
 public:
@@ -123,10 +133,13 @@ private:
     Result Initialize(ClientAppletResourceUserId aruid);
     Result OpenNotificationSystemEventAccessor(Out<SharedPointer<INotificationSystemEventAccessor>>
                                                    out_notification_system_event_accessor);
+    Result ListNotifications(Out<s32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_notifications);
+    Result SetNotificationPresentationSetting(SetNotificationPresentationSettingInput input);
     Result GetNotificationPresentationSetting(
         Out<NotificationPresentationSetting> out_notification_presentation_setting,
         NotificationChannel notification_channel);
 
     NotificationServiceImpl impl;
+    std::map<u32, NotificationPresentationSetting> presentation_settings;
 };
 } // namespace Service::Glue

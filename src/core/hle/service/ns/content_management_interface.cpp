@@ -6,6 +6,7 @@
 
 #include "common/common_funcs.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ns/content_management_interface.h"
@@ -25,7 +26,7 @@ IContentManagementInterface::IContentManagementInterface(Core::System& system_)
         {600, nullptr, "CountApplicationContentMeta"},
         {601, nullptr, "ListApplicationContentMetaStatus"},
         {605, nullptr, "ListApplicationContentMetaStatusWithRightsCheck"},
-        {607, nullptr, "IsAnyApplicationRunning"},
+        {607, D<&IContentManagementInterface::IsAnyApplicationRunning>, "IsAnyApplicationRunning"},
         {608, nullptr, "Unknown608"}, //21.0.0+
     };
     // clang-format on
@@ -71,6 +72,15 @@ Result IContentManagementInterface::GetFreeSpaceSize(Out<s64> out_free_space_siz
                                                      FileSys::StorageId storage_id) {
     LOG_INFO(Service_NS, "(STUBBED) called, storage_id={}", storage_id);
     *out_free_space_size = system.GetFileSystemController().GetFreeSpaceSize(storage_id);
+    R_SUCCEED();
+}
+
+Result IContentManagementInterface::IsAnyApplicationRunning(Out<bool> out_is_running) {
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): a title, not the HOME menu
+    // or another system program, is running.
+    const auto* const process = system.ApplicationProcess();
+    *out_is_running = process != nullptr && process->GetProgramId() >= 0x0100000000001FFFull;
+    LOG_DEBUG(Service_NS, "called, is_running={}", *out_is_running);
     R_SUCCEED();
 }
 

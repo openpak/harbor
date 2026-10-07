@@ -35,7 +35,7 @@ public:
     Result GetGameCardMountFailureEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result GetGameCardWakenReadyEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result IsGameCardApplicationRunning(Out<bool> out_is_running);
-    Result Unknown936(Out<u64> out_result);
+    Result Unknown936(Out<UnknownCountedRecord> out_record);
     Result IsAnyApplicationEntityInstalled(Out<bool> out_is_any_application_entity_installed);
     Result GetApplicationViewDeprecated(
         OutArray<ApplicationViewV19, BufferAttr_HipcMapAlias> out_application_views,
@@ -72,12 +72,30 @@ public:
                                   u64 application_id,
                                   InBuffer<BufferAttr_HipcMapAlias> logo_path_buffer);
     Result Unknown4022(OutCopyHandle<Kernel::KReadableEvent> out_event);
-    Result Unknown4023(Out<u64> out_result);
+    Result Unknown4023(Out<UnknownTryPopRecord> out_record);
     Result Unknown4042(OutInterface<IAsyncResult> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event,
                        u64 arg1, u64 arg2);
     Result Unknown4053();
     Result Unknown4105();
+
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base). The emulated unit's SD
+    // card, game card and shell state never change: these events exist for the HOME menu to wait
+    // on and never signal.
+    Result GenerateApplicationRecordCount(Out<u64> out_count);
+    Result GetGameCardAttachmentEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetSdCardRemovedEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetApplicationShellEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result Unknown518(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result Unknown1508(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result Unknown935();
+    Result Unknown2366(OutInterface<IAsyncResult> out_interface,
+                       OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id);
+    Result Unknown4008(UserIdAndValue input);
+    Result Unknown4058();
+    Result Unknown4084();
+    Result Unknown4096();
+    Result Unknown4089(Out<UnknownTryPopRecord> out_record);
 
     Result RequestDownloadApplicationControlDataInBackground(u64 control_source,
                                                              u64 application_id);
@@ -95,6 +113,12 @@ private:
     Event gamecard_mount_failure_event;
     Event gamecard_waken_ready_event;
     Event unknown_event;
+    Event gamecard_attachment_event;
+    Event sd_card_removed_event;
+    Event application_shell_event;
+    Event unknown518_event;
+    Event unknown1508_event;
+    Event async_completed_event;
 };
 
 } // namespace Service::NS

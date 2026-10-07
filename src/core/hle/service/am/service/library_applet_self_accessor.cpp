@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/core.h"
 #include "core/core_timing.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
@@ -292,7 +293,7 @@ Result ILibraryAppletSelfAccessor::GetCurrentApplicationId(Out<u64> out_applicat
 Result ILibraryAppletSelfAccessor::GetMainAppletAvailableUsers(
     Out<bool> out_can_select_any_user, Out<s32> out_users_count,
     OutArray<Common::UUID, BufferAttr_HipcMapAlias> out_users) {
-    const Service::Account::ProfileManager manager{};
+    const auto& manager = system.GetProfileManager();
 
     *out_can_select_any_user = false;
     *out_users_count = -1;
