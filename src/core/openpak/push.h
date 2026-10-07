@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace OpenPak::Push {
 
@@ -62,6 +63,11 @@ private:
 /// session's heartbeat calls it, so a host never has to.
 void Start();
 
+/// Test runs: with OPENPAK_SIMULATE_PUSH_DIR set, read <name>.json files from that directory and
+/// hand each to the delivery handler as a message named <name>, with no connection and no
+/// sign-in. Start() does this too; a consumer may call it on its own. Idempotent.
+void StartSimulated();
+
 /// End the connection and the thread. The session calls it on the way out.
 void Stop();
 
@@ -76,14 +82,16 @@ void ForgetProfile(const std::string& uid);
 
 /// Called for every delivered message before the caches it concerns are queued for a refresh,
 /// with the event kind (the body's "type", else the message name) and the raw body, on the push
-/// thread with no lock held. Each consumer installs its own hook under its own name ("friends",
-/// "pctl"); setting a name again replaces that consumer's hook, an empty hook removes it. The
-/// kinds the guest cares about: friend_invitation_received, presence_updated and
-/// friend_request_received (the friends overlay notifier), DID_CHANGE_PARENTAL_CONTROL_SETTING
-/// and DID_UNLINK_NX (pctl). A consumer that signals a guest event posts it to its own session's
-/// AsyncWorker; it never signals from this thread. Must not throw.
+/// thread with no lock held. The kinds the guest cares about: friend_invitation_received,
+/// presence_updated and friend_request_received (the friends overlay notifier),
+/// DID_CHANGE_PARENTAL_CONTROL_SETTING and DID_UNLINK_NX (pctl). A consumer that signals a guest
+/// event posts it to its own session's AsyncWorker; it never signals from this thread. Must not
+/// throw.
 using Hook = std::function<void(const std::string& kind, const std::string& body)>;
-void SetHook(std::string name, Hook hook);
+void SetHook(Hook hook);
+/// The same, one hook per consumer ("pctl", "friends"...): setting one again replaces it, an empty
+/// hook removes it, and every consumer's hook sees every delivery.
+void SetHook(std::string_view consumer, Hook hook);
 
 /// The active user's Penne registration id (pctl's notificationToken), or empty when it has none
 /// yet.

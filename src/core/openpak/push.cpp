@@ -142,6 +142,7 @@ struct State {
     std::thread thread;
     /// OPENPAK_SIMULATE_PUSH_DIR's reader, for test runs that hold no connection.
     std::thread simulated;
+    std::atomic<bool> simulating{false};
     std::atomic<bool> running{false};
     std::atomic<bool> connected{false};
 
@@ -162,12 +163,14 @@ struct State {
     /// costs one fetch, never one each.
     std::map<std::string, bool> queued;
 
-    /// The consumer of every delivery, and the registration id it may ask for. Guarded by mutex.
-    std::map<std::string, Hook> hooks;
+    /// The consumers of every delivery, by name, and the registration id they may ask for.
+    /// Guarded by mutex.
+    std::map<std::string, Hook, std::less<>> hooks;
     std::string penne_id;
 
     ~State() {
         running = false;
+        simulating = false;
         wake.notify_all();
         {
             std::lock_guard lock{mutex};
@@ -281,19 +284,21 @@ void Refresh(const std::string& kind, std::function<void()> work) {
     });
 }
 
-/// The consumer's hook, outside every lock; one that throws is logged and the stream goes on.
+/// The consumers' hooks, outside every lock; one that throws is logged and the stream goes on.
 void RaiseHook(const std::string& kind, const std::string& body) {
-    std::map<std::string, Hook> hooks;
+    std::vector<Hook> hooks;
     {
         State& state = Get();
         std::lock_guard lock{state.mutex};
-        hooks = state.hooks;
+        for (const auto& [name, hook] : state.hooks) {
+            hooks.push_back(hook);
+        }
     }
-    for (const auto& [name, hook] : hooks) {
+    for (const auto& hook : hooks) {
         try {
             hook(kind, body);
         } catch (const std::exception& e) {
-            LOG_WARNING(WebService, "[OpenPak] Push hook {} failed: {}", name, e.what());
+            LOG_WARNING(WebService, "[OpenPak] Push hook failed: {}", e.what());
         }
     }
 }
@@ -480,9 +485,13 @@ std::string Kind(const Message& message) {
 /// OPENPAK_SIMULATE_PUSH_DIR set, every *.json put in that directory is read, deleted and handed
 /// to the handler a frontline message reaches (the file name is the message name, the content
 /// its body), as the Ryujinx Harbor's simulated pushes are.
-static void StartSimulated(State& state) {
+void StartSimulated() {
     const char* dir = std::getenv("OPENPAK_SIMULATE_PUSH_DIR");
     if (dir == nullptr || *dir == '\0') {
+        return;
+    }
+    State& state = Get();
+    if (state.simulating.exchange(true)) {
         return;
     }
     const std::filesystem::path directory{dir};
@@ -492,7 +501,7 @@ static void StartSimulated(State& state) {
                             "from files (test only)");
 
     state.simulated = std::thread([&state, directory] {
-        while (state.running.load()) {
+        while (state.simulating.load()) {
             std::vector<std::filesystem::path> files;
             std::error_code list_error;
             for (const auto& entry : std::filesystem::directory_iterator(directory, list_error)) {
@@ -515,7 +524,7 @@ static void StartSimulated(State& state) {
             }
             std::unique_lock lock{state.mutex};
             state.wake.wait_for(lock, std::chrono::milliseconds{500},
-                                [&state] { return !state.running.load(); });
+                                [&state] { return !state.simulating.load(); });
         }
     });
 }
@@ -530,7 +539,7 @@ void Start() {
         return;
     }
 
-    StartSimulated(state);
+    StartSimulated();
 
     state.thread = std::thread([&state] {
         using namespace std::chrono_literals;
@@ -574,6 +583,12 @@ void Start() {
 
 void Stop() {
     State& state = Get();
+    if (state.simulating.exchange(false)) {
+        state.wake.notify_all();
+        if (state.simulated.joinable()) {
+            state.simulated.join();
+        }
+    }
     if (!state.running.exchange(false)) {
         return;
     }
@@ -586,9 +601,6 @@ void Stop() {
     }
     if (state.thread.joinable()) {
         state.thread.join();
-    }
-    if (state.simulated.joinable()) {
-        state.simulated.join();
     }
 }
 
@@ -612,13 +624,17 @@ void ForgetProfile(const std::string& uid) {
     }
 }
 
-void SetHook(std::string name, Hook hook) {
+void SetHook(Hook hook) {
+    SetHook({}, std::move(hook));
+}
+
+void SetHook(std::string_view consumer, Hook hook) {
     State& state = Get();
     std::lock_guard lock{state.mutex};
     if (hook) {
-        state.hooks[std::move(name)] = std::move(hook);
-    } else {
-        state.hooks.erase(name);
+        state.hooks.insert_or_assign(std::string{consumer}, std::move(hook));
+    } else if (const auto it = state.hooks.find(consumer); it != state.hooks.end()) {
+        state.hooks.erase(it);
     }
 }
 
