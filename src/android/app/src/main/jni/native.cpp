@@ -1968,12 +1968,8 @@ JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_getAllUsers
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
 
+    // Harbor: no default user is made here; the firmware's first-time setup creates the first one.
     manager.ResetUserSaveFile();
-
-    if (manager.GetUserCount() == 0) {
-        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eden");
-        manager.WriteUserSaveFile();
-    }
 
     const auto& users = manager.GetAllUsers();
 
@@ -2184,13 +2180,9 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_reloadProfiles(
         JNIEnv* env,
         [[maybe_unused]] jobject obj) {
     auto& manager = EmulationSession::GetInstance().System().GetProfileManager();
+    // Harbor: read only. No default user is made or written here: a console with no user runs the
+    // firmware's first-time setup, which creates the first one in the HOME session.
     manager.ResetUserSaveFile();
-
-    // create a default user if non exist
-    if (manager.GetUserCount() == 0) {
-        manager.CreateNewUser(Common::UUID::MakeRandom(), "Eden");
-        manager.WriteUserSaveFile();
-    }
 
     LOG_INFO(Service_ACC, "Profile manager reloaded, user count: {}", manager.GetUserCount());
 }

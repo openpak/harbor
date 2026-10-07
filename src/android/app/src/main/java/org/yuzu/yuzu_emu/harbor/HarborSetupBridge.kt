@@ -199,8 +199,16 @@ object HarborSetupBridge {
         }
         StringSetting.DRIVER_PATH.setString(path)
         NativeConfig.saveGlobalConfig()
-        Log.info("[Harbor] graphics driver: ${if (id.isEmpty()) "the phone's" else id}")
-        return true
+        // Unpacked now, so the console's process (a fresh one) loads it from its first start.
+        val installed = if (path.isEmpty()) {
+            GpuDriverHelper.installDefaultDriver()
+            true
+        } else {
+            GpuDriverHelper.installCustomDriver(File(path))
+        }
+        Log.info("[Harbor] graphics driver: ${if (id.isEmpty()) "the phone's" else id}" +
+            if (installed) "" else " (could not be unpacked)")
+        return installed
     }
 
     /** "Start Harbor" was pressed and the record saved: the console starts once the wizard returns. */
