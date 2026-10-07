@@ -128,7 +128,10 @@ void TestResume() {
     record.dlc_dirs = std::vector<std::string>{};
     record.update_dirs = std::vector<std::string>{};
     Check(Wizard::FirstIncomplete(keys, record, true) == Step::Driver, "resume: driver null -> Driver (shown)");
-    Check(Wizard::FirstIncomplete(keys, record, false) == Step::Ready, "resume: driver page hidden -> Ready");
+    Check(Wizard::FirstIncomplete(keys, record, false) == Step::Account,
+          "resume: driver page hidden, account page not passed -> OpenPak account");
+    record.openpak_account = "later";
+    Check(Wizard::FirstIncomplete(keys, record, false) == Step::Ready, "resume: account passed -> Ready");
 }
 
 void TestDeviceCheck() {
@@ -252,12 +255,34 @@ void TestFlow(const std::filesystem::path& dir) {
     wizard.Next();
     Check(LoadRecord(path).dlc_dirs == std::optional{std::vector<std::string>{}}, "flow: skipped DLC is []");
     wizard.Next();
-    Check(wizard.step() == Step::Ready, "flow: no driver page on desktop");
+    Check(wizard.step() == Step::Account, "flow: no driver page on desktop; the OpenPak account page");
+    Check(!wizard.CanGoNext() && wizard.NextLabel() == "Sign in", "flow: Sign in needs an email and a password");
+    wizard.SetAccountField(AccountField::Email, " someone@example.org ");
+    wizard.SetAccountField(AccountField::Password, "short");
+    Check(wizard.CanGoNext() && wizard.AccountValue(AccountField::Email) == "someone@example.org",
+          "flow: account fields are kept, trimmed");
+    wizard.Next();
+    Check(wizard.step() == Step::Account && wizard.StatusTone() == Tone::Bad,
+          "flow: a short password is refused before anything is sent");
+    wizard.SetAccountMode(AccountMode::Create);
+    Check(!wizard.CanGoNext() && wizard.NextLabel() == "Create account", "flow: Create needs every field");
+    wizard.SetAccountField(AccountField::Password, "long enough password");
+    wizard.SetAccountField(AccountField::Nickname, "Tester");
+    wizard.SetAccountField(AccountField::Birthday, "1990-02-30");
+    wizard.SetAccountField(AccountField::Country, "gb");
+    wizard.Next();
+    Check(wizard.step() == Step::Account && wizard.StatusTone() == Tone::Bad,
+          "flow: an impossible birthday is refused before anything is sent");
+    Check(wizard.AccountValue(AccountField::Country) == "GB", "flow: the country is upper case");
+    Check(wizard.CanSkip() && wizard.SkipLabel() == "Later", "flow: the account page says Later");
+    wizard.Skip();
+    Check(wizard.step() == Step::Ready && LoadRecord(path).openpak_account == std::optional<std::string>{"later"},
+          "flow: Later records later and goes on");
     Check(!LoadRecord(path).completed, "flow: not completed before Start Harbor");
     Check(wizard.NextLabel() == "Start Harbor", "flow: Ready says Start Harbor");
     wizard.Next();
     Check(finished && LoadRecord(path).completed, "flow: Start Harbor records completed and finishes");
-    Check(notes == 5, "flow: one cue per page shown");
+    Check(notes == 6, "flow: one cue per page shown");
 }
 
 void TestChime() {

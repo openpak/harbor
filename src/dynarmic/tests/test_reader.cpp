@@ -247,10 +247,8 @@ void RunTestInstance(A64::Jit& jit,
     }
     fmt::print("\n");
 
+    // A64TestEnv records no interrupts
     fmt::print("interrupts:\n");
-    for (const auto& i : jit_env.interrupts) {
-        std::puts(i.c_str());
-    }
 
     fmt::print("===\n");
 }
