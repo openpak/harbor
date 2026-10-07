@@ -276,6 +276,7 @@ void WindowSystem::SendButtonAppletMessageLocked(AppletMessage message) {
 }
 
 void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
+    LOG_INFO(Service_AM, "system button press, type={}", static_cast<u32>(type));
     std::scoped_lock lk{m_lock};
     switch (type) {
     case SystemButtonType::HomeButtonShortPressing:

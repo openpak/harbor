@@ -791,12 +791,16 @@ void GRenderWindow::ReleaseRenderTarget() {
     main_context.reset();
 }
 
-void GRenderWindow::CaptureScreenshot(const QString& screenshot_path) {
+void GRenderWindow::CaptureScreenshot(const QString& screenshot_path,
+                                      std::function<void(bool)> done) {
     auto& renderer = QtCommon::system->Renderer();
 
     if (renderer.IsScreenshotPending()) {
         LOG_WARNING(Render,
                     "A screenshot is already requested or in progress, ignoring the request");
+        if (done) {
+            done(false);
+        }
         return;
     }
 
@@ -824,8 +828,14 @@ void GRenderWindow::CaptureScreenshot(const QString& screenshot_path) {
             if (screenshot_image.mirrored(false, invert_y).save(screenshot_path)) {
 #endif
                 LOG_INFO(Frontend, "Screenshot saved to \"{}\"", std_screenshot_path);
+                if (done) {
+                    done(true);
+                }
             } else {
                 LOG_ERROR(Frontend, "Failed to save screenshot to \"{}\"", std_screenshot_path);
+                if (done) {
+                    done(false);
+                }
             }
         },
         layout);

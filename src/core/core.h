@@ -397,6 +397,9 @@ public:
     /// Register a host thread as an auxiliary thread.
     void RegisterHostThread();
 
+    /// Logs every guest process and thread (state, registers, backtrace) at Info level.
+    void LogGuestThreads();
+
     /// Tells if system is running on multicore.
     [[nodiscard]] bool IsMulticore() const;
 

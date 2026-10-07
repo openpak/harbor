@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -116,7 +117,8 @@ public:
 
     bool IsLoadingComplete() const;
 
-    void CaptureScreenshot(const QString& screenshot_path);
+    /// `done` (optional) is called with whether the PNG was written.
+    void CaptureScreenshot(const QString& screenshot_path, std::function<void(bool)> done = {});
 
     /**
      * Instructs the window to re-launch the application using the specified program_index.

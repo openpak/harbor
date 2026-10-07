@@ -37,6 +37,8 @@ add_library(core STATIC
     crypto/partition_data_manager.h
     crypto/xts_encryption_layer.cpp
     crypto/xts_encryption_layer.h
+    debug/thread_dump.cpp
+    debug/thread_dump.h
     debugger/debugger.cpp
     debugger/debugger.h
     debugger/debugger_interface.h
