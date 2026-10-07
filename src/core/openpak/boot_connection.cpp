@@ -65,20 +65,6 @@ std::string Normalise(std::string website) {
     return text;
 }
 
-std::string HostOf(const std::string& website) {
-    std::string host = website;
-    if (const auto scheme = host.find("://"); scheme != std::string::npos) {
-        host = host.substr(scheme + 3);
-    }
-    if (const auto slash = host.find('/'); slash != std::string::npos) {
-        host = host.substr(0, slash);
-    }
-    if (const auto colon = host.rfind(':'); colon != std::string::npos && host.back() != ']') {
-        host = host.substr(0, colon);
-    }
-    return host;
-}
-
 struct Saved {
     std::string website;
     std::string console_server;
@@ -113,8 +99,9 @@ bool WriteServerJson(const std::string& website, const std::string& console_serv
     return Platform::WriteAtomically(Platform::ServerJsonPath(), doc.dump(2));
 }
 
-/// The console server, as OpenPakConfig.ResolvedConsoleServer resolves it with the profile's
-/// address winning. Called with the boot mutex held.
+/// The console server: the profile's address wins, then server.json's. Never the website's host:
+/// the site may sit behind a CDN, and the guest's resolver answers with literal addresses only.
+/// Called with the boot mutex held.
 std::string ConsoleServerLocked(const Boot& boot, const NetworkProfile::Profile& profile) {
     if (std::string env = Env("OPENPAK_SERVER"); !env.empty()) {
         return env;
@@ -122,10 +109,7 @@ std::string ConsoleServerLocked(const Boot& boot, const NetworkProfile::Profile&
     if (!profile.server_address.empty()) {
         return profile.server_address;
     }
-    if (!boot.saved_console_server.empty()) {
-        return boot.saved_console_server;
-    }
-    return boot.website.empty() ? std::string{} : HostOf(boot.website);
+    return boot.saved_console_server;
 }
 
 } // namespace
@@ -245,7 +229,9 @@ bool Enabled() {
 }
 
 std::string ConsoleServer() {
-    return BootConnection::Last().console_server;
+    // Off, nothing is redirected: every ceiling family fails closed instead.
+    const BootResult last = BootConnection::Last();
+    return last.enabled ? last.console_server : std::string{};
 }
 
 NetworkProfile::GuestName ResolveGuestName(std::string_view host) {

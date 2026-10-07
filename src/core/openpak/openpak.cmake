@@ -31,9 +31,9 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/push.cpp
     openpak/push.h
     openpak/secret_store.cpp
-    openpak/secret_store.h
     openpak/service_hooks.cpp
     openpak/service_hooks.h
+    openpak/secret_store.h
     openpak/session.cpp
     openpak/session.h
     openpak/session_detail.h
@@ -44,3 +44,14 @@ target_sources(core PRIVATE
     openpak/async_worker.cpp
     openpak/async_worker.h
 )
+
+# harbor-openpak-check: the self-check (ceiling signatures, redirect precedence, fail-closed
+# families, the CA pin) and a boot connection against a data directory. Off by default.
+option(HARBOR_OPENPAK_CHECK "Build harbor-openpak-check" OFF)
+if (HARBOR_OPENPAK_CHECK)
+    list(TRANSFORM HARBOR_OPENPAK_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
+    add_executable(harbor-openpak-check openpak/check/openpak_check.cpp ${HARBOR_OPENPAK_SOURCES})
+    target_include_directories(harbor-openpak-check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(harbor-openpak-check PRIVATE common fmt::fmt nlohmann_json::nlohmann_json
+                          httplib::httplib OpenSSL::SSL OpenSSL::Crypto)
+endif()
