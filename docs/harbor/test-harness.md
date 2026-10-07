@@ -43,6 +43,10 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `home-long` | Home for 1200 ms (long press, above the poller's 800 ms) |
 | `capture` | Capture button, short press |
 | `power` | not supported: this build has no power button path; logs a warning |
+| `type <text>` | types the text on the emulated USB keyboard (US layout); logged |
+| `type-line <file> <n>` | types line `n` (1-based) of `file`, only the value when the line is `key=value`; for secrets: logged only as `harbor-control: type-line (N chars)`, never echoed |
+| `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
+| `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
 | `threads` | guest thread dump to the log |
 | `quit` | closes the main window (clean shutdown, about 10 s) |
@@ -54,6 +58,13 @@ Input goes through InputCommon's virtual gamepad (the path the Android overlay u
 emulated controller already maps. It is sent to Player 1 and Handheld together, so Home and Capture
 reach `am/button_poller.cpp`, which logs `system button press, type=N` (1 = home short, 2 = home
 long, 6 = capture short, 7 = capture long) in `WindowSystem::OnSystemButtonPress`.
+
+Typing goes to the emulated USB keyboard (hid keyboard, `keyboard_enabled` is switched on for it),
+which the firmware's own software keyboard reads as a console reads a USB keyboard. hid writes the
+keyboard into the shared memory of the most recently created applet resource, which is the swkbd
+applet while it is open. While Eden's Qt keyboard dialog is showing (swkbd HLE, outside a HOME
+session) the keys go to that dialog instead. Only printable ASCII is typed; a line with any other
+character types nothing.
 
 ## Thread dump and svcBreak
 
