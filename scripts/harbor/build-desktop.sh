@@ -9,7 +9,7 @@ set -euo pipefail
 refuse_while_emulator_runs
 
 BUILD="$BUILD_ROOT/desktop"
-JOBS="${NUM_JOBS:-8}"
+JOBS="${NUM_JOBS:-6}"
 
 cd "$SRC"
 locked cmake -S . -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \

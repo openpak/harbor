@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "common/redact.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/kernel_helpers.h"
@@ -192,22 +193,23 @@ private:
 class INpnsUser final : public ServiceFramework<INpnsUser> {
 public:
     explicit INpnsUser(Core::System& system_)
-        : ServiceFramework{system_, "npns:u"}, service_context{system, "npns:u"}, get_receive_event{service_context} {
+        : ServiceFramework{system_, "npns:u"}, service_context{system, "npns:u"}, get_receive_event{service_context},
+          get_state_change_event{service_context} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {1, nullptr, "ListenAll"},
-            {2, nullptr, "ListenTo"},
+            {1, C<&INpnsUser::ListenAll>, "ListenAll"},
+            {2, C<&INpnsUser::ListenTo>, "ListenTo"},
             {3, nullptr, "Receive"},
             {4, nullptr, "ReceiveRaw"},
             {5, C<&INpnsUser::GetReceiveEvent>, "GetReceiveEvent"},
-            {7, nullptr, "GetStateChangeEvent"},
+            {7, C<&INpnsUser::GetStateChangeEvent>, "GetStateChangeEvent"},
             {8, C<&INpnsUser::ListenToByName>, "ListenToByName"}, // 18.0.0+
             {21, C<&INpnsUser::CreateToken>, "CreateToken"},
-            {23, nullptr, "DestroyToken"},
-            {25, nullptr, "QueryIsTokenValid"},
-            {26, nullptr, "ListenToMyApplicationId"},
-            {101, nullptr, "Suspend"},
-            {102, nullptr, "Resume"},
+            {23, C<&INpnsUser::DestroyToken>, "DestroyToken"},
+            {25, C<&INpnsUser::QueryIsTokenValid>, "QueryIsTokenValid"},
+            {26, C<&INpnsUser::ListenToMyApplicationId>, "ListenToMyApplicationId"},
+            {101, C<&INpnsUser::Suspend>, "Suspend"},
+            {102, C<&INpnsUser::Resume>, "Resume"},
             {103, C<&INpnsUser::GetState>, "GetState"},
             {104, nullptr, "GetStatistics"},
             {111, nullptr, "GetJid"},
@@ -223,6 +225,55 @@ public:
     }
 
 private:
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): the subscribe calls succeed
+    // and only record the intent; the receive and state-change events exist but never signal (no
+    // push backend), so a title waiting on them falls back to polling its own servers.
+    Result ListenAll() {
+        LOG_DEBUG(Service_NPNS, "called, user listener registered for all programs");
+        R_SUCCEED();
+    }
+
+    Result ListenTo(u64 program_id) {
+        LOG_DEBUG(Service_NPNS, "called, program_id={:016X}", program_id);
+        R_SUCCEED();
+    }
+
+    Result GetStateChangeEvent(OutCopyHandle<Kernel::KReadableEvent> out_event) {
+        LOG_DEBUG(Service_NPNS, "called");
+
+        *out_event = get_state_change_event.GetHandle();
+        R_SUCCEED();
+    }
+
+    Result DestroyToken(u64 unknown, ClientProcessId pid) {
+        LOG_UNKNOWN_CONTRACT(Service_NPNS, "npns:u 23 DestroyToken(u64 {:#x}, pid {}): nothing stored, success",
+                             unknown, pid.pid);
+        R_SUCCEED();
+    }
+
+    Result QueryIsTokenValid(Out<bool> out_is_valid) {
+        LOG_UNKNOWN_CONTRACT(Service_NPNS, "npns:u 25 QueryIsTokenValid: input not established, answered true");
+        // The only tokens in circulation are the ones handed out here.
+        *out_is_valid = true;
+        R_SUCCEED();
+    }
+
+    Result ListenToMyApplicationId(u64 unknown, ClientProcessId pid) {
+        LOG_UNKNOWN_CONTRACT(Service_NPNS, "npns:u 26 ListenToMyApplicationId(u64 {:#x}, pid {}): recorded only",
+                             unknown, pid.pid);
+        R_SUCCEED();
+    }
+
+    Result Suspend() {
+        LOG_DEBUG(Service_NPNS, "called");
+        R_SUCCEED();
+    }
+
+    Result Resume() {
+        LOG_DEBUG(Service_NPNS, "called");
+        R_SUCCEED();
+    }
+
     Result ListenToByName(InBuffer<BufferAttr_HipcAutoSelect> name_buffer) {
         const std::string name(reinterpret_cast<const char*>(name_buffer.data()),
                                strnlen(reinterpret_cast<const char*>(name_buffer.data()),
@@ -254,6 +305,7 @@ private:
 
     KernelHelpers::ServiceContext service_context;
     Event get_receive_event;
+    Event get_state_change_event;
 };
 
 void LoopProcess(Core::System& system) {

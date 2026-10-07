@@ -44,6 +44,9 @@ void NVDRV::Open(HLERequestContext& ctx) {
     }
 
     DeviceFD fd = nvdrv->Open(device_name, session_id);
+    if (fd != INVALID_NVDRV_FD) {
+        open_fds.push_back(fd);
+    }
 
     rb.Push<DeviceFD>(fd);
     rb.PushEnum(fd != INVALID_NVDRV_FD ? NvResult::Success : NvResult::FileOperationFailed);
@@ -148,6 +151,7 @@ void NVDRV::Close(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto fd = rp.Pop<DeviceFD>();
     const auto result = nvdrv->Close(fd);
+    std::erase(open_fds, fd);
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
@@ -266,6 +270,13 @@ NVDRV::NVDRV(Core::System& system_, std::shared_ptr<Module> nvdrv_, const char* 
 }
 
 NVDRV::~NVDRV() {
+    if (is_initialized) {
+        LOG_INFO(Service_NVDRV, "{} client closed: nvcore session {}, {} device files left open",
+                 GetServiceName(), session_id.id, open_fds.size());
+    }
+    for (const DeviceFD fd : open_fds) {
+        nvdrv->Close(fd);
+    }
     if (is_initialized) {
         auto& container = nvdrv->GetContainer();
         container.CloseSession(session_id);
