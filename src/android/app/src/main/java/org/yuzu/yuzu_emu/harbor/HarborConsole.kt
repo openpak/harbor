@@ -338,6 +338,12 @@ object HarborConsole {
                     HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
                 }
             )
+            if (!HarborKeyService.enabled(activity)) {
+                add(R.string.harbor_menu_controller_home to {
+                    Toast.makeText(activity, R.string.harbor_key_service_hint, Toast.LENGTH_LONG).show()
+                    activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                })
+            }
             add(R.string.harbor_menu_restart to { activity.harborStop { restartConsole(activity) } })
             add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
             add(

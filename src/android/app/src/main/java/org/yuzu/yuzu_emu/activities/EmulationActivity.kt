@@ -249,6 +249,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
     override fun onResume() {
         super.onResume()
+        foreground = this
         nfcReader.startScanning()
         startMotionSensorListener()
         InputHandler.updateControllerData()
@@ -258,6 +259,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onPause() {
+        if (foreground === this) foreground = null
         // Nothing stays held in the guest while Harbor is in the background.
         InputHandler.releaseAll()
         nfcReader.stopScanning()
@@ -480,9 +482,16 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             KeyEvent.KEYCODE_MENU -> KeyEvent.KEYCODE_BUTTON_START
             // Android keeps HOME for itself; a pad that still delivers it means its HOME button.
             KeyEvent.KEYCODE_HOME -> KeyEvent.KEYCODE_BUTTON_MODE
-            // The ROG Kunai's two extra keys both capture (mapped as BUTTON_9, AddSystemButtons).
-            KeyEvent.KEYCODE_BUTTON_10 ->
-                if (event.device?.vendorId == ASUS_VID) KeyEvent.KEYCODE_BUTTON_9 else return event
+            // A pad with its own HOME key (the ROG Kunai): its Mode key is Capture (BUTTON_9,
+            // AddSystemButtons). ASUS phones only pass Mode on through HarborKeyService.
+            KeyEvent.KEYCODE_BUTTON_MODE ->
+                if (event.device?.vendorId == ASUS_VID &&
+                    event.device?.hasKeys(KeyEvent.KEYCODE_HOME)?.first() == true
+                ) {
+                    KeyEvent.KEYCODE_BUTTON_9
+                } else {
+                    return event
+                }
             else -> return event
         }
         return KeyEvent(
@@ -1026,6 +1035,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         // How long a Plus or Minus press waits for its partner (the Harbor menu chord).
         private const val HARBOR_CHORD_WINDOW_MS = 150L
         private const val ASUS_VID = 0x0b05
+
+        /** The emulation screen while it is resumed (HarborKeyService hands it controller keys). */
+        @Volatile
+        var foreground: EmulationActivity? = null
         @Volatile
         private var processHasEmulationSession = false
         @Volatile

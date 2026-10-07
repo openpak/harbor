@@ -24,5 +24,9 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_close">Close</string>
     <string name="harbor_driver_failed_title">Graphics driver not loaded</string>
     <string name="harbor_driver_failed_hint">The console did not start. Choose the driver again in the setup.</string>
+    <string name="harbor_menu_controller_home">Controller HOME key</string>
+    <string name="harbor_key_service_label">Harbor controller HOME key</string>
+    <string name="harbor_key_service_description">Sends a controller\'s HOME key to the console while Harbor is on screen, instead of leaving Harbor. Harbor reads no other keys and nothing on screen.</string>
+    <string name="harbor_key_service_hint">Turn on \"Harbor controller HOME key\" here, then go back to Harbor.</string>
     <string name="harbor_connecting">Connecting to OpenPak…</string>
 </resources>
