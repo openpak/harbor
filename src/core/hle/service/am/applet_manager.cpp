@@ -238,6 +238,7 @@ void AppletManager::CreateAndInsertByFrontendAppletParameters(
         m_pending_process = std::move(process);
         m_pending_parameters = params;
         m_home_session = IsHomeSessionRoot(params);
+        m_power_request = PowerRequest::None;
     }
     m_cv.notify_all();
 }
@@ -246,6 +247,20 @@ void AppletManager::RequestExit() {
     std::scoped_lock lk{m_lock};
     if (m_window_system) {
         m_window_system->OnExitRequested();
+    }
+}
+
+void AppletManager::RequestPower(PowerRequest request) {
+    m_power_request = request;
+    LOG_INFO(Service_AM, "HOME menu requested {}; stopping the emulated system",
+             request == PowerRequest::Reboot ? "reboot" : "shutdown");
+    m_system.Exit();
+}
+
+void AppletManager::ReleaseForegroundHold(const Applet& child) {
+    std::scoped_lock lk{m_lock};
+    if (m_window_system) {
+        m_window_system->ReleaseForegroundHold(child);
     }
 }
 

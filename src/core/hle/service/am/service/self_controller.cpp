@@ -415,17 +415,18 @@ Result ISelfController::SetRecordVolumeMuted(bool muted) {
     R_SUCCEED();
 }
 
-Result ISelfController::Unknown230(u32 in_val, Out<u16> out_val) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, in_val={}", in_val);
-
-    *out_val = 0;
-
+Result ISelfController::Unknown230(u32 a, u32 b) {
+    // qlaunch 22.5.0 sends (2, 2) when it opens a bottom-row destination; the firmware answers
+    // with no output (Ryujinx Harbor's reading).
+    LOG_WARNING(Service_AM, "unknown contract: ISelfController 230 ({}, {}); returning success", a,
+                b);
     R_SUCCEED();
 }
 
-Result ISelfController::Unknown240(u32 in_val) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, in_val={}", in_val);
-
+Result ISelfController::Unknown240(s32 value) {
+    // am 23.0.1 checks the signed input's upper bound (3) and only logs it; NetConnect sends 0.
+    LOG_INFO(Service_AM, "ISelfController 240 diagnostic value {}", value);
+    R_UNLESS(value <= 3, ResultInvalidParameters);
     R_SUCCEED();
 }
 

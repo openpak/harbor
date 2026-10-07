@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <memory>
+#include <mutex>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/os/event.h"
@@ -10,9 +13,20 @@
 
 namespace Service::AM {
 
+// One lock (the HOME button lock, or another button's): readers and writers share it.
+struct LockState {
+    explicit LockState(Core::System& system);
+
+    KernelHelpers::ServiceContext context;
+    Event event;
+    std::mutex mutex{};
+    bool is_locked{};
+};
+
 class ILockAccessor final : public ServiceFramework<ILockAccessor> {
 public:
-    explicit ILockAccessor(Core::System& system_);
+    // Without a shared state the accessor has a lock of its own.
+    explicit ILockAccessor(Core::System& system_, std::shared_ptr<LockState> state = nullptr);
     ~ILockAccessor() override;
 
 private:
@@ -23,10 +37,7 @@ private:
     Result IsLocked(Out<bool> out_is_locked);
 
 private:
-    KernelHelpers::ServiceContext m_context;
-    Event m_event;
-    std::mutex m_mutex{};
-    bool m_is_locked{};
+    const std::shared_ptr<LockState> m_state;
 };
 
 } // namespace Service::AM

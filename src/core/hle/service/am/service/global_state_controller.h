@@ -20,6 +20,10 @@ public:
 private:
     Result StartShutdownSequence();
     Result StartRebootSequence();
+    Result IsAutoPowerDownRequested(Out<bool> out_is_requested);
+    Result NotifyCecSettingsChanged();
+    Result SetDefaultHomeButtonLongPressTime(s64 time_ns);
+    Result UpdateDefaultDisplayResolution();
     Result LoadAndApplyIdlePolicySettings();
     Result ShouldSleepOnBoot(Out<bool> out_should_sleep_on_boot);
     Result GetHdcpAuthenticationFailedEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);

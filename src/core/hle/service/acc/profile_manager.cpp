@@ -144,6 +144,40 @@ Result ProfileManager::AddUser(const ProfileInfo& user) {
     return ResultSuccess;
 }
 
+/// acc:su 200 BeginUserRegistration: a new user with no nickname yet; the firmware names it
+/// through IProfileEditor before acc:su 201 completes the registration.
+Result ProfileManager::BeginUserRegistration(UUID uuid) {
+    if (user_count == MAX_USERS) {
+        return ERROR_TOO_MANY_USERS;
+    }
+    if (uuid.IsInvalid()) {
+        return ERROR_ARGUMENT_IS_NULL;
+    }
+    is_save_needed = true;
+    return AddUser({
+        .user_uuid = uuid,
+        .username = {},
+        .creation_time = 0,
+        .data = {},
+        .is_open = false,
+    });
+}
+
+/// acc:su 201/206: the user is saved; on a console with no open user it becomes the open one.
+bool ProfileManager::CompleteUserRegistration(UUID uuid) {
+    const auto index = GetUserIndex(uuid);
+    if (!index) {
+        return false;
+    }
+    is_save_needed = true;
+    WriteUserSaveFile();
+    if (last_opened_user.IsInvalid()) {
+        Settings::values.current_user = static_cast<s32>(*index);
+        OpenUser(uuid);
+    }
+    return true;
+}
+
 /// Create a new user on the system. If the uuid of the user already exists, the user is not
 /// created.
 Result ProfileManager::CreateNewUser(UUID uuid, const ProfileUsername& username) {
@@ -418,8 +452,7 @@ bool ProfileManager::SetProfileBaseAndData(Common::UUID uuid, const ProfileBase&
         WriteUserSaveFile();
         return true;
     } else {
-        LOG_ERROR(Service_ACC, "Failed to set profile base and data for user with UUID: {}",
-                  uuid.RawString());
+        LOG_ERROR(Service_ACC, "Failed to set profile base and data for a user");
     }
     return false;
 }

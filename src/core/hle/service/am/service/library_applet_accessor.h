@@ -44,6 +44,8 @@ private:
     Result GetIndirectLayerConsumerHandle(Out<u64> out_handle);
     Result GetLibraryAppletInfo(Out<LibraryAppletInfo> out_library_applet_info);
     Result Unknown170(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result SetOutOfFocusApplicationSuspendingEnabled(bool enabled);
+    Result PushExtraStorage(SharedPointer<IStorage> storage);
 
     void FrontendExecute();
     void FrontendExecuteInteractive();

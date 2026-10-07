@@ -1027,10 +1027,18 @@ void Module::Interface::InitializeApplicationInfoV2(HLERequestContext& ctx) {
 }
 
 void Module::Interface::BeginUserRegistration(HLERequestContext& ctx) {
+    // A nameless user: the firmware's user creation names it through IProfileEditor.
     const auto user_id = Common::UUID::MakeRandom();
-    profile_manager->CreateNewUser(user_id, "Eden");
+    const auto result = profile_manager->BeginUserRegistration(user_id);
 
-    LOG_INFO(Service_ACC, "called, uuid={}", user_id.FormattedString());
+    LOG_INFO(Service_ACC, "acc: BeginUserRegistration -> new user, {} user(s)",
+             profile_manager->GetUserCount());
+
+    if (result.IsError()) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
+        return;
+    }
 
     IPC::ResponseBuilder rb{ctx, 6};
     rb.Push(ResultSuccess);
@@ -1038,14 +1046,20 @@ void Module::Interface::BeginUserRegistration(HLERequestContext& ctx) {
 }
 
 void Module::Interface::CompleteUserRegistration(HLERequestContext& ctx) {
+    // Also acc:su 206 CompleteUserRegistrationForcibly, the first-time setup's variant.
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
 
-    LOG_INFO(Service_ACC, "called, uuid={}", user_id.FormattedString());
-
-    profile_manager->WriteUserSaveFile();
-
     IPC::ResponseBuilder rb{ctx, 2};
+    if (!profile_manager->CompleteUserRegistration(user_id)) {
+        LOG_WARNING(Service_ACC, "acc: CompleteUserRegistration of a user that does not exist");
+        constexpr Result ResultUserNotFound{ErrorModule::Account, 100};
+        rb.Push(ResultUserNotFound);
+        return;
+    }
+
+    LOG_INFO(Service_ACC, "acc: CompleteUserRegistration, {} user(s), saved",
+             profile_manager->GetUserCount());
     rb.Push(ResultSuccess);
 }
 
@@ -1081,7 +1095,7 @@ void Module::Interface::GetProfileEditor(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
 
-    LOG_DEBUG(Service_ACC, "called, user_id=0x{}", user_id.RawString());
+    LOG_DEBUG(Service_ACC, "called");
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
@@ -1301,7 +1315,7 @@ public:
             {203, &ACC_SU::DeleteUser, "DeleteUser"},
             {204, &ACC_SU::SetUserPosition, "SetUserPosition"},
             {205, &ACC_SU::GetProfileEditor, "GetProfileEditor"},
-            {206, nullptr, "CompleteUserRegistrationForcibly"},
+            {206, &ACC_SU::CompleteUserRegistration, "CompleteUserRegistrationForcibly"},
             {210, nullptr, "CreateFloatingRegistrationRequest"},
             {211, nullptr, "CreateProcedureToRegisterUserWithNintendoAccount"},
             {212, nullptr, "ResumeProcedureToRegisterUserWithNintendoAccount"},

@@ -23,6 +23,10 @@ private:
                                          OutBuffer<BufferAttr_HipcMapAlias> out_image_data);
     Result GetCallerAppletCaptureImageEx(Out<bool> out_was_written,
                                          OutBuffer<BufferAttr_HipcMapAlias> out_image_data);
+    Result GetLastApplicationCaptureImageEx(Out<bool> out_was_written,
+                                            OutBuffer<BufferAttr_HipcMapAlias> out_image_data);
+    Result ClearAppletTransitionBuffer(u32 color);
+    Result TakeScreenShotOfOwnLayerEx(bool unknown0, bool unknown1, s32 fbshare_layer_index);
     Result TakeScreenShotOfOwnLayer(bool unknown0, s32 fbshare_layer_index);
     Result ClearCaptureBuffer(bool unknown0, s32 fbshare_layer_index, u32 color);
     Result AcquireLastForegroundCaptureSharedBuffer(Out<bool> out_was_written,
