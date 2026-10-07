@@ -119,6 +119,8 @@ public:
         bool ReadBinary(std::vector<u8>& value);
 
         bool End() const { return offset >= data.size(); }
+        // The type byte of the next value, 0 at the end. Lets a caller pick the reader without consuming it.
+        u8 PeekType() const { return Peek(); }
         std::string_view Error() const { return error; }
 
     private:

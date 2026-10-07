@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/hle/service/bcat/news/overwrite_event_holder.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/service/bcat/news/news_shared.h"
 #include "core/hle/service/cmif_serialization.h"
 
 namespace Service::News {
 
-IOverwriteEventHolder::IOverwriteEventHolder(Core::System& system_)
-    : ServiceFramework{system_, "IOverwriteEventHolder"}, service_context{system_,
-                                                                          "IOverwriteEventHolder"} {
+IOverwriteEventHolder::IOverwriteEventHolder(Core::System& system_, std::shared_ptr<NewsShared> shared_)
+    : ServiceFramework{system_, "IOverwriteEventHolder"}, shared{std::move(shared_)} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IOverwriteEventHolder::Get>, "Get"},
@@ -16,17 +17,12 @@ IOverwriteEventHolder::IOverwriteEventHolder(Core::System& system_)
     // clang-format on
 
     RegisterHandlers(functions);
-    overwrite_event = service_context.CreateEvent("IOverwriteEventHolder::OverwriteEvent");
 }
 
-IOverwriteEventHolder::~IOverwriteEventHolder() {
-    service_context.CloseEvent(overwrite_event);
-}
+IOverwriteEventHolder::~IOverwriteEventHolder() = default;
 
 Result IOverwriteEventHolder::Get(OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_INFO(Service_BCAT, "called");
-
-    *out_event = &overwrite_event->GetReadableEvent();
+    *out_event = &shared->overwrite->GetReadableEvent();
     R_SUCCEED();
 }
 

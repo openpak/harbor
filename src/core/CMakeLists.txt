@@ -550,6 +550,10 @@ add_library(core STATIC
     hle/service/audio/hardware_opus_decoder.h
     hle/service/bcat/backend/backend.cpp
     hle/service/bcat/backend/backend.h
+    hle/service/bcat/backend/openpak_backend.cpp
+    hle/service/bcat/backend/openpak_backend.h
+    hle/service/bcat/backend/openpak_bcat.cpp
+    hle/service/bcat/backend/openpak_bcat.h
     hle/service/bcat/bcat.cpp
     hle/service/bcat/bcat.h
     hle/service/bcat/bcat_result.h
@@ -565,14 +569,24 @@ add_library(core STATIC
     hle/service/bcat/delivery_cache_progress_service.h
     hle/service/bcat/delivery_cache_storage_service.cpp
     hle/service/bcat/delivery_cache_storage_service.h
+    hle/service/bcat/delivery_task_suspension_service.cpp
+    hle/service/bcat/delivery_task_suspension_service.h
+    hle/service/bcat/openpak_fetch.cpp
+    hle/service/bcat/openpak_fetch.h
     hle/service/bcat/news/newly_arrived_event_holder.cpp
     hle/service/bcat/news/newly_arrived_event_holder.h
     hle/service/bcat/news/msgpack.cpp
     hle/service/bcat/news/msgpack.h
     hle/service/bcat/news/news_data_service.cpp
     hle/service/bcat/news/news_data_service.h
-    hle/service/bcat/news/builtin_news.cpp
-    hle/service/bcat/news/builtin_news.h
+    hle/service/bcat/news/download_context.cpp
+    hle/service/bcat/news/download_context.h
+    hle/service/bcat/news/news_query.cpp
+    hle/service/bcat/news/news_query.h
+    hle/service/bcat/news/news_record.cpp
+    hle/service/bcat/news/news_record.h
+    hle/service/bcat/news/news_shared.cpp
+    hle/service/bcat/news/news_shared.h
     hle/service/bcat/news/news_storage.cpp
     hle/service/bcat/news/news_storage.h
     hle/service/bcat/news/news_database_service.cpp

@@ -120,8 +120,12 @@ flush_line\default=false
 flush_line=true
 
 [Audio]
+# cubeb, muted: the null sink never reports AudioOut buffers played, so applets that use AudioOut
+# (NetConnect) stall. ponytail: back to the null sink once it advances its counters with core time.
 output_engine\default=false
-output_engine=3
+output_engine=1
+audio_muted\default=false
+audio_muted=true
 EOF
 fi
 

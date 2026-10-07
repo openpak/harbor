@@ -49,6 +49,20 @@ Result IDeliveryCacheStorageService::EnumerateDeliveryCacheDirectory(
     OutArray<DirectoryName, BufferAttr_HipcMapAlias> out_directories) {
     LOG_DEBUG(Service_BCAT, "called, size={:016X}", out_directories.size());
 
+    // The directories of the cache, listed on the first call (the cache may have been filled since
+    // this object was made).
+    if (next_read_index == 0) {
+        entries.clear();
+        for (const auto& directory : root->GetSubdirectories()) {
+            DirectoryName name{};
+            const auto& text = directory->GetName();
+            if (text.size() < name.size()) {
+                std::memcpy(name.data(), text.data(), text.size());
+                entries.push_back(name);
+            }
+        }
+    }
+
     *out_directory_count =
         static_cast<s32>((std::min)(out_directories.size(), entries.size() - next_read_index));
     memcpy(out_directories.data(), entries.data() + next_read_index,
