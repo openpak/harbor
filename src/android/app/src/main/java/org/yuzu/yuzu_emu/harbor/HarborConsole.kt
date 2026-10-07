@@ -313,11 +313,15 @@ object HarborConsole {
      * Restart, Graphics driver, Show/Hide FPS, Log threads, Frame generation (on GPUs that can run
      * it), Set up again, Exit. Physical input is released first so nothing stays held in the guest.
      */
-    fun showMenu(activity: EmulationActivity) {
-        if (activity.isFinishing || menuOpen) {
+    fun showMenu(activity: EmulationActivity, trigger: String) {
+        // A menu left behind by an earlier emulation screen (destroyed without a dismiss) does not
+        // count: only one showing on this screen does.
+        val open = menuDialog?.takeIf { it.isShowing && it.ownerActivity === activity }
+        if (activity.isFinishing || open != null) {
+            Log.info("[Harbor] menu asked for by $trigger: ${if (open != null) "already open" else "the screen is closing"}")
             return
         }
-        menuOpen = true
+        Log.info("[Harbor] menu opened by $trigger")
         InputHandler.releaseAll()
         val fps = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
         val items = buildList<Pair<Int, () -> Unit>> {
@@ -361,10 +365,12 @@ object HarborConsole {
                 items[which].second()
             }
             .setOnDismissListener {
-                menuOpen = false
+                menuDialog = null
                 activity.harborResetChord()
             }
             .show()
+        dialog.setOwnerActivity(activity)
+        menuDialog = dialog
         HarborPanelInput.attach(dialog)
     }
 
@@ -440,6 +446,5 @@ object HarborConsole {
         Runtime.getRuntime().exit(0)
     }
 
-    @Volatile
-    private var menuOpen = false
+    private var menuDialog: android.app.Dialog? = null
 }

@@ -450,6 +450,40 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     /** The Harbor menu closed: the chord's buttons were released while it had the input. */
     fun harborResetChord() {
         harborHeldButtons.clear()
+        harborDownButtons.clear()
+    }
+
+    // Plus and Minus as the controller holds them now, whether or not the press reached the guest.
+    private val harborDownButtons = mutableSetOf<Int>()
+
+    // Each controller key once in the log (pads differ in what they send for Plus and Minus).
+    private val harborLoggedKeys = mutableSetOf<String>()
+
+    /**
+     * Console mode: a controller's Back key is Minus and its Menu key is Plus (pads with Xbox-style
+     * View and Menu buttons may send these instead of Select and Start).
+     */
+    private fun harborControllerKey(event: KeyEvent): KeyEvent {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val device = event.device
+            val id = "${device?.vendorId}:${device?.productId}:${event.keyCode}:${event.scanCode}"
+            if (harborLoggedKeys.add(id)) {
+                Log.info(
+                    "[Harbor] controller key: ${device?.name} " +
+                        "(${"%04x:%04x".format(device?.vendorId ?: 0, device?.productId ?: 0)}) " +
+                        "${KeyEvent.keyCodeToString(event.keyCode)} scan ${event.scanCode}"
+                )
+            }
+        }
+        val code = when (event.keyCode) {
+            KeyEvent.KEYCODE_BACK -> KeyEvent.KEYCODE_BUTTON_SELECT
+            KeyEvent.KEYCODE_MENU -> KeyEvent.KEYCODE_BUTTON_START
+            else -> return event
+        }
+        return KeyEvent(
+            event.downTime, event.eventTime, event.action, code, event.repeatCount,
+            event.metaState, event.deviceId, event.scanCode, event.flags, event.source
+        )
     }
 
     /** Whether `event` belongs to the Plus+Minus chord and must not reach the guest. */
@@ -468,21 +502,28 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                 if (event.repeatCount > 0) {
                     return code in harborHeldButtons || harborPendingPress?.keyCode == code
                 }
-                if (harborPendingPress?.keyCode == partner || partner in harborHeldButtons) {
+                // The partner may already have reached the guest (held longer than the window):
+                // the chord still counts, and releaseAll lets go of it in the guest.
+                if (harborPendingPress?.keyCode == partner || partner in harborHeldButtons ||
+                    partner in harborDownButtons
+                ) {
                     mainHandler.removeCallbacks(harborPendingRunnable)
                     harborPendingPress = null
                     harborHeldButtons.add(code)
                     harborHeldButtons.add(partner)
+                    harborDownButtons.clear()
                     InputHandler.releaseAll()
-                    HarborConsole.showMenu(this)
+                    HarborConsole.showMenu(this, "Plus+Minus")
                     return true
                 }
+                harborDownButtons.add(code)
                 harborPendingPress?.let { harborFlushPendingPress() }
                 harborPendingPress = KeyEvent(event)
                 mainHandler.postDelayed(harborPendingRunnable, HARBOR_CHORD_WINDOW_MS)
                 return true
             }
             KeyEvent.ACTION_UP -> {
+                harborDownButtons.remove(code)
                 if (harborHeldButtons.remove(code)) {
                     return true
                 }
@@ -497,17 +538,31 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         return false
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    override fun dispatchKeyEvent(keyEvent: KeyEvent): Boolean {
 
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-            event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            return super.dispatchKeyEvent(event)
+        if (keyEvent.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyEvent.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return super.dispatchKeyEvent(keyEvent)
         }
 
-        val isPhysicalKeyboard = event.source and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD &&
-                                event.device?.isVirtual == false
+        val isPhysicalKeyboard = keyEvent.source and InputDevice.SOURCE_KEYBOARD == InputDevice.SOURCE_KEYBOARD &&
+                                keyEvent.device?.isVirtual == false
 
-        val isControllerInput = InputHandler.isPhysicalGameController(event.device)
+        val isControllerInput = InputHandler.isPhysicalGameController(keyEvent.device)
+
+        // Harbor console mode: Android back (button or gesture) opens the Harbor menu here, before
+        // anything else can take the key.
+        if (HarborConsole.active && !isControllerInput && keyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (keyEvent.action == KeyEvent.ACTION_UP && !keyEvent.isCanceled) {
+                HarborConsole.showMenu(this, "Android back")
+            }
+            return true
+        }
+        val event = if (isControllerInput && HarborConsole.active) {
+            harborControllerKey(keyEvent)
+        } else {
+            keyEvent
+        }
 
         if (!isControllerInput &&
             event.source and InputDevice.SOURCE_MOUSE != InputDevice.SOURCE_MOUSE &&
@@ -956,7 +1011,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         const val EXTRA_OVERLAY_GAMELESS_EDIT_MODE = "overlayGamelessEditMode"
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
         // How long a Plus or Minus press waits for its partner (the Harbor menu chord).
-        private const val HARBOR_CHORD_WINDOW_MS = 80L
+        private const val HARBOR_CHORD_WINDOW_MS = 150L
         @Volatile
         private var processHasEmulationSession = false
         @Volatile

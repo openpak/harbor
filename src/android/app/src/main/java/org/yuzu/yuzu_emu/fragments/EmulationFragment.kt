@@ -700,6 +700,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         driverInUse = driverViewModel.selectedDriverVersion.value
 
         updateQuickOverlayMenuEntry(BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean())
+        if (HarborConsole.active) {
+            binding.harborMenuButton.setOnClickListener {
+                (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it, "on-screen button") }
+            }
+        }
         onPhysicalControllerStateChanged(InputHandler.androidControllers.isNotEmpty())
 
         binding.surfaceEmulation.holder.addCallback(this)
@@ -926,7 +931,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 override fun handleOnBackPressed() {
                     if (HarborConsole.active) {
                         // Harbor's console mode: Android back opens the Harbor menu, not Eden's drawer.
-                        (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it) }
+                        (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it, "Android back") }
                         return
                     }
                     if (!NativeLibrary.isRunning()) {
@@ -2624,6 +2629,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         hasPhysicalControllerConnected = hasConnectedControllers
         controllerInputReceived = false
         if (!isAdded || _binding == null) return
+        // Harbor: with no controller (no Plus+Minus), the menu stays one tap away.
+        binding.harborMenuButton.visibility =
+            if (HarborConsole.active && !hasConnectedControllers) View.VISIBLE else View.GONE
         if (binding.surfaceInputOverlay.isGamelessMode()) return
 
         if (hasConnectedControllers) {
