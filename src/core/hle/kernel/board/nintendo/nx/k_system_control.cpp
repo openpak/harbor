@@ -63,6 +63,8 @@ u32 GetMemorySizeForInit() {
     return Smc::MemorySize_4GB;
 }
 
+bool g_stock_applet_pool{};
+
 Smc::MemoryArrangement GetMemoryArrangeForInit() {
     switch (Settings::values.memory_layout_mode.GetValue()) {
     case Settings::MemoryLayout::Memory_4Gb:
@@ -169,9 +171,18 @@ size_t KSystemControl::Init::GetAppletPoolSize() {
         }
     }();
 
-    // Return (possibly) adjusted size.
+    // Return (possibly) adjusted size. A HOME session keeps the stock size: the web program sizes
+    // its heap from the whole pool and ran out (2003-0008) in the 4 GiB layout's 474 MiB. Behaviour
+    // follows the Ryujinx Harbor (MIT-licensed Ryujinx base), which uses the stock 507 MiB.
     constexpr size_t ExtraSystemMemoryForAtmosphere = 33_MiB;
+    if (g_stock_applet_pool) {
+        return base_pool_size - KTraceBufferSize;
+    }
     return base_pool_size - ExtraSystemMemoryForAtmosphere - KTraceBufferSize;
+}
+
+void KSystemControl::Init::SetStockAppletPool(bool stock) {
+    g_stock_applet_pool = stock;
 }
 
 size_t KSystemControl::Init::GetMinimumNonSecureSystemPoolSize() {
