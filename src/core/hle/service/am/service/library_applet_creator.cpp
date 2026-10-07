@@ -8,8 +8,11 @@
 #include "core/core.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/hle/kernel/k_memory_manager.h"
 #include "core/hle/kernel/k_transfer_memory.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/service/am/applet_data_broker.h"
+#include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applets.h"
 #include "core/hle/service/am/library_applet_storage.h"
@@ -171,8 +174,12 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
             caller_applet->child_applets.push_back(applet);
         }
         (void)window_system.TrackApplet(applet, false);
-        LOG_INFO(Service_AM, "am: library applet {} ({:016x}) created as pid {} ({}) for pid {}",
-                 applet_id, program_id, applet->aruid.pid, mode, caller_applet->aruid.pid);
+        LOG_INFO(Service_AM,
+                 "am: library applet {} ({:016x}) created as pid {} ({}) for pid {}, Applet pool "
+                 "{} MiB free",
+                 applet_id, program_id, applet->aruid.pid, mode, caller_applet->aruid.pid,
+                 system.Kernel().MemoryManager().GetFreeSize(Kernel::KMemoryManager::Pool::Applet) /
+                     (1024 * 1024));
         return std::make_shared<ILibraryAppletAccessor>(system, broker, applet);
     }
     // Couldn't initialize the guest process
@@ -208,6 +215,35 @@ std::shared_ptr<ILibraryAppletAccessor> CreateFrontendApplet(Core::System& syste
 
 } // namespace
 
+namespace {
+// A HOME session runs every library applet as the firmware's own process; a host-drawn stand-in
+// (a host keyboard, a host PIN entry) must never appear there, so a guest applet that cannot be
+// created fails the guest's request instead.
+Result CreateAppletForCaller(std::shared_ptr<ILibraryAppletAccessor>* out, Core::System& system,
+                             WindowSystem& window_system, std::shared_ptr<Applet> caller,
+                             AppletId applet_id, LibraryAppletMode mode) {
+    std::shared_ptr<ILibraryAppletAccessor> library_applet;
+    if (ShouldCreateGuestApplet(system, applet_id)) {
+        library_applet = CreateGuestApplet(system, window_system, caller, applet_id, mode);
+    }
+    if (!library_applet && system.GetAppletManager().IsHomeSession()) {
+        LOG_ERROR(Service_AM, "am: library applet {} could not be created; no host applet in a "
+                              "HOME session, the caller gets AppletLaunchFailed",
+                  applet_id);
+        R_THROW(ResultAppletLaunchFailed);
+    }
+    if (!library_applet) {
+        library_applet = CreateFrontendApplet(system, window_system, caller, applet_id, mode);
+    }
+    if (!library_applet) {
+        LOG_ERROR(Service_AM, "Applet doesn't exist! applet_id={}", applet_id);
+        R_THROW(ResultUnknown);
+    }
+    *out = std::move(library_applet);
+    R_SUCCEED();
+}
+} // namespace
+
 ILibraryAppletCreator::ILibraryAppletCreator(Core::System& system_, std::shared_ptr<Applet> applet,
                                              WindowSystem& window_system)
     : ServiceFramework{system_, "ILibraryAppletCreator"},
@@ -233,18 +269,8 @@ Result ILibraryAppletCreator::CreateLibraryApplet(
               library_applet_mode);
 
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
-    if (ShouldCreateGuestApplet(system, applet_id)) {
-        library_applet =
-            CreateGuestApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
-    }
-    if (!library_applet) {
-        library_applet =
-            CreateFrontendApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
-    }
-    if (!library_applet) {
-        LOG_ERROR(Service_AM, "Applet doesn't exist! applet_id={}", applet_id);
-        R_THROW(ResultUnknown);
-    }
+    R_TRY(CreateAppletForCaller(&library_applet, system, m_window_system, m_applet, applet_id,
+                                library_applet_mode));
 
     // Applet is created, can now be launched.
     m_applet->library_applet_launchable_event.Signal(system.Kernel());
@@ -259,18 +285,8 @@ Result ILibraryAppletCreator::CreateLibraryAppletEx(
               library_applet_mode, thread_id);
 
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
-    if (ShouldCreateGuestApplet(system, applet_id)) {
-        library_applet =
-            CreateGuestApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
-    }
-    if (!library_applet) {
-        library_applet =
-            CreateFrontendApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
-    }
-    if (!library_applet) {
-        LOG_ERROR(Service_AM, "Applet doesn't exist! applet_id={}", applet_id);
-        R_THROW(ResultUnknown);
-    }
+    R_TRY(CreateAppletForCaller(&library_applet, system, m_window_system, m_applet, applet_id,
+                                library_applet_mode));
 
     // Applet is created, can now be launched.
     m_applet->library_applet_launchable_event.Signal(system.Kernel());
