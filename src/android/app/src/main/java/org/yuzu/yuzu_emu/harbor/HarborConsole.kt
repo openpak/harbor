@@ -17,11 +17,13 @@ import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.dialogs.QuickSettings
+import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.model.AppletInfo
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.utils.GameHelper
+import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
 import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.NativeConfig
@@ -149,7 +151,7 @@ object HarborConsole {
         val fragment = activity.harborEmulationFragment() ?: return
         val container = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         QuickSettings(fragment).addFrameGen(container)
-        MaterialAlertDialogBuilder(activity)
+        val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle(R.string.frame_gen)
             .setView(ScrollView(activity).apply { addView(container) })
             .setPositiveButton(R.string.harbor_close, null)
@@ -157,7 +159,7 @@ object HarborConsole {
                 activity.harborLosslessPicker.launch(arrayOf("*/*"))
             }
             .setNegativeButton(R.string.lossless_scaling_remove) { _, _ ->
-                MaterialAlertDialogBuilder(activity)
+                val confirm = MaterialAlertDialogBuilder(activity)
                     .setTitle(R.string.lossless_scaling_remove)
                     .setMessage(
                         activity.getString(R.string.lossless_scaling_remove_confirmation) + "\n\n" +
@@ -168,8 +170,10 @@ object HarborConsole {
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
+                HarborPanelInput.attach(confirm)
             }
             .show()
+        HarborPanelInput.attach(dialog)
     }
 
     /** A picked Lossless.dll: installed with the console stopped, as Eden requires, then HOME again. */
@@ -208,47 +212,106 @@ object HarborConsole {
         }
     }
 
-    /** The minimal Harbor menu: Resume, Set up again, Exit, Detach/Attach Joy-Con. */
+    /**
+     * The Harbor menu (Android back, or Plus and Minus together): Resume, Detach/Attach Joy-Con,
+     * Restart, Graphics driver, Show/Hide FPS, Log threads, Frame generation (on GPUs that can run
+     * it), Set up again, Exit. Physical input is released first so nothing stays held in the guest.
+     */
     fun showMenu(activity: EmulationActivity) {
         if (activity.isFinishing || menuOpen) {
             return
         }
         menuOpen = true
-        MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.harbor_menu_title)
-            .setItems(
-                arrayOf<CharSequence>(
-                    activity.getString(R.string.harbor_menu_resume),
-                    activity.getString(R.string.harbor_menu_setup_again),
-                    activity.getString(R.string.harbor_menu_exit),
-                    activity.getString(
-                        if (HarborNative.joyconsDetached()) {
-                            R.string.harbor_menu_attach_joycons
-                        } else {
-                            R.string.harbor_menu_detach_joycons
-                        }
-                    ),
-                    activity.getString(R.string.harbor_menu_frame_gen)
-                ).let { items ->
-                    // Only on GPUs that can run the frame generation shaders.
-                    if (LosslessScalingHelper.isSupportedByGpu()) items else items.dropLast(1).toTypedArray()
+        InputHandler.releaseAll()
+        val fps = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
+        val items = buildList<Pair<Int, () -> Unit>> {
+            add(R.string.harbor_menu_resume to {})
+            add(
+                (if (HarborNative.joyconsDetached()) R.string.harbor_menu_attach_joycons else R.string.harbor_menu_detach_joycons) to {
+                    HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
                 }
-            ) { _, which ->
-                when (which) {
-                    3 -> HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
-                    4 -> showFrameGeneration(activity)
-                    1 -> activity.harborStop {
+            )
+            add(R.string.harbor_menu_restart to { activity.harborStop { restartConsole(activity) } })
+            add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
+            add(
+                (if (fps) R.string.harbor_menu_hide_fps else R.string.harbor_menu_show_fps) to {
+                    activity.harborEmulationFragment()?.harborShowStats(!fps)
+                }
+            )
+            add(R.string.harbor_menu_log_threads to { HarborNative.logGuestThreads() })
+            if (LosslessScalingHelper.isSupportedByGpu()) {
+                add(R.string.harbor_menu_frame_gen to { showFrameGeneration(activity) })
+            }
+            add(
+                R.string.harbor_menu_setup_again to {
+                    activity.harborStop {
                         HarborNative.stopOpenPak()
                         restartIntoSetup(activity)
                     }
-                    2 -> activity.harborStop {
+                }
+            )
+            add(
+                R.string.harbor_menu_exit to {
+                    activity.harborStop {
                         HarborNative.stopOpenPak()
                         activity.finishAndRemoveTask()
                     }
                 }
+            )
+        }
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_title)
+            .setItems(items.map { activity.getString(it.first) as CharSequence }.toTypedArray()) { _, which ->
+                items[which].second()
             }
-            .setOnDismissListener { menuOpen = false }
+            .setOnDismissListener {
+                menuOpen = false
+                activity.harborResetChord()
+            }
             .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    /**
+     * The graphics driver HOME and every title run with: the phone's own or one installed by the
+     * setup. A driver loads when the process starts, so a change restarts Harbor into the console.
+     */
+    private fun showDriverPicker(activity: EmulationActivity) {
+        val flat = HarborSetupBridge.installedDrivers()
+        val ids = mutableListOf("")
+        val names = mutableListOf<CharSequence>(activity.getString(R.string.harbor_driver_system))
+        for (i in 0 until flat.size / 3) {
+            ids.add(flat[i * 3])
+            names.add(
+                if (flat[i * 3 + 2].isEmpty()) flat[i * 3 + 1] else "${flat[i * 3 + 1]} (${flat[i * 3 + 2]})"
+            )
+        }
+        val current = ids.indexOf(HarborSetupBridge.currentDriver()).coerceAtLeast(0)
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_driver)
+            .setSingleChoiceItems(names.toTypedArray(), current) { picker, which ->
+                picker.dismiss()
+                if (which == current || !HarborSetupBridge.selectDriver(ids[which])) {
+                    return@setSingleChoiceItems
+                }
+                activity.harborStop { restartProcess(activity) }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    /** Harbor in a fresh process, straight back to the console (a new graphics driver loads then). */
+    private fun restartProcess(from: Activity) {
+        Log.info("[Harbor] restarting the process")
+        from.startActivity(
+            Intent(from, HarborRestartActivity::class.java)
+                .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
+                .putExtra(HarborRestartActivity.EXTRA_CONSOLE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        from.finishAffinity()
+        Runtime.getRuntime().exit(0)
     }
 
     /**

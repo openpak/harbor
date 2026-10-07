@@ -1540,6 +1540,14 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }
     }
 
+    /** Harbor menu: the frame-rate overlay on or off, saved for every boot. */
+    fun harborShowStats(show: Boolean) {
+        if (!isAdded || _binding == null) return
+        BooleanSetting.SHOW_PERFORMANCE_OVERLAY.setBoolean(show)
+        NativeConfig.saveGlobalConfig()
+        updateShowStatsOverlay()
+    }
+
     @SuppressLint("DefaultLocale")
     private fun updateShowStatsOverlay() {
         val showPerfOverlay = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
@@ -2520,9 +2528,14 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }, seconds * 1000L)
     }
 
+    /** A connected controller keeps the touch controls hidden; touching the screen does not bring them back. */
+    private fun overlayHeldByController(): Boolean =
+        hasPhysicalControllerConnected && BooleanSetting.HIDE_OVERLAY_ON_CONTROLLER_INPUT.getBoolean()
+
     fun handleScreenTap(isLongTap: Boolean) {
         if (!isAdded || _binding == null) return
         if (binding.surfaceInputOverlay.isGamelessMode()) return
+        if (overlayHeldByController()) return
         if (!BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
         // failsafe
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
@@ -2544,7 +2557,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         val autoHideEnabled = BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()
         val showInputOverlay = BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()
-        if (autoHideEnabled && showInputOverlay) {
+        if (autoHideEnabled && showInputOverlay && !overlayHeldByController()) {
             toggleOverlay(true)
             startOverlayAutoHideTimer(autoHideSeconds)
         }
