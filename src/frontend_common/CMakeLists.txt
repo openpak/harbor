@@ -27,6 +27,31 @@ if (ENABLE_UPDATE_CHECKER)
     target_link_libraries(frontend_common PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
+# OpenPak's credentials in the OS password store: one backend per platform (secret_store.h).
+target_sources(frontend_common PRIVATE secret_store.cpp secret_store.h)
+if (ANDROID)
+    target_sources(frontend_common PRIVATE secret_store_android.cpp)
+elseif (APPLE)
+    target_sources(frontend_common PRIVATE secret_store_apple.cpp)
+    target_link_libraries(frontend_common PRIVATE "-framework Security" "-framework CoreFoundation")
+elseif (WIN32)
+    target_sources(frontend_common PRIVATE secret_store_windows.cpp)
+    target_link_libraries(frontend_common PRIVATE advapi32 crypt32)
+else()
+    # Linux and the BSDs: the Secret Service through libsecret, when it is installed.
+    target_sources(frontend_common PRIVATE secret_store_libsecret.cpp)
+    find_package(PkgConfig QUIET)
+    if (PkgConfig_FOUND)
+        pkg_check_modules(LIBSECRET QUIET IMPORTED_TARGET libsecret-1)
+    endif()
+    if (LIBSECRET_FOUND)
+        target_link_libraries(frontend_common PRIVATE PkgConfig::LIBSECRET)
+        target_compile_definitions(frontend_common PRIVATE HARBOR_HAS_LIBSECRET)
+    else()
+        message(STATUS "libsecret not found: OpenPak keeps its credentials in memory on this build")
+    endif()
+endif()
+
 create_target_directory_groups(frontend_common)
 target_link_libraries(frontend_common
     PUBLIC core SimpleIni::SimpleIni frozen::frozen-headers
