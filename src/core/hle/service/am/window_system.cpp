@@ -683,6 +683,7 @@ bool WindowSystem::RestartAppletProcessLocked(Applet* applet) {
 
     applet->aruid.pid = applet->process->GetProcessId();
     applet->process_released = false;
+    applet->process_exiting = false;
     applet->is_process_running = false;
     applet->is_completed = false;
 

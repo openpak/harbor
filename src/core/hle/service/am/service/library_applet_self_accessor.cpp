@@ -183,6 +183,10 @@ Result ILibraryAppletSelfAccessor::ExitProcessAndReturn() {
     LOG_INFO(Service_AM, "called");
 
     if (const auto caller_applet = m_applet->caller_applet.lock(); caller_applet) {
+        {
+            std::scoped_lock lk{m_applet->lock};
+            m_applet->process_exiting = true;
+        }
         m_applet->process->Terminate();
     } else {
         system.GetUserChannel() = m_applet->user_channel_launch_parameter;
