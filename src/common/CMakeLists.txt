@@ -146,6 +146,7 @@ add_library(
     cpu_features.cpp
     cpu_features.h
     httplib.h
+    redact.h
     net/net.h net/net.cpp
     container/unordered_map.h container/unordered_set.h)
 
