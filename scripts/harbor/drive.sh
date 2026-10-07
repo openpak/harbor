@@ -9,7 +9,10 @@
 # Commands (a command word starts a new command; arguments follow it):
 #   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
 #   home   home-long   capture   power   screenshot <png>   threads   quit
+#   type <text>   type-line <file> <n>   key <name>   detach   attach
 #   sleep <seconds>       (handled here, not sent)
+# type-line types line n of a file (the value alone for key=value) and is logged only by length: use it
+# for passwords. type's text must not contain a command word.
 # Buttons: A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK
 # Relative screenshot paths land under the run directory. A screenshot is taken by the renderer (frame
 # only, no window chrome); if the guest is idle and presents no frame, the window is captured with grim.
@@ -28,7 +31,7 @@ FIFO="$RUN/control"
 
 is_command() {
     case "$1" in
-        press|hold|release|stick|home|home-long|capture|power|screenshot|threads|quit|sleep) return 0 ;;
+        press|hold|release|stick|home|home-long|capture|power|screenshot|threads|quit|sleep|type|type-line|key|detach|attach) return 0 ;;
         *) return 1 ;;
     esac
 }

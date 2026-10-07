@@ -12,9 +12,11 @@
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/kernel/k_object_name.h"
 #include "core/hle/kernel/k_port.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_server_port.h"
 #include "core/hle/kernel/k_server_session.h"
 #include "core/hle/kernel/k_synchronization_object.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/svc_results.h"
 #include "core/hle/service/hle_ipc.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -22,6 +24,27 @@
 #include "core/hle/service/sm/sm.h"
 
 namespace Service {
+
+namespace {
+
+// [Harbor] Written from: the Harbor-on-Eden bsd brief (ssl must reach the caller's bsd table).
+thread_local std::optional<u64> t_request_process_id;
+
+struct ScopedRequestProcess {
+    explicit ScopedRequestProcess(std::optional<u64> pid) : previous{t_request_process_id} {
+        t_request_process_id = pid;
+    }
+    ~ScopedRequestProcess() {
+        t_request_process_id = previous;
+    }
+    std::optional<u64> previous;
+};
+
+} // Anonymous namespace
+
+std::optional<u64> GetCurrentRequestProcessId() {
+    return t_request_process_id;
+}
 
 enum class UserDataTag {
     Port,
@@ -72,6 +95,9 @@ public:
         return m_context;
     }
 
+    // [Harbor] Who sent the request being served, kept for the destroy path.
+    std::optional<u64> m_client_process_id;
+
 private:
     std::shared_ptr<SessionRequestManager> m_manager;
     std::shared_ptr<HLERequestContext> m_context;
@@ -95,6 +121,16 @@ ServerManager::ServerManager(Core::System& system)
 }
 
 ServerManager::~ServerManager() {
+    // Stop the deferral heartbeat first: it signals the deferral event closed below.
+    {
+        std::scoped_lock lk{m_heartbeat_mutex};
+        m_heartbeat_stop = true;
+    }
+    m_heartbeat_cv.notify_all();
+    if (m_heartbeat_thread.joinable()) {
+        m_heartbeat_thread.join();
+    }
+
     // Signal stop.
     m_stop_source.request_stop();
     m_wakeup_event->Signal(m_system.Kernel());
@@ -125,7 +161,10 @@ ServerManager::~ServerManager() {
 
     if (m_deferral_event) {
         m_deferral_event->GetReadableEvent().Close(m_system.Kernel());
-        // Write event is owned by ServiceManager
+        // Write event is owned by ServiceManager, unless the heartbeat created it.
+        if (m_owns_deferral_event) {
+            m_deferral_event->Close(m_system.Kernel());
+        }
     }
 }
 
@@ -243,6 +282,53 @@ Result ServerManager::ManageDeferral(Kernel::KEvent** out_event) {
 
     // We succeeded.
     R_SUCCEED();
+}
+
+// [Harbor] Written from: Ryujinx master ServerBase.cs (cd462aa69 deferral: parked requests are
+// re-checked at 1 ms while any is parked) and Eden's own ManageDeferral/SetIsDeferred path.
+void ServerManager::EnableDeferralHeartbeat(std::chrono::nanoseconds period) {
+    std::scoped_lock lk{m_heartbeat_mutex};
+    if (m_heartbeat_thread.joinable() || m_heartbeat_stop) {
+        return;
+    }
+    if (m_deferral_event == nullptr) {
+        Kernel::KEvent* event{};
+        R_ASSERT(this->ManageDeferral(&event));
+        m_owns_deferral_event = true;
+    }
+    m_heartbeat_period = period;
+    m_heartbeat_thread = m_system.Kernel().RunOnHostCoreThread(
+        "ServerManager:heartbeat", [this] { this->HeartbeatLoop(); });
+}
+
+void ServerManager::SignalDeferral() {
+    if (m_deferral_event != nullptr) {
+        m_deferral_event->Signal(m_system.Kernel());
+    }
+}
+
+// [Harbor] Written from: Ryujinx master ServerBase.cs (cd462aa69), see EnableDeferralHeartbeat.
+void ServerManager::HeartbeatLoop() {
+    std::unique_lock lk{m_heartbeat_mutex};
+    while (!m_heartbeat_stop) {
+        bool any_deferred;
+        {
+            std::scoped_lock ll{m_deferred_list_mutex};
+            any_deferred = !m_deferred_sessions.empty();
+        }
+        if (!any_deferred) {
+            // CompleteSyncRequest notifies when a request is deferred; the timeout covers a
+            // notification that raced this check.
+            m_heartbeat_cv.wait_for(lk, std::chrono::milliseconds{20});
+            continue;
+        }
+        if (m_heartbeat_cv.wait_for(lk, m_heartbeat_period, [this] { return m_heartbeat_stop; })) {
+            break;
+        }
+        lk.unlock();
+        m_deferral_event->Signal(m_system.Kernel());
+        lk.lock();
+    }
 }
 
 void ServerManager::StartAdditionalHostThreads(const char* name, size_t num_threads) {
@@ -377,6 +463,13 @@ Result ServerManager::CompleteSyncRequest(Session* session) {
     // Mark the request as not deferred.
     session->GetContext()->SetIsDeferred(false);
 
+    // [Harbor] Name the requesting process for the handler (and for a destroy that follows).
+    if (const auto* process = session->GetContext()->GetThread().GetOwnerProcess();
+        process != nullptr) {
+        session->m_client_process_id = process->GetProcessId();
+    }
+    ScopedRequestProcess request_process{session->m_client_process_id};
+
     // Complete the request. We have exclusive access to this session.
     auto* server_session = static_cast<Kernel::KServerSession*>(session->GetNativeHandle());
     service_res =
@@ -385,8 +478,11 @@ Result ServerManager::CompleteSyncRequest(Session* session) {
     // If we've been deferred, we're done.
     if (session->GetContext()->GetIsDeferred()) {
         // Insert into deferred session list.
-        std::scoped_lock ll{m_deferred_list_mutex};
-        m_deferred_sessions.push_back(session);
+        {
+            std::scoped_lock ll{m_deferred_list_mutex};
+            m_deferred_sessions.push_back(session);
+        }
+        m_heartbeat_cv.notify_one();
 
         // Finish.
         R_SUCCEED();
@@ -432,6 +528,8 @@ Result ServerManager::OnDeferralEvent() {
 }
 
 void ServerManager::DestroySession(Session* session) {
+    ScopedRequestProcess request_process{session->m_client_process_id};
+
     // Unlink.
     {
         std::scoped_lock lk{m_deferred_list_mutex};
