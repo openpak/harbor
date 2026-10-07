@@ -1,0 +1,14 @@
+--- a/library/lib/core/application.cpp
++++ b/library/lib/core/application.cpp
+@@ -66,8 +66,9 @@
+ #include <set>
+ #include <thread>
+ 
+-#define BUTTOM_REPEAT_TRIGGER 250000 // 250ms
+-#define BUTTON_REPEAT_DELAY   100000 // 100 ms
++// Harbor: the same repeat as Harbor's host panels, 350 ms before the first repeat, then every 110 ms.
++#define BUTTOM_REPEAT_TRIGGER 350000 // 350 ms
++#define BUTTON_REPEAT_DELAY   110000 // 110 ms
+ 
+ namespace brls
+ {

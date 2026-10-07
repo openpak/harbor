@@ -19,7 +19,8 @@
         "hash": "cd74728c9acf1437c5bd2277899a0c28c74c52a2536847be858115482a518c40b00eb900d8e547d10ca6f2dd255352ac2dc172f7b506b1ea4d85ea4ae231ba4c",
         "patches": [
             "0001-no-jni-onload.patch",
-            "0002-no-android-cjk-font.patch"
+            "0002-no-android-cjk-font.patch",
+            "0003-harbor-navigation-repeat.patch"
         ],
         "repo": "XITRIX/borealis",
         "version": "8c1f1093ee41a461d9d3bdd6dd2f6dfec166ab7a"
