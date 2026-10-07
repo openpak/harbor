@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include <filesystem>
 #include <memory>
 
 #include "common/fs/path_util.h"
@@ -28,9 +29,18 @@ void LoopProcess(Core::System& system) {
     server_manager->RegisterNamedService("bcat:s", std::make_shared<IServiceCreator>(system, "bcat:s"), 32);
 
     // Until the OpenPak side installs a fetcher, a directory of files can stand in for it (self-checks
-    // and desktop runs without a server): HARBOR_OPENPAK_STUB_DIR, see FileFetcher.
+    // and desktop runs without a server): HARBOR_OPENPAK_STUB_DIR, or <user dir>/openpak/stub. See
+    // FileFetcher.
     if (!GetOpenPakFetcher()) {
-        if (const char* stub = std::getenv("HARBOR_OPENPAK_STUB_DIR"); stub != nullptr && *stub != '\0') {
+        std::filesystem::path stub;
+        if (const char* env = std::getenv("HARBOR_OPENPAK_STUB_DIR"); env != nullptr && *env != '\0') {
+            stub = env;
+        } else if (const auto dir =
+                       Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "openpak" / "stub";
+                   std::filesystem::is_directory(dir)) {
+            stub = dir;
+        }
+        if (!stub.empty()) {
             LOG_WARNING(Service_BCAT, "OpenPak fetches come from files, not a server");
             SetOpenPakFetcher(std::make_shared<FileFetcher>(stub));
         }
