@@ -10,7 +10,7 @@ Friend::Friend(std::shared_ptr<Module> module_, Core::System& system_, const cha
     static const FunctionInfo functions[] = {
         {0, &Friend::CreateFriendService, "CreateFriendService"},
         {1, &Friend::CreateNotificationService, "CreateNotificationService"},
-        {2, nullptr, "CreateDaemonSuspendSessionService"},
+        {2, &Friend::CreateDaemonSuspendSessionService, "CreateDaemonSuspendSessionService"},
     };
     RegisterHandlers(functions);
 }
