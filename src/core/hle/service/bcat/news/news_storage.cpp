@@ -1,169 +1,218 @@
-// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 tobagin
+// SPDX-License-Identifier: AGPL-3.0-only
 
 #include "core/hle/service/bcat/news/news_storage.h"
 
-#include "common/fs/path_util.h"
-
 #include <algorithm>
-#include <chrono>
-#include <cstring>
-#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
+
+#include <nlohmann/json.hpp>
+
+#include "common/logging.h"
+#include "core/hle/service/bcat/news/news_query.h"
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 
 namespace Service::News {
 namespace {
 
-std::filesystem::path GetReadCachePath() {
-    return Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) / "news" / "news_read";
-}
-
-std::set<std::string> LoadReadIds() {
-    std::set<std::string> ids;
-    std::ifstream f(GetReadCachePath());
-    std::string line;
-    while (std::getline(f, line)) {
-        if (!line.empty()) ids.insert(line);
-    }
-    return ids;
-}
-
-void SaveReadIds(const std::set<std::string>& ids) {
-    const auto path = GetReadCachePath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    std::ofstream f(path);
-    for (const auto& id : ids) {
-        f << id << '\n';
-    }
+bool SameRow(const NewsRow& a, const NewsRow& b) {
+    return a.news_id == b.news_id && a.user_id == b.user_id;
 }
 
 } // namespace
 
-NewsStorage& NewsStorage::Instance() {
-    static NewsStorage s;
-    return s;
+NewsStorage::NewsStorage(std::filesystem::path directory_) : directory{std::move(directory_)} {
+    Load();
+}
+
+std::filesystem::path NewsStorage::RecordsPath() const {
+    return directory / "records.json";
+}
+
+void NewsStorage::Load() {
+    std::error_code ec;
+    if (!std::filesystem::exists(RecordsPath(), ec)) {
+        return;
+    }
+
+    try {
+        std::ifstream stream{RecordsPath()};
+        const auto json = nlohmann::json::parse(stream);
+
+        for (const auto& item : json) {
+            NewsRow row;
+            row.news_id = item.at("news_id").get<std::string>();
+            row.user_id = item.at("user_id").get<std::string>();
+            row.topic_id = item.at("topic_id").get<std::string>();
+            row.application_ids = item.at("application_ids").get<std::string>();
+            for (size_t i = 0; i < IntegerColumnNames.size(); ++i) {
+                row.ints[i] = item.value(std::string(IntegerColumnNames[i]), s64{0});
+            }
+            rows.push_back(std::move(row));
+        }
+    } catch (const std::exception& e) {
+        LOG_WARNING(Service_BCAT, "News records unreadable ({}); starting empty", e.what());
+        rows.clear();
+    }
+}
+
+void NewsStorage::Save() const {
+    try {
+        std::filesystem::create_directories(directory);
+
+        auto json = nlohmann::json::array();
+        for (const auto& row : rows) {
+            nlohmann::json item;
+            item["news_id"] = row.news_id;
+            item["user_id"] = row.user_id;
+            item["topic_id"] = row.topic_id;
+            item["application_ids"] = row.application_ids;
+            for (size_t i = 0; i < IntegerColumnNames.size(); ++i) {
+                item[std::string(IntegerColumnNames[i])] = row.ints[i];
+            }
+            json.push_back(std::move(item));
+        }
+
+        std::ofstream stream{RecordsPath(), std::ios::trunc};
+        stream << json.dump();
+    } catch (const std::exception& e) {
+        LOG_WARNING(Service_BCAT, "News records could not be saved: {}", e.what());
+    }
+}
+
+bool NewsStorage::Post(std::span<const u8> payload, s64 received_at) {
+    auto row = NewsRow::FromPayload(payload, received_at);
+    if (!row) {
+        LOG_WARNING(Service_BCAT,
+                    "News payload of {} bytes has no msgpack map with an integer news_id; not stored",
+                    payload.size());
+        return false;
+    }
+
+    std::scoped_lock lock{mutex};
+
+    try {
+        std::filesystem::create_directories(directory);
+        std::ofstream stream{directory / row->FileName(), std::ios::binary | std::ios::trunc};
+        stream.write(reinterpret_cast<const char*>(payload.data()),
+                     static_cast<std::streamsize>(payload.size()));
+        if (!stream) {
+            throw std::runtime_error("write failed");
+        }
+    } catch (const std::exception& e) {
+        LOG_WARNING(Service_BCAT, "News article could not be written: {}", e.what());
+        return false;
+    }
+
+    std::erase_if(rows, [&](const NewsRow& other) { return SameRow(other, *row); });
+    rows.push_back(std::move(*row));
+    Save();
+    return true;
+}
+
+s64 NewsStorage::StoredSize(std::string_view news_id) const {
+    std::scoped_lock lock{mutex};
+
+    const auto it = std::find_if(rows.begin(), rows.end(), [&](const NewsRow& row) {
+        return row.news_id == news_id && row.user_id.empty();
+    });
+    if (it == rows.end()) {
+        return -1;
+    }
+
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(directory / it->FileName(), ec);
+    return ec ? -1 : static_cast<s64>(size);
+}
+
+std::vector<NewsRow> NewsStorage::Query(std::string_view where, std::string_view order) const {
+    const auto match = ParseWhere(where);
+
+    std::vector<NewsRow> matching;
+    {
+        std::scoped_lock lock{mutex};
+        std::copy_if(rows.begin(), rows.end(), std::back_inserter(matching), match);
+    }
+    return OrderRows(std::move(matching), order);
+}
+
+int NewsStorage::Update(std::string_view column, s64 value, bool add, std::string_view where) {
+    const auto index = NewsRow::FindIntegerColumn(column);
+    if (!index) {
+        throw QueryError("'" + std::string(column) + "' is not an integer column");
+    }
+
+    const auto match = ParseWhere(where);
+
+    std::scoped_lock lock{mutex};
+    int changed = 0;
+    for (auto& row : rows) {
+        if (match(row)) {
+            row.Int(*index) = add ? row.Int(*index) + value : value;
+            ++changed;
+        }
+    }
+    if (changed > 0) {
+        Save();
+    }
+    return changed;
+}
+
+std::optional<std::vector<u8>> NewsStorage::Payload(std::string_view file_name) const {
+    std::scoped_lock lock{mutex};
+
+    const bool stored = std::any_of(rows.begin(), rows.end(),
+                                    [&](const NewsRow& row) { return row.FileName() == file_name; });
+    if (!stored) {
+        return std::nullopt;
+    }
+
+    std::ifstream stream{directory / std::string(file_name), std::ios::binary};
+    if (!stream) {
+        return std::nullopt;
+    }
+    return std::vector<u8>(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+std::vector<std::string> NewsStorage::Topics() const {
+    std::scoped_lock lock{mutex};
+
+    std::vector<std::string> topics;
+    for (const auto& row : rows) {
+        if (!row.topic_id.empty() &&
+            std::find(topics.begin(), topics.end(), row.topic_id) == topics.end()) {
+            topics.push_back(row.topic_id);
+        }
+    }
+    return topics;
+}
+
+u64 NewsStorage::UsedBytes() const {
+    std::scoped_lock lock{mutex};
+
+    u64 total = 0;
+    for (const auto& row : rows) {
+        std::error_code ec;
+        const auto size = std::filesystem::file_size(directory / row.FileName(), ec);
+        if (!ec) {
+            total += size;
+        }
+    }
+    return total;
 }
 
 void NewsStorage::Clear() {
-    std::scoped_lock lk{mtx};
-    items.clear();
-}
+    std::scoped_lock lock{mutex};
 
-void NewsStorage::CopyZ(std::span<char> dst, std::string_view src) {
-    std::memset(dst.data(), 0, dst.size());
-    std::memcpy(dst.data(), src.data(), (std::min)(dst.size() - 1, src.size()));
-}
-
-std::string NewsStorage::MakeKey(std::string_view news_id, std::string_view user_id) {
-    return std::string(news_id) + "|" + std::string(user_id);
-}
-
-s64 NewsStorage::Now() {
-    using namespace std::chrono;
-    return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
-}
-
-StoredNews& NewsStorage::Upsert(std::string_view news_id, std::string_view user_id,
-                                std::string_view topic_id, s64 time, std::vector<u8> payload) {
-    std::scoped_lock lk{mtx};
-
-    const auto key = MakeKey(news_id, user_id);
-    auto it = items.find(key);
-    const bool exists = it != items.end();
-
-    // implemented a little "read" file. All in cache.
-    const auto read_ids = LoadReadIds();
-    const bool was_read = read_ids.contains(std::string(news_id));
-
-    NewsRecord rec{};
-    CopyZ(rec.news_id, news_id);
-    CopyZ(rec.user_id, user_id);
-    // there is nx_notice and nx_promotion for tags pre-existing
-    CopyZ(rec.topic_id, topic_id.empty() ? "nx_notice" : topic_id);
-
-    rec.received_time = exists ? it->second.record.received_time : (time ? time : Now());
-    rec.read = was_read ? 1 : (exists ? it->second.record.read : 0);
-    rec.newly = was_read ? 0 : 1;
-    rec.displayed = exists ? it->second.record.displayed : 0;
-    rec.extra1 = exists ? it->second.record.extra1 : 0;
-    rec.extra2 = exists ? it->second.record.extra2 : 0;
-
-    auto& entry = items[key];
-    entry.record = rec;
-    entry.payload = std::move(payload);
-    return entry;
-}
-
-StoredNews& NewsStorage::UpsertRaw(const GithubNewsMeta& meta, std::vector<u8> payload) {
-    return Upsert(meta.news_id, "", meta.topic_id, static_cast<s64>(meta.published_at), std::move(payload));
-}
-
-std::vector<NewsRecord> NewsStorage::ListAll() const {
-    std::scoped_lock lk{mtx};
-
-    std::vector<NewsRecord> out;
-    out.reserve(items.size());
-    for (const auto& [_, v] : items) {
-        out.push_back(v.record);
+    for (const auto& row : rows) {
+        std::error_code ec;
+        std::filesystem::remove(directory / row.FileName(), ec);
     }
-
-    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {
-        return a.received_time > b.received_time;
-    });
-    return out;
+    rows.clear();
+    Save();
 }
-
-std::optional<StoredNews> NewsStorage::FindByNewsId(std::string_view news_id,
-                                                    std::string_view user_id) const {
-    std::scoped_lock lk{mtx};
-
-    if (auto it = items.find(MakeKey(news_id, user_id)); it != items.end()) {
-        return it->second;
-    }
-    if (!user_id.empty()) {
-        if (auto it = items.find(MakeKey(news_id, "")); it != items.end()) {
-            return it->second;
-        }
-    }
-    return std::nullopt;
-}
-
-bool NewsStorage::UpdateRecord(std::string_view news_id, std::string_view user_id,
-                               const std::function<void(NewsRecord&)>& updater) {
-    std::scoped_lock lk{mtx};
-
-    if (auto it = items.find(MakeKey(news_id, user_id)); it != items.end()) {
-        updater(it->second.record);
-        return true;
-    }
-    return false;
-}
-
-void NewsStorage::MarkAsRead(std::string_view news_id) {
-    std::scoped_lock lk{mtx};
-    for (auto& [_, entry] : items) {
-        if (std::string_view(entry.record.news_id.data()) == news_id) {
-            entry.record.read = 1;
-            entry.record.newly = 0;
-            break;
-        }
-    }
-    auto ids = LoadReadIds();
-    ids.insert(std::string(news_id));
-    SaveReadIds(ids);
-}
-
-size_t NewsStorage::GetAndIncrementOpenCounter() {
-    std::scoped_lock lk{mtx};
-    return open_counter++;
-}
-
-void NewsStorage::ResetOpenCounter() {
-    std::scoped_lock lk{mtx};
-    open_counter = 0;
-}
-
 
 } // namespace Service::News

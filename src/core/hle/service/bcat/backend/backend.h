@@ -7,6 +7,8 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -34,7 +36,18 @@ class ProgressServiceBackend {
     friend class IBcatService;
 
 public:
+    // Lets a worker thread report progress without outliving the object: the object clears `target`
+    // under `mutex` as it goes, so a worker takes the lock and checks it before every call.
+    struct Liveness {
+        std::mutex mutex;
+        ProgressServiceBackend* target{};
+    };
+
     ~ProgressServiceBackend();
+
+    std::shared_ptr<Liveness> GetLiveness() const {
+        return liveness;
+    }
 
     // Sets the number of bytes total in the entire download.
     void SetTotalSize(Kernel::KernelCore& kernel, u64 size);
@@ -70,6 +83,7 @@ private:
 
     DeliveryCacheProgressImpl impl{};
     Kernel::KEvent* update_event;
+    std::shared_ptr<Liveness> liveness;
 };
 
 // A class representing an abstract backend for BCAT functionality.
@@ -88,6 +102,9 @@ public:
     virtual bool Clear(Kernel::KernelCore& kernel, u64 title_id) = 0;
     // Sets the BCAT Passphrase to be used with the associated title ID.
     virtual void SetPassphrase(Kernel::KernelCore& kernel, u64 title_id, const Passphrase& passphrase) = 0;
+    // Called when a title's BCAT services are created, so a backend can have its data ready before the
+    // title asks for a sync. Must not block.
+    virtual void Prepare(Kernel::KernelCore& kernel, u64 title_id) {}
     // Gets the launch parameter used by AM associated with the title ID and version provided.
     virtual std::optional<std::vector<u8>> GetLaunchParameter(Kernel::KernelCore& kernel, TitleIDVersion title) = 0;
 protected:

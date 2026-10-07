@@ -6,10 +6,10 @@
 
 #pragma once
 
+#include <memory>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
-
-#include "core/hle/service/bcat/news/news_storage.h"
 
 namespace Core {
 class System;
@@ -17,38 +17,34 @@ class System;
 
 namespace Service::News {
 
+class NewsShared;
+
+// nn::news::detail::ipc::INewsDatabaseService (IDeviceNewsDatabaseService since 19.0.0), over
+// NewsStorage. qlaunch 22.5.0 calls Count, GetList (1000) and the two integer updates.
+// CountWithKey (2) and UpdateStringValue (5) are not called and not implemented.
 class INewsDatabaseService final : public ServiceFramework<INewsDatabaseService> {
 public:
-    explicit INewsDatabaseService(Core::System& system_);
+    explicit INewsDatabaseService(Core::System& system_, std::shared_ptr<NewsShared> shared_);
     ~INewsDatabaseService() override;
 
 private:
-    Result Count(Out<s32> out_count, InBuffer<BufferAttr_HipcPointer> buffer_data);
+    Result Count(Out<s32> out_count, InBuffer<BufferAttr_HipcPointer> where);
 
-    Result CountWithKey(Out<s32> out_count, InBuffer<BufferAttr_HipcPointer> key,
-                        InBuffer<BufferAttr_HipcPointer> where);
-
-    Result UpdateIntegerValue(u32 value, InBuffer<BufferAttr_HipcPointer> key,
+    Result UpdateIntegerValue(InBuffer<BufferAttr_HipcPointer> column, s32 value,
                               InBuffer<BufferAttr_HipcPointer> where);
 
-    Result UpdateIntegerValueWithAddition(u32 value, InBuffer<BufferAttr_HipcPointer> buffer_data_1,
-                                          InBuffer<BufferAttr_HipcPointer> buffer_data_2);
+    Result UpdateIntegerValueWithAddition(InBuffer<BufferAttr_HipcPointer> column, s32 value,
+                                          InBuffer<BufferAttr_HipcPointer> where);
 
-    Result UpdateStringValue(InBuffer<BufferAttr_HipcPointer> key,
-                             InBuffer<BufferAttr_HipcPointer> value,
-                             InBuffer<BufferAttr_HipcPointer> where);
-
-    Result GetListV1(Out<s32> out_count,
-                     OutBuffer<BufferAttr_HipcMapAlias> out_buffer_data,
+    Result GetListV1(Out<s32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_buffer_data,
                      InBuffer<BufferAttr_HipcPointer> where_phrase,
-                     InBuffer<BufferAttr_HipcPointer> order_by_phrase,
-                     s32 offset);
+                     InBuffer<BufferAttr_HipcPointer> order_by_phrase, s32 offset);
 
-    Result GetList(Out<s32> out_count,
-                   OutBuffer<BufferAttr_HipcMapAlias> out_buffer_data,
+    Result GetList(Out<s32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_buffer_data,
                    InBuffer<BufferAttr_HipcPointer> where_phrase,
-                   InBuffer<BufferAttr_HipcPointer> order_by_phrase,
-                   s32 offset);
+                   InBuffer<BufferAttr_HipcPointer> order_by_phrase, s32 offset);
+
+    std::shared_ptr<NewsShared> shared;
 };
 
 } // namespace Service::News

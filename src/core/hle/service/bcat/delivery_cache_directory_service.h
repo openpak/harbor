@@ -14,6 +14,9 @@ class System;
 
 namespace Service::BCAT {
 
+// The MD5 of a delivery cache file, as the digest a title is shown for it.
+BcatDigest DigestFile(const FileSys::VirtualFile& file);
+
 class IDeliveryCacheDirectoryService final
     : public ServiceFramework<IDeliveryCacheDirectoryService> {
 public:

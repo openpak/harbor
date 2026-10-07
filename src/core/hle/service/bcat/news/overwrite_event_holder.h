@@ -3,8 +3,9 @@
 
 #pragma once
 
+#include <memory>
+
 #include "core/hle/service/cmif_types.h"
-#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
 
 namespace Core {
@@ -18,16 +19,18 @@ class KReadableEvent;
 
 namespace Service::News {
 
+class NewsShared;
+
 class IOverwriteEventHolder final : public ServiceFramework<IOverwriteEventHolder> {
 public:
-    explicit IOverwriteEventHolder(Core::System& system_);
+    // Both holders hand out an event of the shared news state, so one signal reaches every waiter.
+    explicit IOverwriteEventHolder(Core::System& system_, std::shared_ptr<NewsShared> shared_);
     ~IOverwriteEventHolder() override;
 
 private:
     Result Get(OutCopyHandle<Kernel::KReadableEvent> out_event);
 
-    Kernel::KEvent* overwrite_event;
-    KernelHelpers::ServiceContext service_context;
+    std::shared_ptr<NewsShared> shared;
 };
 
 } // namespace Service::News
