@@ -13,6 +13,7 @@
 #include "common/fs/fs_android.h"
 #endif
 #include "common/logging.h"
+#include "common/redact.h"
 
 #ifdef _WIN32
 #include <io.h>
@@ -267,11 +268,11 @@ void IOFile::Open(const fs::path& path, FileAccessMode mode, FileType type, File
             file = fdopen(fd, "r");
             const auto error_num = errno;
             if (error_num != 0 && file == nullptr) {
-                LOG_ERROR(Common_Filesystem, "Error opening file: {}, error: {}", path.c_str(),
+                LOG_ERROR(Common_Filesystem, "Error opening file: {}, error: {}", Common::RedactPath(PathToUTF8String(path)),
                           strerror(error_num));
             }
         } else {
-            LOG_ERROR(Common_Filesystem, "Error opening file: {}", path.c_str());
+            LOG_ERROR(Common_Filesystem, "Error opening file: {}", Common::RedactPath(PathToUTF8String(path)));
         }
     } else {
         file = std::fopen(path.c_str(), AccessModeToStr(mode, type));
@@ -283,7 +284,7 @@ void IOFile::Open(const fs::path& path, FileAccessMode mode, FileType type, File
     if (!IsOpen()) {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to open the file at path={}, ec_message={}",
-                  PathToUTF8String(file_path), ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), ec.message());
     }
 }
 
@@ -299,7 +300,7 @@ void IOFile::Close() {
     if (!close_result) {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to close the file at path={}, ec_message={}",
-                  PathToUTF8String(file_path), ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), ec.message());
     }
 
     file = nullptr;
@@ -338,7 +339,7 @@ bool IOFile::Flush() const {
     if (!flush_result) {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to flush the file at path={}, ec_message={}",
-                  PathToUTF8String(file_path), ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), ec.message());
     }
 
     return flush_result;
@@ -360,7 +361,7 @@ bool IOFile::Commit() const {
     if (!commit_result) {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to commit the file at path={}, ec_message={}",
-                  PathToUTF8String(file_path), ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), ec.message());
     }
 
     return commit_result;
@@ -382,7 +383,7 @@ bool IOFile::SetSize(u64 size) const {
     if (!set_size_result) {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem, "Failed to resize the file at path={}, size={}, ec_message={}",
-                  PathToUTF8String(file_path), size, ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), size, ec.message());
     }
 
     return set_size_result;
@@ -408,7 +409,7 @@ u64 IOFile::GetSize() const {
         if (ec) {
             LOG_ERROR(Common_Filesystem,
                       "Failed to retrieve the file size of path={}, ec_message={}",
-                      PathToUTF8String(file_path), ec.message());
+                      Common::RedactPath(PathToUTF8String(file_path)), ec.message());
             return 0;
         }
     }
@@ -419,7 +420,7 @@ u64 IOFile::GetSize() const {
 
     if (ec) {
         LOG_ERROR(Common_Filesystem, "Failed to retrieve the file size of path={}, ec_message={}",
-                  PathToUTF8String(file_path), ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), ec.message());
         return 0;
     }
 #endif
@@ -440,7 +441,7 @@ bool IOFile::Seek(s64 offset, SeekOrigin origin) const {
         const auto ec = std::error_code{errno, std::generic_category()};
         LOG_ERROR(Common_Filesystem,
                   "Failed to seek the file at path={}, offset={}, origin={}, ec_message={}",
-                  PathToUTF8String(file_path), offset, origin, ec.message());
+                  Common::RedactPath(PathToUTF8String(file_path)), offset, origin, ec.message());
     }
 
     return seek_result;
