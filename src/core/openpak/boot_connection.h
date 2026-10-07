@@ -70,7 +70,7 @@ inline constexpr const char* PlatformName = "switch";
 bool Enabled();
 
 /// The address the console-facing names go to: the applied profile's server.address, else
-/// server.json's console_server, else the website's host. Empty when there is none.
+/// server.json's console_server. Empty while OpenPak is off.
 std::string ConsoleServer();
 
 /// How the guest's resolver answers `host`: Redirect to an address, Blocked (fail closed: inside
