@@ -5,10 +5,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <memory>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
+#include "common/fs/path_util.h"
 #include "common/string_util.h"
 #include "common/swap.h"
 #include "core/core.h"
@@ -19,10 +24,76 @@
 #include "core/hle/service/sockets/sfdnsres_redirect.h"
 #include "core/hle/service/sockets/sockets.h"
 #include "core/hle/service/sockets/sockets_translate.h"
+#include "core/hle/service/ssl/ssl_backend.h"
 #include "core/internal_network/network.h"
+#include "core/internal_network/sockets.h"
 #include "core/memory.h"
+#include "core/openpak/boot_connection.h"
 
 namespace Service::Sockets {
+
+namespace {
+
+// One TLS handshake to `address`:443 through the guest's own TLS backend, verifying `name`.
+void ProbeTls(const std::string& address, const std::string& name) {
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    if (std::sscanf(address.c_str(), "%u.%u.%u.%u", &a, &b, &c, &d) != 4) {
+        LOG_WARNING(Service, "net test: no IPv4 address to probe TLS against");
+        return;
+    }
+    auto socket = std::make_shared<Network::Socket>();
+    if (socket->Initialize(Network::Domain::INET, Network::Type::STREAM,
+                           Network::Protocol::TCP) != Network::Errno::SUCCESS ||
+        socket->Connect({Network::Domain::INET,
+                         {static_cast<u8>(a), static_cast<u8>(b), static_cast<u8>(c),
+                          static_cast<u8>(d)},
+                         443}) != Network::Errno::SUCCESS) {
+        LOG_WARNING(Service, "net test: could not connect to the console server on 443");
+        return;
+    }
+    std::unique_ptr<SSL::SSLConnectionBackend> backend;
+    if (SSL::CreateSSLConnectionBackend(&backend) != ResultSuccess) {
+        return;
+    }
+    backend->SetSocket(socket);
+    backend->SetHostName(name.c_str());
+    const Result result = backend->DoHandshake();
+    LOG_INFO(Service, "net test: TLS to the console server as {}: {}", name,
+             result == ResultSuccess ? "verified" : "refused");
+}
+
+// Test only, for the harness, until the frontends call OpenPak::BootConnection::Run before boot
+// (wizard stream): under the harness (HARBOR_CONTROL set) and with a `harbor-net-test` file in
+// the user directory, the boot connection runs here, then one TLS handshake to the console server
+// under a redirected name and one under a name its chain does not carry.
+void TestBootConnection() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const auto user_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
+        std::error_code ec;
+        if (std::getenv("HARBOR_CONTROL") == nullptr ||
+            !std::filesystem::exists(user_dir / "harbor-net-test", ec)) {
+            return;
+        }
+        const auto result = OpenPak::BootConnection::Run(user_dir);
+        LOG_INFO(Service, "net test: OpenPak {}, profile {} v{}, ceiling {} v{}",
+                 result.enabled ? "on" : "off", result.profile_source, result.profile_version,
+                 result.ceiling_source, result.ceiling_version);
+        const auto address = OpenPak::Network::RedirectFor("dauth-lp1.ndas.srv.nintendo.net");
+        if (!result.enabled || !address) {
+            return;
+        }
+        std::thread([address = *address] {
+            ProbeTls(address, "dauth-lp1.ndas.srv.nintendo.net");
+            // The server mints a leaf for any name it is asked for (SNI), so a wrong name is the
+            // address itself: no SNI goes out, and the default chain, rooted at the pinned CA,
+            // carries no IP SAN.
+            ProbeTls(address, address);
+        }).detach();
+    });
+}
+
+} // namespace
 
 SFDNSRES::SFDNSRES(Core::System& system_) : ServiceFramework{system_, "sfdnsres"} {
     static const FunctionInfo functions[] = {
@@ -51,6 +122,7 @@ SFDNSRES::SFDNSRES(Core::System& system_) : ServiceFramework{system_, "sfdnsres"
     };
     RegisterHandlers(functions);
 
+    TestBootConnection();
     worker = std::thread([this] { WorkerLoop(); });
 }
 
