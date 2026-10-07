@@ -92,6 +92,37 @@ TEST_CASE("A64: CLZ", "[a64]") {
     REQUIRE(jit.GetVector(5) == Vector{0x0, 0x0000001e0000001f});
 }
 
+// CLZ on halfwords must produce all eight lanes, zero lanes included. The sequence below is the
+// magnitude/extra-bits step of libjpeg-turbo's AArch64 NEON Huffman encoder.
+TEST_CASE("A64: CLZ 8H, all lanes (NEON Huffman encoder)", "[a64]") {
+    A64TestEnv env;
+    A64::UserConfig jit_user_config{};
+    jit_user_config.callbacks = &env;
+    A64::Jit jit{jit_user_config};
+
+    oaknut::VectorCodeGenerator code{env.code_mem, nullptr};
+    code.CLZ(V2.H8(), V1.H8());
+    code.CMLT(V24.H8(), V0.H8(), 0);
+    code.ABS(V0.H8(), V0.H8());
+    code.EOR(V24.B16(), V24.B16(), V0.B16());
+    code.CLZ(V0.H8(), V0.H8());
+    code.USHL(V24.H8(), V24.H8(), V0.H8());
+    code.NEG(V0.H8(), V0.H8());
+    code.USHL(V24.H8(), V24.H8(), V0.H8());
+
+    jit.SetPC(0);
+    // Coefficients 0, 1, -1, 5, -300, 1023, -2, 0
+    jit.SetVector(0, {0x0005ffff00010000, 0x0000fffe03fffed4});
+    jit.SetVector(1, {0x800000ff00010000, 0x7fff010000030000});
+    env.ticks_left = env.code_mem.size();
+    CheckedRun([&]() { jit.Run(); });
+
+    REQUIRE(jit.GetVector(2) == Vector{0x00000008000f0010, 0x00010007000e0010});
+    // -CLZ (NBITS - 16) and the low NBITS bits of the value (one's complement for negatives)
+    REQUIRE(jit.GetVector(0) == Vector{0xfff3fff1fff1fff0, 0xfff0fff2fffafff9});
+    REQUIRE(jit.GetVector(24) == Vector{0x0005000000010000, 0x0000000103ff00d3});
+}
+
 TEST_CASE("A64: VREV", "[a64]") {
     A64TestEnv env;
     A64::UserConfig jit_user_config{};
