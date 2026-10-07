@@ -7,6 +7,8 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <set>
 
 #include "audio_core/adsp/adsp.h"
 #include "audio_core/audio_manager.h"
@@ -54,6 +56,17 @@ public:
     /// @return Ref to the ADSP.
     ADSP::ADSP& ADSP();
 
+    /// @brief Suspend or resume every audio renderer opened with an applet resource user id (am
+    /// suspends the process of a title behind the HOME menu). A suspended renderer sends no
+    /// commands to the ADSP, so it stops mixing and producing output, and it resumes cleanly on
+    /// the next update. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    /// @param aruid - The applet resource user id the renderers were opened with.
+    /// @param suspended - True to suspend, false to resume.
+    void SetSuspended(u64 aruid, bool suspended);
+
+    /// @brief Whether the renderers of an applet resource user id are suspended.
+    [[nodiscard]] bool IsSuspended(u64 aruid) const;
+
 private:
     /// @brief Create the sinks on startup.
     void CreateSinks();
@@ -66,6 +79,9 @@ private:
     std::unique_ptr<Sink::Sink> input_sink;
     /// The ADSP in the sysmodule
     std::optional<ADSP::ADSP> adsp;
+    /// Applet resource user ids whose renderers are suspended
+    mutable std::mutex suspended_mutex;
+    std::set<u64> suspended_aruids;
 };
 
 } // namespace AudioCore
