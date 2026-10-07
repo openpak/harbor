@@ -39,7 +39,7 @@ ISelfController::ISelfController(Core::System& system_, std::shared_ptr<Applet> 
         {17, nullptr, "SetControllerFirmwareUpdateSection"},
         {18, nullptr, "SetRequiresCaptureButtonShortPressedMessage"},
         {19, D<&ISelfController::SetAlbumImageOrientation>, "SetAlbumImageOrientation"},
-        {20, nullptr, "SetDesirableKeyboardLayout"},
+        {20, D<&ISelfController::SetDesirableKeyboardLayout>, "SetDesirableKeyboardLayout"},
         {21, nullptr, "GetScreenShotProgramId"},
         {40, D<&ISelfController::CreateManagedDisplayLayer>, "CreateManagedDisplayLayer"},
         {41, D<&ISelfController::IsSystemBufferSharingEnabled>, "IsSystemBufferSharingEnabled"},
@@ -155,6 +155,13 @@ Result ISelfController::GetLibraryAppletLaunchableEvent(
     m_applet->library_applet_launchable_event.Signal(system.Kernel());
     *out_event = m_applet->library_applet_launchable_event.GetHandle();
 
+    R_SUCCEED();
+}
+
+Result ISelfController::SetDesirableKeyboardLayout(u32 layout) {
+    LOG_INFO(Service_AM, "called, layout={}", layout);
+    std::scoped_lock lk{m_applet->lock};
+    m_applet->desirable_keyboard_layout = layout;
     R_SUCCEED();
 }
 
