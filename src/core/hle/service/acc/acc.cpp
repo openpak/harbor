@@ -208,8 +208,8 @@ public:
             {180, nullptr, "GetRequestForNintendoAccountReauthentication"} // 18.0.0+
         };
         static const FunctionInfo administrator_functions[] = {
-            {200, nullptr, "IsRegistered"},
-            {201, nullptr, "RegisterAsync"},
+            {200, &IManagerForSystemService::IsRegistered, "IsRegistered"},
+            {201, &IManagerForSystemService::RegisterAsync, "RegisterAsync"},
             {202, nullptr, "UnregisterAsync"},
             {203, nullptr, "DeleteRegistrationInfoLocally"},
             {220, nullptr, "SynchronizeProfileAsync"},
@@ -241,9 +241,50 @@ public:
     }
 
 private:
+    // The module reads su/baas/<uid>.dat (23.0.1 0x085BB4F0, research/acc-fw23 notes §1): no
+    // registration at BAAS is 2124-0200, which is what a user made a moment ago has. With OpenPak on,
+    // a user is registered once its device account signed in (this process); PlayerSelect's
+    // "Sign In and Link" registers and links a user that answers 0200. Offline: as stock Eden.
     void CheckAvailability(HLERequestContext& ctx) {
+        const bool registered = IsRegisteredAtBaas();
+        LOG_DEBUG(Service_ACC, "called, registered={}", registered);
+        PushResult(ctx, registered ? ResultSuccess : ResultNetworkServiceAccountUnavailable);
+    }
+
+    // 200: (no input) -> bool (method info in 0x10, out 0x11).
+    void IsRegistered(HLERequestContext& ctx) {
+        const bool registered = IsRegisteredAtBaas();
+        LOG_DEBUG(Service_ACC, "called, registered={}", registered);
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(registered);
+    }
+
+    // 201: (no input) -> IAsyncContext. The user's device account is made and signed in at
+    // OpenPak (Session::Ensure), which is BAAS registration for Harbor.
+    void RegisterAsync(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
-        PushResult(ctx, ResultSuccess);
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(
+            ctx, system, worker,
+            [uid = OpenPakAccount::UidString(account_id)](std::stop_token, std::vector<u8>&) {
+                if (!OpenPakAccount::Enabled()) {
+                    return ResultInternetRequestDenied;
+                }
+                const bool signed_in = OpenPakAccount::EnsureAndAdopt(uid) &&
+                                       OpenPak::Session::NetworkServiceAccountId(uid) != 0;
+                LOG_INFO(Service_ACC, "acc: BAAS registration -> {}",
+                         signed_in ? "registered" : "failed");
+                return signed_in ? ResultSuccess : ResultInternetRequestDenied;
+            });
+    }
+
+    bool IsRegisteredAtBaas() const {
+        if (!OpenPakAccount::Enabled()) {
+            return true;
+        }
+        return OpenPak::Session::NetworkServiceAccountId(OpenPakAccount::UidString(account_id)) != 0;
     }
 
     void GetAccountId(HLERequestContext& ctx) {
