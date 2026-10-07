@@ -4,6 +4,7 @@
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): OpenPakHostSetup,
 // OpenPakConfig, OpenPakBoot and the boot half of OpenPakNetworkProfile.
 
+#include <chrono>
 #include <cstdlib>
 #include <mutex>
 
@@ -145,10 +146,14 @@ BootResult Run(const std::filesystem::path& user_dir) {
         NetworkProfile::SetSite(website);
 
         // The ceiling and the profile side by side, two seconds; the CA pinned on a fresh profile.
+        const auto fetch_start = std::chrono::steady_clock::now();
         const NetworkProfile::Result fetched = NetworkProfile::Fetch(Network::PlatformName);
+        const auto fetch_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - fetch_start)
+                                  .count();
         const NetworkProfile::Ceiling ceiling = NetworkProfile::CurrentCeiling();
 
-        out.online = fetched.source == NetworkProfile::Source::Fetched;
+        out.online = fetched.confirmed;
         out.profile_source = NetworkProfile::SourceName(fetched.source);
         out.profile_version = fetched.profile.version;
         out.ceiling_version = ceiling.version;
@@ -195,9 +200,10 @@ BootResult Run(const std::filesystem::path& user_dir) {
         InstallServiceHooks();
 
         LOG_INFO(WebService,
-                 "[OpenPak] Boot connection: {} ({}), profile {} v{}, ceiling {} v{}, console "
-                 "server {}",
-                 out.enabled ? "on" : "off", out.online ? "online" : "offline", out.profile_source,
+                 "[OpenPak] Boot connection: {} ({}, {} ms), profile {} v{}, ceiling {} v{}, "
+                 "console server {}",
+                 out.enabled ? "on" : "off", out.online ? "online" : "offline", fetch_ms,
+                 out.profile_source,
                  out.profile_version, out.ceiling_source, out.ceiling_version,
                  out.console_server.empty() ? std::string{"none"} : out.console_server);
     } catch (const std::exception& e) {

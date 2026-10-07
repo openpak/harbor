@@ -33,7 +33,8 @@ struct BootResult {
     /// OpenPak is on for this process: a site is saved, the console server is known and ca.pem
     /// matches its pin. Off, the guest's OpenPak names still fail closed.
     bool enabled = false;
-    /// The profile was fetched now (rather than read from network-profile.json or built in).
+    /// The site answered for the profile in use: a fresh copy, or a 304 for the stored one.
+    /// False when it did not answer (or answered an error), and the stored files stand in.
     bool online = false;
     std::string website;
     std::string console_server;        ///< The address the console-facing names go to.
