@@ -7,6 +7,8 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_home_title" translatable="false">HOME</string>
     <string name="harbor_menu_title">Harbor</string>
     <string name="harbor_menu_resume">Resume</string>
+    <string name="harbor_menu_home">HOME button</string>
+    <string name="harbor_menu_home_hold">HOME (hold)</string>
     <string name="harbor_menu_setup_again">Set up again</string>
     <string name="harbor_menu_exit">Exit</string>
     <string name="harbor_menu_detach_joycons">Detach Joy-Con</string>
