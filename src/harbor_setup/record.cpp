@@ -63,6 +63,7 @@ std::string ToJson(const Record& record) {
     Put(json, "dlc_dirs", record.dlc_dirs);
     Put(json, "update_dirs", record.update_dirs);
     Put(json, "gpu_driver", record.gpu_driver);
+    Put(json, "openpak_account", record.openpak_account);
     json["completed"] = record.completed;
     return json.dump(2);
 }
@@ -80,6 +81,7 @@ std::optional<Record> FromJson(const std::string& text) {
         record.dlc_dirs = Get<std::vector<std::string>>(json, "dlc_dirs");
         record.update_dirs = Get<std::vector<std::string>>(json, "update_dirs");
         record.gpu_driver = Get<std::string>(json, "gpu_driver");
+        record.openpak_account = Get<std::string>(json, "openpak_account");
         record.completed = json.value("completed", false);
         return record;
     } catch (const std::exception&) {

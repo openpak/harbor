@@ -138,6 +138,8 @@ void SetInvitationsChangedHook(std::function<void()> on_change);
 struct Response {
     int status = 0;
     std::string body;
+    std::string etag;         ///< The ETag header, when the server sent one.
+    std::string content_type; ///< The Content-Type header, when the server sent one.
 };
 Response SendAs(const std::string& method, const std::string& host,
                 const std::string& path_and_query, const std::string& content_type,

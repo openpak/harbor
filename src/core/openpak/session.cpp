@@ -1642,7 +1642,8 @@ Response Send(const std::string& method, const std::string& host,
                       httplib::to_string(result.error()));
             return {};
         }
-        return {result->status, result->body};
+        return {result->status, result->body, result->get_header_value("ETag"),
+                result->get_header_value("Content-Type")};
     } catch (const std::exception& e) {
         LOG_DEBUG(WebService, "[OpenPak] {} {}: {}", method, host, e.what());
         return {};

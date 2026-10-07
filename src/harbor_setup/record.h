@@ -23,6 +23,9 @@ struct Record {
     /// The graphics driver the console starts with (Android, Adreno): an installed driver's file name, or
     /// empty for the phone's own driver.
     std::optional<std::string> gpu_driver;
+    /// The OpenPak account page: "signed-in" (the account is kept in the secret store, never here) or
+    /// "later" (skipped: a user links in the console's own settings).
+    std::optional<std::string> openpak_account;
     bool completed = false;
 
     /// The DLC and update folders together, without duplicates: what a HOME session reads add-ons from.

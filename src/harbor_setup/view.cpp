@@ -9,9 +9,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <vector>
 
 #include <SDL3/SDL.h>
 
+#include "common/logging.h"
 #include "harbor_setup/view.h"
 
 namespace HarborSetup {
@@ -677,6 +680,64 @@ brls::View* WizardActivity::ProgressPanel() {
     return panel;
 }
 
+namespace {
+
+// Test hook: HARBOR_SETUP_TEXT="<file>|<n>|=<text>|..." answers the next text fields in order without
+// a keyboard: <n> is line n of the file (only the value of a key=value line), =<text> the text itself.
+// Values are never logged.
+std::vector<std::string> ScriptedTexts() {
+    std::vector<std::string> out;
+    const char* env = std::getenv("HARBOR_SETUP_TEXT");
+    if (!env) {
+        return out;
+    }
+    std::vector<std::string> parts;
+    std::string list = env;
+    for (size_t start = 0; start <= list.size();) {
+        const size_t end = std::min(list.find('|', start), list.size());
+        parts.push_back(list.substr(start, end - start));
+        start = end + 1;
+    }
+    if (parts.empty()) {
+        return out;
+    }
+    std::vector<std::string> lines;
+    if (std::ifstream file(parts[0]); file) {
+        for (std::string line; std::getline(file, line);) {
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (const auto eq = line.find('='); eq != std::string::npos) {
+                line.erase(0, eq + 1);
+            }
+            lines.push_back(line);
+        }
+    }
+    for (size_t i = 1; i < parts.size(); i++) {
+        if (!parts[i].empty() && parts[i][0] == '=') {
+            out.push_back(parts[i].substr(1));
+        } else if (const int n = std::atoi(parts[i].c_str()); n >= 1 && static_cast<size_t>(n) <= lines.size()) {
+            out.push_back(lines[n - 1]);
+        }
+    }
+    return out;
+}
+
+} // namespace
+
+void WizardActivity::EditText(const std::string& title, const std::string& hint, const std::string& initial,
+                              int max_length, std::function<void(std::string)> done) {
+    static std::vector<std::string> scripted = ScriptedTexts();
+    static size_t next_scripted = 0;
+    if (next_scripted < scripted.size()) {
+        LOG_INFO(Frontend, "harbor: scripted text");
+        brls::sync([done, text = scripted[next_scripted++]] { done(text); });
+        return;
+    }
+    brls::Application::getImeManager()->openForText(
+        [done](std::string text) { done(std::move(text)); }, title, hint, max_length, initial);
+}
+
 brls::View* WizardActivity::PageContent() {
     const auto& p = CurrentPalette();
     auto* pane = new brls::Box(brls::Axis::COLUMN);
@@ -858,6 +919,59 @@ brls::View* WizardActivity::PageContent() {
         }
         break;
     }
+    case Step::Account: {
+        auto* list = List();
+        const auto state = model.GetAccountState();
+        if (state == AccountState::Form) {
+            const bool signing_in = model.GetAccountMode() == AccountMode::SignIn;
+            const auto field = [this, list](const std::string& key, const std::string& title, AccountField which,
+                                            const std::string& hint, int max_length) {
+                const std::string value = model.AccountValue(which);
+                list->addView(ButtonRow(key, title, value.empty() ? hint : value,
+                                        [this, title, which, hint, max_length] {
+                                            EditText(title, hint, model.AccountEditValue(which), max_length,
+                                                     [this, which](std::string text) {
+                                                         model.SetAccountField(which, std::move(text));
+                                                     });
+                                        }));
+            };
+            field("account:email", "Email address", AccountField::Email, "Not entered", 254);
+            field("account:password", "Password", AccountField::Password, "Not entered", 128);
+            if (!signing_in) {
+                field("account:nickname", "Nickname", AccountField::Nickname, "3 to 32 characters", 32);
+                field("account:birthday", "Birthday", AccountField::Birthday, "YYYY-MM-DD", 10);
+                field("account:country", "Country", AccountField::Country, "Two letters, e.g. GB", 2);
+            }
+            list->addView(ButtonRow("account:mode",
+                                    signing_in ? "Create an OpenPak account" : "Sign in with an existing account",
+                                    "",
+                                    [this, signing_in] {
+                                        model.SetAccountMode(signing_in ? AccountMode::Create : AccountMode::SignIn);
+                                    },
+                                    true));
+        } else if (state == AccountState::Waiting) {
+            auto* row = InfoRow("account:waiting", 64);
+            auto* label = Text("Waiting for the address to be verified", 22, p.ink);
+            label->setGrow(1);
+            row->addView(label);
+            list->addView(row);
+            list->addView(ButtonRow("account:resend", "Send the mail again", "",
+                                    [this] { model.ResendVerification(); }, true));
+            list->addView(ButtonRow("account:another", "Use another account", "",
+                                    [this] { model.UseAnotherAccount(); }, true));
+        } else {
+            auto* row = InfoRow("account:signed-in", 64);
+            auto* label = Text("Signed in", 22, p.ink);
+            label->setGrow(1);
+            row->addView(label);
+            row->addView(Text(model.AccountName(), 18, p.accent));
+            list->addView(row);
+            list->addView(ButtonRow("account:another", "Use another account", "",
+                                    [this] { model.UseAnotherAccount(); }, true));
+        }
+        pane->addView(list);
+        break;
+    }
     case Step::Ready: {
         auto* list = List();
         int index = 0;
@@ -976,8 +1090,8 @@ brls::View* WizardActivity::Footer() {
 
     if (model.CanCancel()) {
         bar->addView(Hint("X", "Cancel", true, 112, [this] { model.Cancel(); }));
-    } else if (model.step() == Step::Driver) {
-        bar->addView(Hint("X", "Skip", model.CanSkip(), 112, [this] { model.Skip(); }));
+    } else if (model.step() == Step::Driver || model.step() == Step::Account) {
+        bar->addView(Hint("X", model.SkipLabel(), model.CanSkip(), 112, [this] { model.Skip(); }));
     }
     if (model.ShowHeader()) {
         bar->addView(Hint("B", "Back", model.CanGoBack(), 112, [this] { model.Back(); }));

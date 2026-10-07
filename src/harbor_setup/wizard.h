@@ -21,7 +21,7 @@
 
 namespace HarborSetup {
 
-enum class Step { Welcome, Device, Keys, Firmware, Games, Dlc, Updates, Driver, Ready };
+enum class Step { Welcome, Device, Keys, Firmware, Games, Dlc, Updates, Driver, Account, Ready };
 
 enum class Tone { None, Ok, Warn, Bad };
 
@@ -39,6 +39,12 @@ struct DriverChoice {
 struct SummaryRow {
     std::string label, value;
 };
+
+/// The OpenPak account page: sign in to an account, or create one and wait for its address to be
+/// verified. An owner-approved exception to "the firmware does the account UI", for phones.
+enum class AccountMode { SignIn, Create };
+enum class AccountState { Form, Waiting, SignedIn };
+enum class AccountField { Email, Password, Nickname, Birthday, Country };
 
 /// The setup flow without any view: pages, their state, what Next/Back/Skip do, and the record.
 /// A page's choices reach the record (and its file) only when Next succeeds on it.
@@ -90,7 +96,11 @@ public:
     bool CanGoNext() const;
     std::string NextLabel() const;
     bool CanSkip() const {
-        return current == Step::Driver && !busy;
+        return (current == Step::Driver || (current == Step::Account && account_state != AccountState::SignedIn)) &&
+               !busy;
+    }
+    std::string SkipLabel() const {
+        return current == Step::Account ? "Later" : "Skip";
     }
     bool CanCancel() const {
         return busy && cancellable && !cancel_requested;
@@ -161,6 +171,25 @@ public:
     }
     void Download(size_t index);
 
+    // OpenPak account.
+    AccountMode GetAccountMode() const {
+        return account_mode;
+    }
+    AccountState GetAccountState() const {
+        return account_state;
+    }
+    void SetAccountMode(AccountMode mode);
+    /// The value as the row shows it (the password as dots), or empty.
+    std::string AccountValue(AccountField field) const;
+    /// The value to start an edit from (empty for the password).
+    std::string AccountEditValue(AccountField field) const;
+    void SetAccountField(AccountField field, std::string value);
+    const std::string& AccountName() const {
+        return account_name;
+    }
+    void ResendVerification();
+    void UseAnotherAccount();
+
     // Ready.
     std::vector<SummaryRow> Summary() const;
 
@@ -188,6 +217,12 @@ private:
     void FillDriverChoices(const std::string& selected);
     void InstallDriverPackage(const std::string& location, const std::string& file_name);
     std::vector<Folder>* CurrentFolders();
+    std::string AccountProblem() const;
+    void EnterAccount();
+    void SubmitAccount();
+    void StartPolling();
+    void StopPolling();
+    void AccountSignedIn(std::string name);
 
     Host& host;
     std::filesystem::path record_path;
@@ -220,6 +255,13 @@ private:
     std::vector<DriverChoice> driver_choices;
     std::string selected_driver;
     std::vector<DriverRelease> downloads;
+
+    AccountMode account_mode = AccountMode::SignIn;
+    AccountState account_state = AccountState::Form;
+    std::string account_email, account_password, account_nickname, account_birthday, account_country;
+    std::string account_name;
+    /// The verification poll's token: cleared to stop it (the poll thread is never waited for).
+    std::shared_ptr<std::atomic_bool> poll_token;
 
     std::thread worker;
     std::shared_ptr<std::atomic_bool> alive = std::make_shared<std::atomic_bool>(true);
