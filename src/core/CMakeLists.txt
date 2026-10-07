@@ -977,6 +977,8 @@ add_library(core STATIC
     hle/service/pctl/parental_control_service.h
     hle/service/pctl/pctl.cpp
     hle/service/pctl/pctl_async.h
+    hle/service/pctl/pctl_pairing.cpp
+    hle/service/pctl/pctl_pairing.h
     hle/service/pctl/pctl.h
     hle/service/pctl/pctl_results.h
     hle/service/pctl/pctl_setting.cpp
