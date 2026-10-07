@@ -57,6 +57,11 @@ public:
         return interactive_out_data;
     }
 
+    // ILibraryAppletAccessor 102 PushExtraStorage, popped by ILibraryAppletSelfAccessor 20.
+    AppletStorageChannel& GetExtraStorage() {
+        return extra_storage;
+    }
+
 private:
     Core::System& system;
     KernelHelpers::ServiceContext context;
@@ -65,6 +70,7 @@ private:
     AppletStorageChannel interactive_in_data;
     AppletStorageChannel out_data;
     AppletStorageChannel interactive_out_data;
+    AppletStorageChannel extra_storage;
 };
 
 } // namespace Service::AM

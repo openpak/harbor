@@ -33,6 +33,7 @@ public:
     void OnButtonStateChanged(WindowSystem& window_system);
 
 private:
+    Core::System& m_system;
     std::optional<std::chrono::steady_clock::time_point> m_home_button_press_start{};
     std::optional<std::chrono::steady_clock::time_point> m_capture_button_press_start{};
     std::optional<std::chrono::steady_clock::time_point> m_power_button_press_start{};

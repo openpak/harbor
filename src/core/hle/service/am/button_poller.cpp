@@ -8,6 +8,7 @@
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/hle/service/am/am_types.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/button_poller.h"
 #include "core/hle/service/am/window_system.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -36,7 +37,7 @@ ButtonPressDuration ClassifyPressDuration(std::chrono::steady_clock::time_point 
 
 } // namespace
 
-ButtonPoller::ButtonPoller(Core::System& system, WindowSystem& window_system) {
+ButtonPoller::ButtonPoller(Core::System& system, WindowSystem& window_system) : m_system(system) {
     // TODO: am reads this from the home button state in hid, which is controller-agnostic.
     Core::HID::ControllerUpdateCallback engine_callback{
         .on_change = [this, &window_system](Core::HID::ControllerTriggerType type) {
@@ -77,10 +78,21 @@ void ButtonPoller::OnButtonStateChanged(WindowSystem& window_system) {
     //     m_power_button_press_start = std::chrono::steady_clock::now();
     // }
 
+    // In a HOME session HOME is a long press once held for the HOME menu's long-press time
+    // (IGlobalStateController 12).
+    const auto classify_home = [&](std::chrono::steady_clock::time_point start) {
+        if (!m_system.GetAppletManager().IsHomeSession()) {
+            return ClassifyPressDuration(start);
+        }
+        return std::chrono::steady_clock::now() - start < window_system.GetHomeButtonLongPressTime()
+                   ? ButtonPressDuration::ShortPressing
+                   : ButtonPressDuration::LongPressing;
+    };
+
     // While buttons are held, check whether they have crossed the long-press
     // threshold and, if so, send the long-press action immediately (only once).
     if (home_button && m_home_button_press_start && !m_home_button_long_sent) {
-        const auto duration = ClassifyPressDuration(*m_home_button_press_start);
+        const auto duration = classify_home(*m_home_button_press_start);
         if (duration != ButtonPressDuration::ShortPressing) {
             window_system.OnSystemButtonPress(SystemButtonType::HomeButtonLongPressing);
             m_home_button_long_sent = true;
@@ -98,7 +110,7 @@ void ButtonPoller::OnButtonStateChanged(WindowSystem& window_system) {
     // Buttons released which were previously held
     if (!home_button && m_home_button_press_start) {
         if(!m_home_button_long_sent) {
-            const auto duration = ClassifyPressDuration(*m_home_button_press_start);
+            const auto duration = classify_home(*m_home_button_press_start);
             window_system.OnSystemButtonPress(duration == ButtonPressDuration::ShortPressing
                 ? SystemButtonType::HomeButtonShortPressing : SystemButtonType::HomeButtonLongPressing);
         }

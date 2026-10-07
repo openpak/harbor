@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <deque>
 #include <mutex>
 #include <stack>
@@ -110,6 +111,9 @@ struct Applet {
     std::list<std::shared_ptr<Applet>> child_applets{};
     bool is_completed{};
 
+    // Open ILibraryAppletAccessor objects for this applet.
+    std::atomic<u32> accessor_count{};
+
     std::shared_ptr<Applet> reserved_applet{};
     bool unwind_after_reserved{};
     bool is_winding{};
@@ -131,6 +135,10 @@ struct Applet {
     bool window_visible{true};
     bool overlay_watching_short_home_button{false};
     bool overlay_handling_touch_input{false};
+    // HOME session: ICommonStateGetter 100, the applet takes the HOME short press itself while it
+    // holds the foreground; IOverlayFunctions 20, the overlay keeps a short press it watches.
+    bool handles_home_button_short_press{false};
+    bool overlay_handles_home_button_short_press{false};
 
     // Events
     Event overlay_event;

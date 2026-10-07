@@ -68,8 +68,8 @@ void Applet::SetInteractibleLocked(bool pad_interactible, bool touch_interactibl
     const bool pad_enabled = pad_interactible && !exit_requested;
     const bool touch_enabled = touch_interactible && !exit_requested;
 
-    LOG_DEBUG(Service_AM, "applet={} pad={} touch={} exit_requested={}",
-              static_cast<u32>(applet_id), pad_enabled, touch_enabled, exit_requested);
+    LOG_INFO(Service_AM, "am: input pid {} (applet {}) pad={} touch={}", aruid.pid,
+             static_cast<u32>(applet_id), pad_enabled, touch_enabled);
 
     hid_registration.EnableAppletToGetInput(pad_enabled, touch_enabled);
 }

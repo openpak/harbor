@@ -61,6 +61,16 @@ public:
     // library applets, the overlay applet, no host-made user). Stock behaviour otherwise.
     [[nodiscard]] bool IsHomeSession() const { return m_home_session.load(); }
 
+    // Forwarded to the window system, if one is running.
+    void ReleaseForegroundHold(const Applet& child);
+
+    // The guest asked for a reboot (IGlobalStateController 4, IOverlayFunctions 11). The session
+    // stops; the frontend reads this afterwards to start it again with the same data.
+    enum class PowerRequest { None, Shutdown, Reboot };
+    void RequestPower(PowerRequest request);
+    [[nodiscard]] PowerRequest GetPowerRequest() const { return m_power_request.load(); }
+    [[nodiscard]] bool IsRestartRequested() const { return GetPowerRequest() == PowerRequest::Reboot; }
+
 private:
     Core::System& m_system;
 
@@ -69,6 +79,7 @@ private:
 
     WindowSystem* m_window_system{};
     std::atomic<bool> m_home_session{};
+    std::atomic<PowerRequest> m_power_request{PowerRequest::None};
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};

@@ -9,19 +9,34 @@
 
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/core_timing.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/event_observer.h"
 #include "core/hle/service/am/process_creation.h"
+#include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/window_system.h"
 
 namespace Service::AM {
 
-WindowSystem::WindowSystem(Core::System& system) : m_system(system) {}
+namespace {
+// How long a caller's ChangeIntoForeground waits for it to close a completed applet's accessor.
+constexpr std::chrono::nanoseconds ForegroundHoldTimeout = std::chrono::seconds{1};
+} // namespace
+
+WindowSystem::WindowSystem(Core::System& system) : m_system(system) {
+    m_foreground_hold_event = Core::Timing::CreateEvent(
+        "am:ForegroundHold",
+        [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+            this->ReleaseExpiredForegroundHolds();
+            return std::nullopt;
+        });
+}
 
 WindowSystem::~WindowSystem() {
+    m_system.CoreTiming().UnscheduleEvent(m_foreground_hold_event);
     m_system.GetAppletManager().SetWindowSystem(nullptr);
 }
 
@@ -275,8 +290,154 @@ void WindowSystem::SendButtonAppletMessageLocked(AppletMessage message) {
     }
 }
 
+void WindowSystem::PushButtonMessageLocked(Applet* applet, AppletMessage message) {
+    if (applet == nullptr) {
+        return;
+    }
+    {
+        std::scoped_lock lk{applet->lock};
+        applet->lifecycle_manager.PushUnorderedMessage(m_system.Kernel(), message);
+    }
+    LOG_DEBUG(Service_AM, "am: -> pid {} {}", applet->aruid.pid, static_cast<u32>(message));
+    if (m_event_observer) {
+        m_event_observer->RequestUpdate();
+    }
+}
+
+// HOME session routing. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): HOME
+// short goes to the HOME menu, or to the foreground applet that takes it (ICommonStateGetter 100),
+// with a watching overlay first; HOME long and the power middle press go to the overlay only; the
+// application never receives them.
+void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
+    Applet* const foreground = m_foreground_requested_applet;
+    const auto foreground_application_blocks = [&](bool long_press) {
+        if (foreground == nullptr || foreground != m_application) {
+            return false;
+        }
+        std::scoped_lock lk{foreground->lock};
+        return long_press ? foreground->home_button_long_pressed_blocked
+                          : foreground->home_button_short_pressed_blocked;
+    };
+
+    switch (type) {
+    case SystemButtonType::HomeButtonShortPressing: {
+        if (m_home_menu == nullptr) {
+            LOG_INFO(Service_AM, "am: HOME short press ignored: no home menu is running");
+            return;
+        }
+
+        if (m_overlay_display != nullptr) {
+            bool watching, keeps;
+            {
+                std::scoped_lock lk{m_overlay_display->lock};
+                watching = m_overlay_display->overlay_watching_short_home_button;
+                keeps = m_overlay_display->overlay_handles_home_button_short_press;
+            }
+            if (watching) {
+                this->PushButtonMessageLocked(m_overlay_display,
+                                              AppletMessage::DetectShortPressingHomeButton);
+                if (keeps) {
+                    return;
+                }
+            }
+        }
+
+        if (foreground_application_blocks(false)) {
+            // TODO(ovln): the overlay's "HOME button cannot be used now" notice.
+            LOG_INFO(Service_AM, "am: HOME short press blocked by the foreground application pid {}",
+                     foreground->aruid.pid);
+            return;
+        }
+
+        Applet* target = m_home_menu;
+        if (foreground != nullptr && foreground->applet_id != AppletId::Application) {
+            std::scoped_lock lk{foreground->lock};
+            if (foreground->handles_home_button_short_press) {
+                target = foreground;
+            }
+        }
+        this->PushButtonMessageLocked(target, AppletMessage::DetectShortPressingHomeButton);
+        return;
+    }
+    case SystemButtonType::HomeButtonLongPressing:
+        if (m_overlay_display == nullptr) {
+            LOG_INFO(Service_AM, "am: HOME long press ignored: no overlay applet is running");
+            return;
+        }
+        if (foreground_application_blocks(true)) {
+            LOG_INFO(Service_AM, "am: HOME long press blocked by the foreground application pid {}",
+                     foreground->aruid.pid);
+            return;
+        }
+        this->PushButtonMessageLocked(m_overlay_display,
+                                      AppletMessage::DetectLongPressingHomeButton);
+        return;
+    case SystemButtonType::PowerButtonShortPressing:
+    case SystemButtonType::PowerButtonLongPressing:
+        if (m_overlay_display == nullptr) {
+            LOG_INFO(Service_AM, "am: power button ignored: no overlay applet is running");
+            return;
+        }
+        this->PushButtonMessageLocked(m_overlay_display,
+                                      AppletMessage::DetectMiddlePressingPowerButton);
+        return;
+    case SystemButtonType::CaptureButtonShortPressing:
+    case SystemButtonType::CaptureButtonLongPressing: {
+        // Only an applet that asked for the capture button hears it; otherwise the press is a
+        // screenshot, which is vi/caps work.
+        const bool is_long = type == SystemButtonType::CaptureButtonLongPressing;
+        bool sent = false;
+        for (const auto& [aruid, applet] : m_applets) {
+            bool wants;
+            {
+                std::scoped_lock lk{applet->lock};
+                wants = is_long
+                            ? applet->handling_capture_button_long_pressed_message_enabled_for_applet
+                            : applet->handling_capture_button_short_pressed_message_enabled_for_applet;
+            }
+            if (wants) {
+                this->PushButtonMessageLocked(applet.get(),
+                                              is_long ? AppletMessage::DetectLongPressingCaptureButton
+                                                      : AppletMessage::DetectShortPressingCaptureButton);
+                sent = true;
+            }
+        }
+        if (!sent) {
+            LOG_INFO(Service_AM, "am: capture button {} press: no applet handles it",
+                     is_long ? "long" : "short");
+        }
+        return;
+    }
+    default:
+        return;
+    }
+}
+
+std::shared_ptr<LockState> WindowSystem::GetLockState(u32 button_type) {
+    std::scoped_lock lk{m_lock};
+    auto& state = m_lock_states[button_type];
+    if (!state) {
+        state = std::make_shared<LockState>(m_system);
+    }
+    return state;
+}
+
+bool WindowSystem::IsHomeButtonShortPressBlocked() {
+    std::scoped_lock lk{m_lock};
+    Applet* const foreground = m_foreground_requested_applet;
+    if (foreground == nullptr || foreground != m_application) {
+        return false;
+    }
+    std::scoped_lock lk2{foreground->lock};
+    return foreground->home_button_short_pressed_blocked;
+}
+
 void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
     std::scoped_lock lk{m_lock};
+    if (m_system.GetAppletManager().IsHomeSession()) {
+        this->RouteSystemButtonLocked(type);
+        return;
+    }
     switch (type) {
     case SystemButtonType::HomeButtonShortPressing:
         SendButtonAppletMessageLocked(AppletMessage::DetectShortPressingHomeButton);
@@ -292,6 +453,14 @@ void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
         break;
     default:
         break;
+    }
+}
+
+void WindowSystem::OnPowerButtonPressed(ButtonPressDuration type) {
+    // A console's power button: short is sleep (not emulated), the middle press opens the
+    // overlay's power menu.
+    if (type == ButtonPressDuration::MiddlePressing) {
+        OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
     }
 }
 
@@ -366,6 +535,17 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
             std::erase(caller_applet->child_applets, applet);
             applet->caller_applet.reset();
 
+            // qlaunch deadlocks when ChangeIntoForeground reaches it before it has taken the
+            // applet's result and closed its accessor (its foreground handler waits on a job its
+            // paused workers hold). So in a HOME session the message follows the accessor's
+            // release, with a one-second fallback; application callers are not held. Behaviour
+            // follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+            if (m_system.GetAppletManager().IsHomeSession() &&
+                applet->type == AppletType::LibraryApplet && applet->accessor_count > 0 &&
+                !caller_applet->lifecycle_manager.IsApplication()) {
+                this->HoldForegroundMessageLocked(caller_applet, applet);
+            }
+
             // We don't need to update the activity state of the caller applet yet.
             // It will be recalculated once we fall out of the termination handling path.
         }
@@ -411,6 +591,65 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
     // If the last applet has exited, exit the system.
     if (m_applets.empty()) {
         m_system.Exit();
+    }
+}
+
+void WindowSystem::HoldForegroundMessageLocked(const std::shared_ptr<Applet>& caller,
+                                               const std::shared_ptr<Applet>& child) {
+    // Caller lock is held.
+    caller->lifecycle_manager.SetForegroundMessageHeld(m_system.Kernel(), true);
+    m_foreground_holds.push_back({
+        .caller = caller,
+        .child = child.get(),
+        .deadline_ns = (m_system.CoreTiming().GetGlobalTimeNs() + ForegroundHoldTimeout).count(),
+    });
+    m_system.CoreTiming().ScheduleEvent(ForegroundHoldTimeout, m_foreground_hold_event);
+    LOG_DEBUG(Service_AM, "am: -> pid {} ChangeIntoForeground held until its library applet is released",
+              caller->aruid.pid);
+}
+
+void WindowSystem::ReleaseForegroundHold(const Applet& child) {
+    {
+        std::scoped_lock lk{m_lock};
+        this->ReleaseForegroundHoldsLocked(&child, false);
+    }
+    this->RequestUpdate();
+}
+
+void WindowSystem::ReleaseExpiredForegroundHolds() {
+    {
+        std::scoped_lock lk{m_lock};
+        this->ReleaseForegroundHoldsLocked(nullptr, true);
+    }
+    this->RequestUpdate();
+}
+
+void WindowSystem::ReleaseForegroundHoldsLocked(const Applet* child, bool timed_out) {
+    const s64 now = m_system.CoreTiming().GetGlobalTimeNs().count();
+    std::vector<std::shared_ptr<Applet>> released;
+
+    std::erase_if(m_foreground_holds, [&](const ForegroundHold& hold) {
+        const bool matches = timed_out ? hold.deadline_ns <= now : hold.child == child;
+        if (!matches) {
+            return false;
+        }
+        if (auto caller = hold.caller.lock()) {
+            released.push_back(std::move(caller));
+        }
+        return true;
+    });
+
+    for (const auto& caller : released) {
+        const bool still_held = std::ranges::any_of(m_foreground_holds, [&](const auto& hold) {
+            return hold.caller.lock() == caller;
+        });
+        if (still_held) {
+            continue;
+        }
+        std::scoped_lock lk{caller->lock};
+        caller->lifecycle_manager.SetForegroundMessageHeld(m_system.Kernel(), false);
+        LOG_INFO(Service_AM, "am: foreground notification released for pid {} ({})",
+                 caller->aruid.pid, timed_out ? "one-second fallback" : "accessor closed");
     }
 }
 
@@ -483,6 +722,34 @@ bool WindowSystem::DoesOverlayTakeInputLocked() const {
     return this->IsOverlayOpenLocked(*m_overlay_display);
 }
 
+bool WindowSystem::IsInInputChainLocked(const Applet& applet) const {
+    // Behaviour follows the Ryujinx Harbor's GetInputRecipients (MIT-licensed Ryujinx base).
+    for (const auto& child_applet : applet.child_applets) {
+        std::scoped_lock lk{child_applet->lock};
+        if (child_applet->is_winding) {
+            return false;
+        }
+        if (!child_applet->is_process_running || !child_applet->window_visible) {
+            continue;
+        }
+        switch (child_applet->library_applet_mode) {
+        case LibraryAppletMode::AllForeground:
+        case LibraryAppletMode::AllForegroundInitiallyHidden:
+            return false;
+        case LibraryAppletMode::PartialForeground:
+        case LibraryAppletMode::PartialForegroundIndirectDisplay:
+            // An inline helper keeps its caller interactive while it is in the chain itself.
+            if (!this->IsInInputChainLocked(*child_applet)) {
+                return false;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
 void WindowSystem::UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input,
                                            s32 caller_z_index) {
     // With no applet, we don't have anything to do.
@@ -522,9 +789,15 @@ void WindowSystem::UpdateAppletStateLocked(Applet* applet, bool is_foreground, b
         is_overlay ? applet->window_visible : (is_foreground && applet->window_visible);
     applet->display_layer_manager.SetWindowVisibility(should_be_visible);
 
+    // In a HOME session only the input-focus chain reads input: the front-most applet, plus the
+    // caller of an inline (partial-foreground) helper. A caller behind a full-screen applet gets
+    // none, so presses made in that applet never reach it.
+    const bool in_input_chain =
+        !m_system.GetAppletManager().IsHomeSession() || this->IsInInputChainLocked(*applet);
     const bool needs_hid_input =
         is_overlay ? this->IsOverlayOpenLocked(*applet)
-                   : (is_foreground && applet->window_visible && !overlay_takes_input);
+                   : (is_foreground && applet->window_visible && !overlay_takes_input &&
+                      in_input_chain);
 
     applet->SetInteractibleLocked(needs_hid_input, needs_hid_input);
 
