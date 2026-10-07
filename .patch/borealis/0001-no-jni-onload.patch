@@ -1,0 +1,17 @@
+--- a/library/lib/platforms/android/android_platform.cpp
++++ b/library/lib/platforms/android/android_platform.cpp
+@@ -29,12 +29,8 @@
+ #include <borealis/core/thread.hpp>
+ #include <borealis/platforms/android/android_platform.hpp>
+ 
+-static JavaVM *mJavaVM = NULL;
+-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
+-{
+-    mJavaVM = vm;
+-    return JNI_VERSION_1_4;
+-}
++// Harbor: no JNI_OnLoad here. Borealis is linked into the emulator's library, whose SDL already defines one,
++// and nothing below uses the saved JavaVM.
+ 
+ namespace brls
+ {

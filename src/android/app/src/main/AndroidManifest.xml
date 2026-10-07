@@ -52,10 +52,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
         <meta-data android:name="com.oneplus.gamespace.gamebooster" android:value="true" />
         <meta-data android:name="android.game_mode_config" android:resource="@xml/game_mode_config" />
 
+        <!-- Harbor's launcher: boots the console's HOME menu, or opens the setup until it is ready. -->
         <activity
-            android:name="org.yuzu.yuzu_emu.ui.main.MainActivity"
+            android:name="org.yuzu.yuzu_emu.harbor.HarborStartActivity"
             android:exported="true"
-            android:theme="@style/Theme.Yuzu.Splash.Main">
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <intent-filter>
                 <action android:name="com.miui.gamecenter.GAME_BOOSTER_LAUNCH"/>
                 <action android:name="android.intent.action.MAIN" />
@@ -64,6 +66,31 @@ SPDX-License-Identifier: GPL-3.0-or-later
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The setup wizard: Borealis on SDL, in this process with Eden's own SDL3 (libyuzu-android). -->
+        <activity
+            android:name="org.yuzu.yuzu_emu.harbor.HarborSetupActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
+            android:preferMinimalPostProcessing="true" />
+
+        <!-- Starts the setup again in a fresh process (Borealis and SDL run it once per process). -->
+        <activity
+            android:name="org.yuzu.yuzu_emu.harbor.HarborRestartActivity"
+            android:exported="false"
+            android:process=":restart"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- Eden's own screens; Harbor's console mode never opens them. -->
+        <activity
+            android:name="org.yuzu.yuzu_emu.ui.main.MainActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Yuzu.Splash.Main" />
 
         <activity
             android:name="org.yuzu.yuzu_emu.features.settings.ui.SettingsActivity"

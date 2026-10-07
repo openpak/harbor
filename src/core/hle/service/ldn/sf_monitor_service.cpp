@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/ldn/ldn_results.h"
 #include "core/hle/service/ldn/ldn_types.h"
 #include "core/hle/service/ldn/sf_monitor_service.h"
 
@@ -31,10 +32,11 @@ Result ISfMonitorService::Initialize(Out<u32> out_value) {
 
 Result ISfMonitorService::GetGroupInfo(
     OutLargeData<GroupInfo, BufferAttr_HipcAutoSelect> out_group_info) {
-    LOG_WARNING(Service_LDN, "(STUBBED) called");
-
-    *out_group_info = GroupInfo{};
-    R_SUCCEED();
+    // The service copies its group state only while this unit has a role in an lp2p group, and
+    // the emulated console is never in one: invalid state (the Ryujinx Harbor's
+    // answer).
+    LOG_DEBUG(Service_LDN, "called, no lp2p group");
+    R_THROW(ResultBadState);
 }
 
 } // namespace Service::LDN

@@ -51,6 +51,10 @@ private:
     void SetBackgroundRequestEnabled(HLERequestContext& ctx);
     void GetCurrentAccessPoint(HLERequestContext& ctx);
     void GetScanDataV3(HLERequestContext& ctx);
+    void SetExclusiveClient(HLERequestContext& ctx);
+    void SetDefaultIpSetting(HLERequestContext& ctx);
+    void SetWirelessCommunicationEnabledForTest(HLERequestContext& ctx);
+    void SetEthernetCommunicationEnabledForTest(HLERequestContext& ctx);
 };
 
 } // namespace Service::NIFM

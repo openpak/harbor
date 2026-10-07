@@ -38,6 +38,7 @@ import android.view.Surface
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -54,6 +55,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
+import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.model.EmulationViewModel
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.network.NetPlayManager
@@ -396,6 +398,57 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
     }
 
+    // Harbor console mode: what runs once the session has stopped, instead of closing this screen.
+    private var harborAfterStop: (() -> Unit)? = null
+    private val harborHeldButtons = mutableSetOf<Int>()
+
+    /** Stops the console session, then runs `after` (set up again, or exit). */
+    fun harborStop(after: () -> Unit) {
+        if (!NativeLibrary.isRunning() && !NativeLibrary.isPaused()) {
+            after()
+            return
+        }
+        harborAfterStop = after
+        val fragment = harborEmulationFragment()
+        if (fragment != null) {
+            fragment.requestExit()
+        } else {
+            NativeLibrary.stopEmulation()
+        }
+    }
+
+    /** The emulation screen's fragment, for the Harbor menu's pages that reuse its settings views. */
+    fun harborEmulationFragment(): EmulationFragment? {
+        val navHost = supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
+        return navHost?.childFragmentManager?.fragments?.firstOrNull { it is EmulationFragment }
+            as? EmulationFragment
+    }
+
+    /** The user's own Lossless.dll, picked through the system file picker (Harbor menu, Frame generation). */
+    val harborLosslessPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                HarborConsole.installLosslessDll(this, uri)
+            }
+        }
+
+    // Plus and Minus held together open the Harbor menu, as Android back does.
+    private fun harborMenuChord(event: KeyEvent) {
+        val code = event.keyCode
+        if (code != KeyEvent.KEYCODE_BUTTON_START && code != KeyEvent.KEYCODE_BUTTON_SELECT) {
+            return
+        }
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                harborHeldButtons.add(code)
+                if (event.repeatCount == 0 && harborHeldButtons.size == 2) {
+                    HarborConsole.showMenu(this)
+                }
+            }
+            KeyEvent.ACTION_UP -> harborHeldButtons.remove(code)
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
 
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
@@ -421,6 +474,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
         if (isControllerInput && event.action == KeyEvent.ACTION_DOWN) {
             notifyControllerInput()
+        }
+        if (isControllerInput && HarborConsole.active) {
+            harborMenuChord(event)
         }
 
         return InputHandler.dispatchKeyEvent(event)
@@ -796,7 +852,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             launchPendingRomSwap(force = false)
         } else if (status == 0 && emulationViewModel.programChanged.value == -1) {
             processSessionGame = null
-            finish()
+            val after = harborAfterStop
+            harborAfterStop = null
+            if (after != null) {
+                after()
+            } else if (HarborConsole.active) {
+                HarborConsole.onConsoleStopped(this)
+            } else {
+                finish()
+            }
         } else if (!isWaitingForRomSwapStop) {
             processSessionGame = null
         }

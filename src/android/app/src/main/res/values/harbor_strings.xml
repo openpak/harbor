@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 tobagin
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+<resources>
+    <string name="harbor_home_title" translatable="false">HOME</string>
+    <string name="harbor_menu_title">Harbor</string>
+    <string name="harbor_menu_resume">Resume</string>
+    <string name="harbor_menu_setup_again">Set up again</string>
+    <string name="harbor_menu_exit">Exit</string>
+    <string name="harbor_menu_detach_joycons">Detach Joy-Con</string>
+    <string name="harbor_menu_attach_joycons">Attach Joy-Con</string>
+    <string name="harbor_menu_frame_gen">Frame generation</string>
+    <string name="harbor_frame_gen_restart">Harbor restarts the console to change Lossless.dll.</string>
+    <string name="harbor_close">Close</string>
+    <string name="harbor_connecting">Connecting to OpenPak…</string>
+</resources>

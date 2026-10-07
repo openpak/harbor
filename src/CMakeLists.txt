@@ -281,6 +281,11 @@ if (YUZU_CMD)
     set_target_properties(yuzu-cmd PROPERTIES OUTPUT_NAME "eden-cli")
 endif()
 
+# Harbor's first-run setup, run before the Qt frontend or from the Android launcher.
+if (ENABLE_QT OR ANDROID)
+    add_subdirectory(harbor_setup)
+endif()
+
 if (ENABLE_QT)
     add_subdirectory(qt_common)
     add_subdirectory(yuzu)

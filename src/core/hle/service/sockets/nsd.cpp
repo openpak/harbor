@@ -6,6 +6,7 @@
 
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/sockets/nsd.h"
+#include "core/hle/service/sockets/sfdnsres_redirect.h"
 
 #include "common/string_util.h"
 
@@ -63,12 +64,13 @@ NSD::NSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
     RegisterHandlers(functions);
 }
 
+// The substitutions nsd makes: '%' becomes the environment and the account names map to their
+// BaaS hosts, except accounts.nintendo.com (sfdnsres_redirect.h). Behaviour follows the Ryujinx
+// Harbor (MIT-licensed Ryujinx base).
 static std::string ResolveImpl(const std::string& fqdn_in) {
-    // The real implementation makes various substitutions.
-    // For now we just return the string as-is, which is good enough when not
-    // connecting to real Nintendo servers.
-    LOG_WARNING(Service, "(STUBBED) called, fqdn_in={}", fqdn_in);
-    return fqdn_in;
+    std::string resolved = Dns::NsdResolve(fqdn_in);
+    LOG_DEBUG(Service, "called, {} -> {}", fqdn_in, resolved);
+    return resolved;
 }
 
 static Result ResolveCommon(const std::string& fqdn_in, std::array<char, 0x100>& fqdn_out) {

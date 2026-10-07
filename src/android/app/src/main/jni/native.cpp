@@ -92,6 +92,8 @@ extern "C" {
 #include "hid_core/hid_types.h"
 #include "input_common/drivers/virtual_amiibo.h"
 #include "jni/native.h"
+#include "jni/harbor_setup_android.h"
+#include "core/openpak/boot_connection.h"
 #include "video_core/frame_gen/lossless_dll.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
@@ -295,18 +297,24 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     m_system.ApplySettings();
     Settings::LogSettings();
     m_system.HIDCore().ReloadInputDevices();
-    m_system.SetFrontendAppletSet({
-        nullptr,                     // Amiibo Settings
-        nullptr,                     // Controller Selector
-        nullptr,                     // Error Display
-        nullptr,                     // Mii Editor
-        nullptr,                     // Parental Controls
-        nullptr,                     // Photo Viewer
-        nullptr,                     // Profile Selector
-        std::move(android_keyboard), // Software Keyboard
-        std::move(android_webapplet),// Web Browser
-        nullptr,                     // Net Connect
-    });
+    if (Harbor::ConsoleMode()) {
+        // A console session runs the firmware's own keyboard and browser, never Android's.
+        m_software_keyboard = nullptr;
+        m_system.SetFrontendAppletSet({});
+    } else {
+        m_system.SetFrontendAppletSet({
+            nullptr,                     // Amiibo Settings
+            nullptr,                     // Controller Selector
+            nullptr,                     // Error Display
+            nullptr,                     // Mii Editor
+            nullptr,                     // Parental Controls
+            nullptr,                     // Photo Viewer
+            nullptr,                     // Profile Selector
+            std::move(android_keyboard), // Software Keyboard
+            std::move(android_webapplet),// Web Browser
+            nullptr,                     // Net Connect
+        });
+    }
 
     // Initialize filesystem.
     ConfigureFilesystemProvider(filepath);
@@ -331,6 +339,11 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
                 : -1,
     };
 
+    // Harbor console mode: OpenPak is connected before the console boots (the launcher already did it
+    // off the UI thread; this returns that result).
+    if (Harbor::ConsoleMode()) {
+        OpenPak::BootConnection::Run(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir));
+    }
     m_load_result = m_system.Load(EmulationSession::GetInstance().Window(), filepath, params);
     if (m_load_result != Core::SystemResultStatus::Success) {
         return m_load_result;

@@ -27,6 +27,11 @@ public:
                                  std::span<const CaCertificateId> certificate_ids);
 
 private:
+    // The id the firmware web applets ask for: every trusted certificate.
+    static constexpr u32 TrustedOnlyId = 0xFFFFFFFE;
+
+    void ApplyPinnedCa();
+
     template <typename F>
     void ForEachCertificate(std::span<const CaCertificateId> certs, F&& f);
 

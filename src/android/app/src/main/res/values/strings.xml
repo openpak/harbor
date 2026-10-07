@@ -365,7 +365,7 @@
     <string name="lossless_scaling_remove_description">Delete the installed Lossless.dll and its prepared shaders</string>
     <string name="lossless_scaling_remove_confirmation">Frame generation will stop working until you install Lossless.dll again. Your original file is not affected.</string>
     <string name="lossless_scaling_missing">Lossless.dll not installed</string>
-    <string name="lossless_scaling_missing_description">Frame generation needs a Lossless.dll, which Harbor does not provide.</string>
+    <string name="lossless_scaling_missing_description">Install it from the Harbor menu › Frame generation to use frame generation.</string>
     <string name="lossless_scaling_locked">Close the game first</string>
     <string name="lossless_scaling_locked_description">Lossless.dll cannot be changed while a game is running.</string>
     <string name="lossless_scaling_remove_unavailable">Nothing to remove</string>
