@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <mutex>
+#include <vector>
 
 #include <openssl/bio.h>
 #include <openssl/err.h>
@@ -215,6 +217,27 @@ public:
         R_SUCCEED();
     }
 
+    // Whether the verified chain's root is the pinned OpenPak CA (for the log only).
+    bool ChainEndsAtPinnedCa() const {
+        STACK_OF(X509)* const chain = SSL_get0_verified_chain(ssl);
+        const int count = chain != nullptr ? sk_X509_num(chain) : 0;
+        if (count == 0) {
+            return false;
+        }
+        unsigned char* buffer = nullptr;
+        const int length = i2d_X509(sk_X509_value(chain, count - 1), &buffer);
+        std::vector<unsigned char> pinned;
+        {
+            std::scoped_lock lock{pinned_ca_mutex};
+            pinned = Trust::PemCaToDer(pinned_ca_pem);
+        }
+        const bool same = length > 0 && buffer != nullptr &&
+                          pinned.size() == static_cast<std::size_t>(length) &&
+                          std::equal(pinned.begin(), pinned.end(), buffer);
+        OPENSSL_free(buffer);
+        return same;
+    }
+
     Result DoHandshake() override {
         // Once: a non-blocking handshake is called again until it completes.
         if (!verification_applied) {
@@ -224,6 +247,10 @@ public:
 
         const int ret = SSL_do_handshake(ssl);
 
+        if (ret == 1) {
+            LOG_DEBUG(Service_SSL, "Verified {}: the chain ends at {}", verify_name,
+                      ChainEndsAtPinnedCa() ? "the pinned OpenPak CA" : "a host root");
+        }
         if (ret <= 0) {
             const long verify_result = SSL_get_verify_result(ssl);
             if (verify_result != X509_V_OK) {
