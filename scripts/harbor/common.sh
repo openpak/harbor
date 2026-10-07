@@ -22,8 +22,8 @@ refuse_while_emulator_runs() {
         esac
     done
     hits+="$(pgrep -ax yuzu || true)"$'\n'
-    hits+="$(pgrep -af Ryujinx.dll || true)"$'\n'
-    hits+="$(pgrep -af Harbor.dll || true)"$'\n'
+    hits+="$(pgrep -af '^[^ ]*dotnet[^ ]* .*Ryujinx\.dll' || true)"$'\n'
+    hits+="$(pgrep -af '^[^ ]*dotnet[^ ]* .*Harbor\.dll' || true)"$'\n'
     hits="$(printf '%s' "$hits" | sed '/^$/d')"
     if [ -n "$hits" ]; then
         echo "An emulator is running; not building:" >&2
