@@ -4,6 +4,7 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include "common/scratch_buffer.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
@@ -40,6 +41,9 @@ private:
     u64 pid{};
     bool is_initialized{};
     NvCore::SessionId session_id{};
+    /// Device files opened through this session; closed with it, as nvservices does when the
+    /// client process exits without closing them.
+    std::vector<DeviceFD> open_fds;
     Common::ScratchBuffer<u8> output_buffer;
     Common::ScratchBuffer<u8> inline_output_buffer;
 };
