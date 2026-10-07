@@ -742,9 +742,13 @@ Result ISystemSettingsServer::GetSettingsItemValueSize(
     auto settings{GetSettings()};
     if (settings.contains(setting_category) && settings[setting_category].contains(setting_name)) {
         *out_size = settings[setting_category][setting_name].size();
+    } else {
+        // A key Eden does not carry answers success and size 0, as the Ryujinx Harbor answers:
+        // qlaunch aborts on a failure here (the connection test's netdiag overrides).
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys GetSettingsItemValueSize {}!{} missing, answered size 0",
+                             setting_category, setting_name);
     }
-
-    R_UNLESS(*out_size != 0, ResultUnknown);
     R_SUCCEED();
 }
 
@@ -757,6 +761,16 @@ Result ISystemSettingsServer::GetSettingsItemValue(
 
     LOG_INFO(Service_SET, "called, category={}, name={}", setting_category, setting_name);
 
+    const auto settings{GetSettings()};
+    if (!settings.contains(setting_category) ||
+        !settings.at(setting_category).contains(setting_name)) {
+        // As GetSettingsItemValueSize: success, nothing written, size 0.
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys GetSettingsItemValue {}!{} missing, answered size 0",
+                             setting_category, setting_name);
+        *out_size = 0;
+        R_SUCCEED();
+    }
     R_RETURN(GetSettingsItemValueImpl(out_data, *out_size, setting_category, setting_name));
 }
 
