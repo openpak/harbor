@@ -13,7 +13,14 @@ refuse_while_emulator_runs() {
     local hits=""
     hits+="$(pgrep -ax Ryujinx || true)"$'\n'
     hits+="$(pgrep -ax eden || true)"$'\n'
-    hits+="$(pgrep -aix harbor || true)"$'\n'
+    # Harbor test runs started from $SCR/run (isolated data dirs) are ours and do not block builds.
+    local pid
+    for pid in $(pgrep -ix harbor || true); do
+        case "$(readlink "/proc/$pid/cwd" 2>/dev/null)" in
+            "$SCR/run"/*) ;;
+            *) hits+="$(ps -o pid=,args= -p "$pid")"$'\n' ;;
+        esac
+    done
     hits+="$(pgrep -ax yuzu || true)"$'\n'
     hits+="$(pgrep -af Ryujinx.dll || true)"$'\n'
     hits+="$(pgrep -af Harbor.dll || true)"$'\n'
@@ -35,6 +42,11 @@ mkdir -p "$TMPDIR"
 locked() {
     flock --close "$LOCK" nice -n 19 bash -c 'refuse_while_emulator_runs; exec "$@"' _ "$@"
 }
+
+# Each worktree builds into its own directory; the main checkout keeps $SCR/build/desktop.
+WT_NAME="$(basename "$SRC")"
+if [ "$WT_NAME" = src ]; then BUILD_ROOT="$SCR/build"; else BUILD_ROOT="$SCR/build/$WT_NAME"; fi
+export SCR
 
 SHORT_SHA="$(git -C "$SRC" rev-parse --short HEAD)"
 START_TS=$(date +%s)

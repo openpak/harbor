@@ -8,7 +8,7 @@ set -euo pipefail
 
 refuse_while_emulator_runs
 
-BUILD="$SCR/build/desktop"
+BUILD="$BUILD_ROOT/desktop"
 JOBS="${NUM_JOBS:-12}"
 
 cd "$SRC"
