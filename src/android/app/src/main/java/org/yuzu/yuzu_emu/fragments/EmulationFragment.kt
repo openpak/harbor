@@ -302,7 +302,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                             }
 
                         val customConfigFile = SettingsFile.getCustomSettingsFile(gameInstance)
-                        if (customConfigFile.exists()) {
+                        // Harbor console mode: settings are console-wide (HOME and every title
+                        // launched from it), so HOME's own per-game file is never loaded.
+                        if (customConfigFile.exists() && !HarborConsole.active) {
                             shouldUseCustom = true
                             Log.info(
                                 "[EmulationFragment] Found existing custom settings for ${gameInstance.title}, loading them"

@@ -38,6 +38,7 @@ import android.view.Surface
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
@@ -408,14 +409,28 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             return
         }
         harborAfterStop = after
-        val navHost = supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
-        val fragment = navHost?.childFragmentManager?.fragments?.firstOrNull { it is EmulationFragment }
-        if (fragment is EmulationFragment) {
+        val fragment = harborEmulationFragment()
+        if (fragment != null) {
             fragment.requestExit()
         } else {
             NativeLibrary.stopEmulation()
         }
     }
+
+    /** The emulation screen's fragment, for the Harbor menu's pages that reuse its settings views. */
+    fun harborEmulationFragment(): EmulationFragment? {
+        val navHost = supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
+        return navHost?.childFragmentManager?.fragments?.firstOrNull { it is EmulationFragment }
+            as? EmulationFragment
+    }
+
+    /** The user's own Lossless.dll, picked through the system file picker (Harbor menu, Frame generation). */
+    val harborLosslessPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                HarborConsole.installLosslessDll(this, uri)
+            }
+        }
 
     // Plus and Minus held together open the Harbor menu, as Android back does.
     private fun harborMenuChord(event: KeyEvent) {

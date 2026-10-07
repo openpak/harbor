@@ -11,5 +11,8 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_menu_exit">Exit</string>
     <string name="harbor_menu_detach_joycons">Detach Joy-Con</string>
     <string name="harbor_menu_attach_joycons">Attach Joy-Con</string>
+    <string name="harbor_menu_frame_gen">Frame generation</string>
+    <string name="harbor_frame_gen_restart">Harbor restarts the console to change Lossless.dll.</string>
+    <string name="harbor_close">Close</string>
     <string name="harbor_connecting">Connecting to OpenPak…</string>
 </resources>
