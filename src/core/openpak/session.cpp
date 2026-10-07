@@ -115,6 +115,9 @@ struct Identity {
     std::uint64_t na_id = 0;
     std::string birthday;
     std::string country;
+    /// The friends surface (inbox, presence) answered 401 since the last sign-in: the server
+    /// does not hold this user as linked, so nothing social is asked again until the next one.
+    bool social_refused = false;
 };
 
 struct State {
@@ -438,6 +441,31 @@ std::shared_ptr<Identity> ActiveIdentity(State& state) {
     return it != state.identities.end() ? it->second : nullptr;
 }
 
+/// Whether the friends surface may be asked for this identity: it is linked to a Nintendo
+/// Account and the server has not refused it since its sign-in. An unlinked device account has
+/// a valid token but no friends, inbox or presence, and every ask is a 401.
+bool SocialAllowed(State& state, const std::shared_ptr<Identity>& identity) {
+    if (!identity) {
+        return false;
+    }
+    std::lock_guard lock{state.mutex};
+    return identity->linked && !identity->social_refused;
+}
+
+/// The server refused a friends call for this identity: stop asking until the next sign-in.
+void RefuseSocial(State& state, const std::shared_ptr<Identity>& identity) {
+    bool first;
+    {
+        std::lock_guard lock{state.mutex};
+        first = !identity->social_refused;
+        identity->social_refused = true;
+    }
+    if (first) {
+        LOG_INFO(WebService, "[OpenPak] The friends surface refused the active user (401): "
+                             "treated as not linked until the next sign-in");
+    }
+}
+
 /// The device account's name in the secret store: per server and per user.
 std::string DeviceSecretKey(const Endpoint& endpoint, const std::string& uid) {
     return fmt::format("device-{}-{}", endpoint.key, uid);
@@ -702,6 +730,7 @@ bool SignIn(State& state, const std::string& uid, const std::string& account_id_
             identity->thumbnail_url = login.thumbnail_url;
             identity->friend_code = login.friend_code;
             identity->linked = login.linked;
+            identity->social_refused = false;
             identity->na_id = login.na_id;
             identity->birthday = login.birthday;
             identity->country = login.country;
@@ -736,7 +765,7 @@ bool SignIn(State& state, const std::string& uid, const std::string& account_id_
 /// One presence body on the route a console's friends sysmodule uses, as the active user.
 bool SendPresence(State& state, const std::string& body) {
     const auto identity = ActiveIdentity(state);
-    if (!identity) {
+    if (!SocialAllowed(state, identity)) {
         return false;
     }
     std::string user_id;
@@ -760,6 +789,10 @@ bool SendPresence(State& state, const std::string& body) {
         baas->Patch(fmt::format("/1.0.0/users/{}/device_accounts/{}", user_id, device_id),
                     Bearer(token), body, "application/json-patch+json");
 
+    if (result && result->status == 401) {
+        RefuseSocial(state, identity);
+        return false;
+    }
     if (!result || result->status < 200 || result->status >= 300) {
         LOG_DEBUG(WebService, "[OpenPak] Presence returned {}", result ? result->status : 0);
         return false;
@@ -1190,7 +1223,7 @@ std::vector<Invitation> Invitations() {
 bool RefreshInvitations() {
     State& state = Get();
     const auto identity = ActiveIdentity(state);
-    if (!identity) {
+    if (!SocialAllowed(state, identity)) {
         return false;
     }
 
@@ -1214,10 +1247,14 @@ bool RefreshInvitations() {
 
     // Read state is not a filter: the same account signed in on a console marks these read from
     // over there, and that is no reason for this machine to have missed it.
-    const auto inbox = Parsed(
+    const auto reply =
         five->Get(fmt::format("/v2/users/{}/invitations/inbox?invitation_types=friend", user_id),
-                  Bearer(token)),
-        "invitation inbox");
+                  Bearer(token));
+    if (reply && reply->status == 401) {
+        RefuseSocial(state, identity);
+        return false;
+    }
+    const auto inbox = Parsed(reply, "invitation inbox");
 
     if (!inbox || !inbox->contains("items")) {
         return false;
@@ -1450,7 +1487,9 @@ void StartHeartbeat(std::function<std::string()> current_title_id) {
                 if (signed_in) {
                     FollowTitle(state);
                     PublishPresence(state, true);
-                    OpenPak::Baas::BackgroundSync();
+                    if (SocialAllowed(state, ActiveIdentity(state))) {
+                        OpenPak::Baas::BackgroundSync();
+                    }
                 }
 
                 if (beat) {
@@ -1468,7 +1507,8 @@ void StartHeartbeat(std::function<std::string()> current_title_id) {
                     // list at the module's 30 s cooldown, the block list, the own user and the
                     // invitation inbox -- because a console is pushed changes to them and nothing
                     // here holds a push connection to be pushed on.
-                    if (tick % InvitationEveryNthBeat == 0) {
+                    if (tick % InvitationEveryNthBeat == 0 &&
+                        SocialAllowed(state, ActiveIdentity(state))) {
                         RefreshInvitations();
                         OpenPak::Baas::BackgroundSync();
                     }

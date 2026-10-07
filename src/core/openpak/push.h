@@ -7,10 +7,11 @@
 // and keep a POST to the frontline open, reading the length-prefixed FlatBuffers frames the
 // server streams. A delivered friend request, acceptance, removal, invitation or presence change
 // re-reads the cache it concerns at once, instead of at the heartbeat's next poll, which stays
-// as the fallback.
+// as the fallback. Only a linked user holds a connection.
 //
 // Downlink only, as the console's own frontline body is empty; presence keeps going out on the
-// REST PATCH the heartbeat already makes. OPENPAK_NO_PUSH=1 turns it off.
+// REST PATCH the heartbeat already makes. OPENPAK_NO_PUSH=1 turns it off;
+// OPENPAK_SIMULATE_PUSH_DIR=<dir> feeds <name>.json files through the same handler (tests).
 
 #pragma once
 
@@ -73,14 +74,16 @@ bool Connected();
 /// A deleted user's registration (the secret store's copy), on the configured server.
 void ForgetProfile(const std::string& uid);
 
-/// Called for every delivered message after the caches it concerns were queued for a refresh,
+/// Called for every delivered message before the caches it concerns are queued for a refresh,
 /// with the event kind (the body's "type", else the message name) and the raw body, on the push
-/// thread with no lock held. The kinds the guest cares about: friend_invitation_received and
-/// presence_updated (FriendsOverlayNotifier), DID_CHANGE_PARENTAL_CONTROL_SETTING and
-/// DID_UNLINK_NX (pctl). A consumer that signals a guest event posts it to its own session's
+/// thread with no lock held. Each consumer installs its own hook under its own name ("friends",
+/// "pctl"); setting a name again replaces that consumer's hook, an empty hook removes it. The
+/// kinds the guest cares about: friend_invitation_received, presence_updated and
+/// friend_request_received (the friends overlay notifier), DID_CHANGE_PARENTAL_CONTROL_SETTING
+/// and DID_UNLINK_NX (pctl). A consumer that signals a guest event posts it to its own session's
 /// AsyncWorker; it never signals from this thread. Must not throw.
 using Hook = std::function<void(const std::string& kind, const std::string& body)>;
-void SetHook(Hook hook);
+void SetHook(std::string name, Hook hook);
 
 /// The active user's Penne registration id (pctl's notificationToken), or empty when it has none
 /// yet.
