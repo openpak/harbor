@@ -28,10 +28,13 @@ public:
     ~IECommerceInterface() override;
 
 private:
-    // [Harbor] 0-3: requests a console sends to the eShop's licence server through nim. OpenPak
+    // [Harbor] 0-4: requests a console sends to the eShop's licence server through nim. OpenPak
     // runs no licence service, so each completes at once and changes nothing.
     Result RequestLinkDevice(OutCopyHandle<Kernel::KReadableEvent> out_event,
                              OutInterface<ICompletedAsyncResult> out_result, Common::UUID user_id);
+    Result RequestUnlinkDevice(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                               OutInterface<ICompletedAsyncResult> out_result,
+                               Common::UUID user_id);
     Result RequestCleanupAllPreInstalledApplications(
         OutCopyHandle<Kernel::KReadableEvent> out_event,
         OutInterface<ICompletedAsyncResult> out_result);

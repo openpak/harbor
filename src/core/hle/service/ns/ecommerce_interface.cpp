@@ -131,7 +131,7 @@ IECommerceInterface::IECommerceInterface(Core::System& system_)
         {2, D<&IECommerceInterface::RequestCleanupPreInstalledApplication>,
             "RequestCleanupPreInstalledApplication"},
         {3, D<&IECommerceInterface::RequestSyncRights>, "RequestSyncRights"},
-        {4, nullptr, "RequestUnlinkDevice"},
+        {4, D<&IECommerceInterface::RequestUnlinkDevice>, "RequestUnlinkDevice"},
         {5, nullptr, "RequestRevokeAllELicense"},
         {6, nullptr, "RequestSyncRightsBasedOnAssignedELicenses"},
         {8, D<&IECommerceInterface::PrefetchForLhub>, "PrefetchForLhub"},
@@ -146,8 +146,8 @@ IECommerceInterface::IECommerceInterface(Core::System& system_)
 
 IECommerceInterface::~IECommerceInterface() = default;
 
-// [Harbor] 3 behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base); 0-2 are answered
-// the same way. Shapes are qlaunch's and systemWeb's encoders (0 and 4 take a Uid, 2 an
+// [Harbor] 3 behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base); 0-2 and 4 are
+// answered the same way. Shapes are qlaunch's and systemWeb's encoders (0 and 4 take a Uid, 2 an
 // ApplicationId, 1 and 3 nothing; each answers an event and an IAsyncResult). systemWeb sends 1-4
 // only when a page asks; qlaunch sends 0 and 4.
 
@@ -158,6 +158,16 @@ Result IECommerceInterface::RequestLinkDevice(OutCopyHandle<Kernel::KReadableEve
     // keeps no device link, so the request completes like 3.
     LOG_UNKNOWN_CONTRACT(Service_NS,
                          "ns:ec 0 RequestLinkDevice: no OpenPak device link, completes");
+    Completed(out_event, out_result);
+    R_SUCCEED();
+}
+
+Result IECommerceInterface::RequestUnlinkDevice(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                OutInterface<ICompletedAsyncResult> out_result,
+                                                Common::UUID /*user_id*/) {
+    // The reverse of 0: with no OpenPak device link there is nothing to undo.
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "ns:ec 4 RequestUnlinkDevice: no OpenPak device link, completes");
     Completed(out_event, out_result);
     R_SUCCEED();
 }
