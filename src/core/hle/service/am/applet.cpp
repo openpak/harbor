@@ -65,9 +65,12 @@ void Applet::UpdateSuspensionStateLocked(bool force_message) {
 }
 
 void Applet::SetInteractibleLocked(bool pad_interactible, bool touch_interactible) {
-    if (is_pad_interactible == pad_interactible && is_touch_interactible == touch_interactible) {
+    // The first state is always applied: hid keeps an aruid without input until told otherwise.
+    if (input_state_applied && is_pad_interactible == pad_interactible &&
+        is_touch_interactible == touch_interactible) {
         return;
     }
+    input_state_applied = true;
 
     is_pad_interactible = pad_interactible;
     is_touch_interactible = touch_interactible;

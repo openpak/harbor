@@ -134,6 +134,7 @@ struct Applet {
     bool is_activity_runnable{};
     bool is_pad_interactible{true};
     bool is_touch_interactible{true};
+    bool input_state_applied{false};
     bool window_visible{true};
     bool overlay_watching_short_home_button{false};
     bool overlay_handling_touch_input{false};
