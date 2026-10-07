@@ -9,6 +9,7 @@
 #include "core/file_sys/romfs.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ssl/cert_store.h"
+#include "core/hle/service/ssl/ssl_backend.h"
 
 namespace Service::SSL {
 
@@ -75,11 +76,54 @@ CertStore::CertStore(Core::System& system) {
 
 CertStore::~CertStore() = default;
 
+// System certificate 1033 (DST Root CA X3) is answered with the pinned OpenPak CA when there is
+// one: Stardew Valley asks for that root itself, and handing it the CA keeps the title's own
+// verification intact without touching its code. Read per request, so a CA written after boot
+// is picked up. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+void CertStore::ApplyPinnedCa() {
+    std::vector<u8> der = LoadPinnedCaDer();
+    if (der.empty()) {
+        return;
+    }
+    auto& entry = m_certs[CaCertificateId::DSTRootCAX3];
+    if (entry.der_data == der) {
+        return;
+    }
+    if (entry.der_data.empty()) {
+        entry.status = TrustedCertStatus::EnabledTrusted;
+    }
+    entry.der_data = std::move(der);
+    LOG_INFO(Service_SSL, "System certificate 1033 is the pinned OpenPak CA");
+}
+
 template <typename F>
 void CertStore::ForEachCertificate(std::span<const CaCertificateId> certificate_ids, F&& f) {
-    if (certificate_ids.size() == 1 && certificate_ids.front() == CaCertificateId::All) {
+    // All anywhere in the list means every certificate. 0xFFFFFFFE, which the firmware web
+    // applets send to seed their own TLS stack, is answered as every certificate whose status is
+    // EnabledTrusted: what a browser's trust store holds (the Ryujinx Harbor's reading of
+    // systemWeb's SdkCertSet; no public source names it).
+    bool all = false;
+    bool trusted_only = false;
+    for (const auto certificate_id : certificate_ids) {
+        if (certificate_id == CaCertificateId::All) {
+            all = true;
+            break;
+        }
+        if (static_cast<u32>(certificate_id) == TrustedOnlyId) {
+            all = true;
+            trusted_only = true;
+            break;
+        }
+    }
+    if (all) {
+        if (trusted_only) {
+            LOG_WARNING(Service_SSL, "unknown contract: ssl GetCertificates id 0xFFFFFFFE, "
+                                     "answered with the EnabledTrusted certificates");
+        }
         for (const auto& entry : m_certs) {
-            f(entry);
+            if (!trusted_only || entry.second.status == TrustedCertStatus::EnabledTrusted) {
+                f(entry);
+            }
         }
     } else {
         for (const auto certificate_id : certificate_ids) {
@@ -94,6 +138,8 @@ void CertStore::ForEachCertificate(std::span<const CaCertificateId> certificate_
 
 Result CertStore::GetCertificates(u32* out_num_entries, std::span<u8> out_data,
                                   std::span<const CaCertificateId> certificate_ids) {
+    ApplyPinnedCa();
+
     // Ensure the buffer is large enough to hold the output.
     u32 required_size;
     R_TRY(this->GetCertificateBufSize(std::addressof(required_size), out_num_entries,
@@ -140,6 +186,8 @@ Result CertStore::GetCertificates(u32* out_num_entries, std::span<u8> out_data,
 
 Result CertStore::GetCertificateBufSize(u32* out_size, u32* out_num_entries,
                                         std::span<const CaCertificateId> certificate_ids) {
+    ApplyPinnedCa();
+
     // Output size is at least the size of the terminator entry.
     *out_size = sizeof(BuiltInCertificateInfo);
     *out_num_entries = 0;
