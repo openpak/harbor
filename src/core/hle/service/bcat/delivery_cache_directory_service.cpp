@@ -17,7 +17,7 @@ namespace Service::BCAT {
 
 // The digest is only used to determine if a file is unique compared to others of the same name.
 // Since the algorithm isn't ever checked in game, MD5 is safe.
-static BcatDigest DigestFile(const FileSys::VirtualFile& file) {
+BcatDigest DigestFile(const FileSys::VirtualFile& file) {
     BcatDigest out{};
     const auto bytes = file->ReadAllBytes();
 

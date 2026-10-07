@@ -4,6 +4,7 @@
 #include "common/string_util.h"
 #include "core/hle/service/bcat/bcat_result.h"
 #include "core/hle/service/bcat/bcat_util.h"
+#include "core/hle/service/bcat/delivery_cache_directory_service.h"
 #include "core/hle/service/bcat/delivery_cache_file_service.h"
 #include "core/hle/service/cmif_serialization.h"
 
@@ -54,7 +55,9 @@ Result IDeliveryCacheFileService::Read(Out<u64> out_buffer_size, u64 offset,
 
     R_UNLESS(current_file != nullptr, ResultNoOpenEntry);
 
-    *out_buffer_size = std::min<u64>(current_file->GetSize() - offset, out_buffer.size());
+    // An offset past the end reads nothing.
+    const u64 size = current_file->GetSize();
+    *out_buffer_size = offset >= size ? 0 : std::min<u64>(size - offset, out_buffer.size());
     const auto buffer = current_file->ReadBytes(*out_buffer_size, offset);
     memcpy(out_buffer.data(), buffer.data(), buffer.size());
 
@@ -75,7 +78,7 @@ Result IDeliveryCacheFileService::GetDigest(Out<BcatDigest> out_digest) {
 
     R_UNLESS(current_file != nullptr, ResultNoOpenEntry);
 
-    //*out_digest = DigestFile(current_file);
+    *out_digest = DigestFile(current_file);
     R_SUCCEED();
 }
 

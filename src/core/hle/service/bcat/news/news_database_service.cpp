@@ -4,157 +4,105 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "core/hle/service/bcat/news/news_database_service.h"
-#include "core/hle/service/bcat/news/builtin_news.h"
-#include "core/hle/service/bcat/news/news_storage.h"
-#include "core/hle/service/cmif_serialization.h"
-
 #include <algorithm>
 #include <cstring>
+
+#include "core/hle/service/bcat/news/news_database_service.h"
+#include "core/hle/service/bcat/news/news_query.h"
+#include "core/hle/service/bcat/news/news_shared.h"
+#include "core/hle/service/cmif_serialization.h"
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 
 namespace Service::News {
 namespace {
 
-std::string_view ToStringView(std::span<const u8> buf) {
-    if (buf.empty()) return {};
-    auto data = reinterpret_cast<const char*>(buf.data());
-    return {data, strnlen(data, buf.size())};
-}
+// 2125-0203: what hardware returned for a WHERE it would not evaluate. A query outside NewsQuery's
+// grammar fails the same way.
+constexpr Result ResultInvalidQuery{ErrorModule::News, 203};
 
-std::string_view ToStringView(std::span<const char> buf) {
-    if (buf.empty()) return {};
-    return {buf.data(), strnlen(buf.data(), buf.size())};
-}
-
-bool UpdateField(NewsRecord& rec, std::string_view column, s32 value, bool additive) {
-    auto apply = [&](s32& field) {
-        field = additive ? field + value : value;
-        return true;
-    };
-
-    if (column == "read") return apply(rec.read);
-    if (column == "newly") return apply(rec.newly);
-    if (column == "displayed") return apply(rec.displayed);
-    if (column == "extra1" || column == "extra_1") return apply(rec.extra1);
-    if (column == "extra2" || column == "extra_2") return apply(rec.extra2);
-
-    // Accept but ignore fields that don't exist in our struct
-    return column == "priority" || column == "decoration_type" ||
-           column == "feedback" || column == "category";
+std::string_view TextOf(std::span<const u8> buffer) {
+    const auto* text = reinterpret_cast<const char*>(buffer.data());
+    return {text, strnlen(text, buffer.size())};
 }
 
 } // namespace
 
-INewsDatabaseService::INewsDatabaseService(Core::System& system_)
-    : ServiceFramework{system_, "INewsDatabaseService"} {
+INewsDatabaseService::INewsDatabaseService(Core::System& system_,
+                                           std::shared_ptr<NewsShared> shared_)
+    : ServiceFramework{system_, "INewsDatabaseService"}, shared{std::move(shared_)} {
+    // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&INewsDatabaseService::GetListV1>, "GetListV1"},
         {1, D<&INewsDatabaseService::Count>, "Count"},
-        {2, D<&INewsDatabaseService::CountWithKey>, "CountWithKey"},
+        {2, nullptr, "CountWithKey"},
         {3, D<&INewsDatabaseService::UpdateIntegerValue>, "UpdateIntegerValue"},
         {4, D<&INewsDatabaseService::UpdateIntegerValueWithAddition>, "UpdateIntegerValueWithAddition"},
-        {5, D<&INewsDatabaseService::UpdateStringValue>, "UpdateStringValue"},
+        {5, nullptr, "UpdateStringValue"},
         {1000, D<&INewsDatabaseService::GetList>, "GetList"},
     };
+    // clang-format on
+
     RegisterHandlers(functions);
 }
 
 INewsDatabaseService::~INewsDatabaseService() = default;
 
 Result INewsDatabaseService::Count(Out<s32> out_count, InBuffer<BufferAttr_HipcPointer> where) {
-    EnsureBuiltinNewsLoaded();
-    *out_count = static_cast<s32>(NewsStorage::Instance().ListAll().size());
+    try {
+        *out_count = static_cast<s32>(shared->store.Query(TextOf(where), {}).size());
+    } catch (const QueryError& e) {
+        LOG_WARNING(Service_BCAT, "News count query rejected: {}", e.what());
+        R_RETURN(ResultInvalidQuery);
+    }
     R_SUCCEED();
 }
 
-Result INewsDatabaseService::CountWithKey(Out<s32> out_count,
-                                          InBuffer<BufferAttr_HipcPointer> key,
-                                          InBuffer<BufferAttr_HipcPointer> where) {
-    EnsureBuiltinNewsLoaded();
-    *out_count = static_cast<s32>(NewsStorage::Instance().ListAll().size());
-    R_SUCCEED();
-}
-
-Result INewsDatabaseService::UpdateIntegerValue(u32 value,
-                                                InBuffer<BufferAttr_HipcPointer> key,
+Result INewsDatabaseService::UpdateIntegerValue(InBuffer<BufferAttr_HipcPointer> column,
+                                                s32 value,
                                                 InBuffer<BufferAttr_HipcPointer> where) {
-    const auto column = ToStringView(key);
-    for (const auto& rec : NewsStorage::Instance().ListAll()) {
-        NewsStorage::Instance().UpdateRecord(
-            ToStringView(rec.news_id), {},
-            [&](NewsRecord& r) { UpdateField(r, column, static_cast<s32>(value), false); });
+    try {
+        const int rows = shared->store.Update(TextOf(column), value, false, TextOf(where));
+        LOG_DEBUG(Service_BCAT, "News set {} {}: {} row(s)", TextOf(column), value, rows);
+    } catch (const QueryError& e) {
+        LOG_WARNING(Service_BCAT, "News update of '{}' rejected: {}", TextOf(column), e.what());
+        R_RETURN(ResultInvalidQuery);
     }
     R_SUCCEED();
 }
 
-Result INewsDatabaseService::UpdateIntegerValueWithAddition(u32 value,
-                                                            InBuffer<BufferAttr_HipcPointer> key,
-                                                            InBuffer<BufferAttr_HipcPointer> where) {
-    const auto column = ToStringView(key);
-    const auto where_str = ToStringView(where);
-
-    // Extract news_id from where clause like "N_SWITCH(news_id,'LA00000000000123456',1,0)=1"
-    auto extract_news_id = [](std::string_view w) -> std::string {
-        auto pos = w.find("'LA");
-        if (pos == std::string_view::npos) return {};
-        pos++; // skip the '
-        auto end = w.find("'", pos);
-        if (end == std::string_view::npos) return {};
-        return std::string(w.substr(pos, end - pos));
-    };
-
-    const auto news_id = extract_news_id(where_str);
-
-    if (column == "read" && value > 0 && !news_id.empty()) {
-        NewsStorage::Instance().MarkAsRead(news_id);
-    } else if (!news_id.empty()) {
-        NewsStorage::Instance().UpdateRecord(news_id, {},
-            [&](NewsRecord& r) { UpdateField(r, column, static_cast<s32>(value), true); });
+Result INewsDatabaseService::UpdateIntegerValueWithAddition(
+    InBuffer<BufferAttr_HipcPointer> column, s32 value, InBuffer<BufferAttr_HipcPointer> where) {
+    try {
+        const int rows = shared->store.Update(TextOf(column), value, true, TextOf(where));
+        LOG_DEBUG(Service_BCAT, "News add {} {}: {} row(s)", TextOf(column), value, rows);
+    } catch (const QueryError& e) {
+        LOG_WARNING(Service_BCAT, "News update of '{}' rejected: {}", TextOf(column), e.what());
+        R_RETURN(ResultInvalidQuery);
     }
-
-    R_SUCCEED();
-}
-
-Result INewsDatabaseService::UpdateStringValue(InBuffer<BufferAttr_HipcPointer> key,
-                                               InBuffer<BufferAttr_HipcPointer> value,
-                                               InBuffer<BufferAttr_HipcPointer> where) {
-    LOG_WARNING(Service_BCAT, "(STUBBED) UpdateStringValue");
     R_SUCCEED();
 }
 
 Result INewsDatabaseService::GetListV1(Out<s32> out_count,
                                        OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                        InBuffer<BufferAttr_HipcPointer> where,
-                                       InBuffer<BufferAttr_HipcPointer> order,
-                                       s32 offset) {
-    EnsureBuiltinNewsLoaded();
-
-    auto record_size = sizeof(NewsRecordV1);
-
-    if (out_buffer.size() < record_size) {
-        *out_count = 0;
-        R_SUCCEED();
+                                       InBuffer<BufferAttr_HipcPointer> order, s32 offset) {
+    std::vector<NewsRow> rows;
+    try {
+        rows = shared->store.Query(TextOf(where), TextOf(order));
+    } catch (const QueryError& e) {
+        LOG_WARNING(Service_BCAT, "News list query rejected: {}", e.what());
+        R_RETURN(ResultInvalidQuery);
     }
 
-    std::memset(out_buffer.data(), 0, out_buffer.size());
-
-    const auto list = NewsStorage::Instance().ListAll();
-    const size_t start = static_cast<size_t>(std::max(0, offset));
-    const size_t max_records = out_buffer.size() / record_size;
-    const size_t available = start < list.size() ? list.size() - start : 0;
-    const size_t count = (std::min)(max_records, available);
+    const size_t start = static_cast<size_t>((std::max)(offset, 0));
+    const size_t capacity = out_buffer.size() / sizeof(NewsRecordV1);
+    const size_t count = (std::min)(start < rows.size() ? rows.size() - start : 0, capacity);
 
     for (size_t i = 0; i < count; ++i) {
-        const auto& src = list[start + i];
-        NewsRecordV1 dst{};
-        std::memcpy(dst.news_id.data(), src.news_id.data(), dst.news_id.size());
-        std::memcpy(dst.user_id.data(), src.user_id.data(), dst.user_id.size());
-        dst.received_time = src.received_time;
-        dst.read = src.read;
-        dst.newly = src.newly;
-        dst.displayed = src.displayed;
-        dst.extra1 = src.extra1;
-        std::memcpy(out_buffer.data() + i * record_size, &dst, record_size);
+        NewsRecordV1 record;
+        rows[start + i].ToWireV1(record);
+        std::memcpy(out_buffer.data() + i * sizeof(NewsRecordV1), &record, sizeof(record));
     }
 
     *out_count = static_cast<s32>(count);
@@ -164,30 +112,26 @@ Result INewsDatabaseService::GetListV1(Out<s32> out_count,
 Result INewsDatabaseService::GetList(Out<s32> out_count,
                                      OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                      InBuffer<BufferAttr_HipcPointer> where,
-                                     InBuffer<BufferAttr_HipcPointer> order,
-                                     s32 offset) {
-    EnsureBuiltinNewsLoaded();
-    NewsStorage::Instance().ResetOpenCounter();
-
-    auto record_size = sizeof(NewsRecord);
-
-    if (out_buffer.size() < record_size) {
-        *out_count = 0;
-        R_SUCCEED();
+                                     InBuffer<BufferAttr_HipcPointer> order, s32 offset) {
+    std::vector<NewsRow> rows;
+    try {
+        rows = shared->store.Query(TextOf(where), TextOf(order));
+    } catch (const QueryError& e) {
+        LOG_WARNING(Service_BCAT, "News list query rejected: {}", e.what());
+        R_RETURN(ResultInvalidQuery);
     }
 
-    std::memset(out_buffer.data(), 0, out_buffer.size());
+    const size_t start = static_cast<size_t>((std::max)(offset, 0));
+    const size_t capacity = out_buffer.size() / sizeof(NewsRecord);
+    const size_t count = (std::min)(start < rows.size() ? rows.size() - start : 0, capacity);
 
-    const auto list = NewsStorage::Instance().ListAll();
-    const size_t start = static_cast<size_t>(std::max(0, offset));
-    const size_t max_records = out_buffer.size() / record_size;
-    const size_t available = start < list.size() ? list.size() - start : 0;
-    const size_t count = (std::min)(max_records, available);
-
-    if (count > 0) {
-        std::memcpy(out_buffer.data(), list.data() + start, count * record_size);
+    for (size_t i = 0; i < count; ++i) {
+        NewsRecord record;
+        rows[start + i].ToWire(record);
+        std::memcpy(out_buffer.data() + i * sizeof(NewsRecord), &record, sizeof(record));
     }
 
+    LOG_DEBUG(Service_BCAT, "News list from {}: {} of {}", start, count, rows.size());
     *out_count = static_cast<s32>(count);
     R_SUCCEED();
 }
