@@ -13,12 +13,17 @@
 namespace Service::BCAT {
 
 ProgressServiceBackend::ProgressServiceBackend(Core::System& system, std::string_view event_name)
-    : service_context{system, "ProgressServiceBackend"}
+    : service_context{system, "ProgressServiceBackend"}, liveness{std::make_shared<Liveness>()}
 {
+    liveness->target = this;
     update_event = service_context.CreateEvent("ProgressServiceBackend:UpdateEvent:" + std::string(event_name));
 }
 
 ProgressServiceBackend::~ProgressServiceBackend() {
+    {
+        std::scoped_lock lock{liveness->mutex};
+        liveness->target = nullptr;
+    }
     service_context.CloseEvent(update_event);
 }
 

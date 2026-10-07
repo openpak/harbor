@@ -539,6 +539,10 @@ add_library(core STATIC
     hle/service/audio/hardware_opus_decoder.h
     hle/service/bcat/backend/backend.cpp
     hle/service/bcat/backend/backend.h
+    hle/service/bcat/backend/openpak_backend.cpp
+    hle/service/bcat/backend/openpak_backend.h
+    hle/service/bcat/backend/openpak_bcat.cpp
+    hle/service/bcat/backend/openpak_bcat.h
     hle/service/bcat/bcat.cpp
     hle/service/bcat/bcat.h
     hle/service/bcat/bcat_result.h
@@ -554,6 +558,8 @@ add_library(core STATIC
     hle/service/bcat/delivery_cache_progress_service.h
     hle/service/bcat/delivery_cache_storage_service.cpp
     hle/service/bcat/delivery_cache_storage_service.h
+    hle/service/bcat/delivery_task_suspension_service.cpp
+    hle/service/bcat/delivery_task_suspension_service.h
     hle/service/bcat/openpak_fetch.cpp
     hle/service/bcat/openpak_fetch.h
     hle/service/bcat/news/newly_arrived_event_holder.cpp

@@ -19,6 +19,7 @@ namespace Service::BCAT {
 class BcatBackend;
 class IDeliveryCacheStorageService;
 class IDeliveryCacheProgressService;
+class IDeliveryTaskSuspensionService;
 
 class IBcatService final : public ServiceFramework<IBcatService> {
 public:
@@ -30,6 +31,9 @@ private:
 
     Result RequestSyncDeliveryCacheWithDirectoryName(
         const DirectoryName& name, OutInterface<IDeliveryCacheProgressService> out_interface);
+
+    Result RequestSuspendDeliveryTask(u64 application_id,
+                                      OutInterface<IDeliveryTaskSuspensionService> out_interface);
 
     Result SetPassphrase(u64 application_id, InBuffer<BufferAttr_HipcPointer> passphrase_buffer);
 

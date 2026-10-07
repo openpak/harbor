@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/core.h"
+#include "core/hle/service/bcat/backend/openpak_backend.h"
 #include "core/hle/service/bcat/bcat_service.h"
 #include "core/hle/service/bcat/delivery_cache_storage_service.h"
 #include "core/hle/service/bcat/service_creator.h"
@@ -15,7 +16,8 @@ namespace Service::BCAT {
 
 std::unique_ptr<BcatBackend> CreateBackendFromSettings([[maybe_unused]] Core::System& system,
                                                        DirectoryGetter getter) {
-    return std::make_unique<NullBcatBackend>(std::move(getter));
+    // Harbor delivers OpenPak's data; with no fetcher it serves what an earlier run cached.
+    return std::make_unique<OpenPakBcatBackend>(std::move(getter));
 }
 
 IServiceCreator::IServiceCreator(Core::System& system_, const char* name_)
@@ -41,8 +43,9 @@ IServiceCreator::~IServiceCreator() = default;
 Result IServiceCreator::CreateBcatService(ClientProcessId process_id,
                                           OutInterface<IBcatService> out_interface) {
     LOG_INFO(Service_BCAT, "called, process_id={}", process_id.pid);
-    *out_interface =
-        std::make_shared<IBcatService>(system, *backend, system.ResolveCallerProgramId(*process_id));
+    const auto title_id = system.ResolveCallerProgramId(*process_id);
+    backend->Prepare(system.Kernel(), title_id);
+    *out_interface = std::make_shared<IBcatService>(system, *backend, title_id);
     R_SUCCEED();
 }
 
@@ -51,6 +54,7 @@ Result IServiceCreator::CreateDeliveryCacheStorageService(
     LOG_INFO(Service_BCAT, "called, process_id={}", process_id.pid);
 
     const auto title_id = system.ResolveCallerProgramId(*process_id);
+    backend->Prepare(system.Kernel(), title_id);
     *out_interface =
         std::make_shared<IDeliveryCacheStorageService>(system, fsc.GetBCATDirectory(title_id));
     R_SUCCEED();
@@ -59,6 +63,7 @@ Result IServiceCreator::CreateDeliveryCacheStorageService(
 Result IServiceCreator::CreateDeliveryCacheStorageServiceWithApplicationId(
     u64 application_id, OutInterface<IDeliveryCacheStorageService> out_interface) {
     LOG_DEBUG(Service_BCAT, "called, application_id={:016X}", application_id);
+    backend->Prepare(system.Kernel(), application_id);
     *out_interface = std::make_shared<IDeliveryCacheStorageService>(
         system, fsc.GetBCATDirectory(application_id));
     R_SUCCEED();
