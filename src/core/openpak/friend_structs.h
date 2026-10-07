@@ -336,17 +336,39 @@ static_assert(offsetof(FriendImpl, is_favourite) == 0x120);
 static_assert(offsetof(FriendImpl, is_new) == 0x121);
 static_assert(offsetof(FriendImpl, is_valid) == 0x128);
 
-/// One friend as a viewer port reads them (20105 / 20106, friends contract §B.3): the same
-/// friend as FriendImpl with the thumbnail URL in it, and the presence blob filled without the
-/// privacy filter.
+/// A friend's cached presence block as the viewer records carry it, copied raw by friends
+/// 23.0.1 0x1947e0 (parser 0x1b0020/0x1b0170; Ghidra addresses, ELF vaddr = address - 0x100000):
+/// 0xE8 bytes, not the 0xE0 FriendPresenceImpl that 10101/10102 build. With state 0 only the
+/// first 0x20 bytes are kept, and only while updated_at > 0.
+struct ViewerPresenceImpl {
+    std::uint64_t application_id;    ///< presence.extras.friends.appInfo:appId
+    std::uint32_t unknown_0x08;      ///< never parsed
+    std::uint8_t acd_index;          ///< appInfo:acdIndex
+    std::uint8_t pad_0x0d[3];
+    std::uint64_t presence_group_id; ///< appInfo:presenceGroupId
+    std::int64_t updated_at;
+    std::uint8_t state; ///< 0 offline, 1 online, 2 playing
+    std::uint8_t pf;    ///< presence.pf; meaning not established, not carried by the cache
+    std::uint8_t pad_0x22[6];
+    std::uint8_t app_field[kAppKeyValueSize];
+};
+static_assert(sizeof(ViewerPresenceImpl) == 0xE8);
+static_assert(offsetof(ViewerPresenceImpl, acd_index) == 0x0C);
+static_assert(offsetof(ViewerPresenceImpl, presence_group_id) == 0x10);
+static_assert(offsetof(ViewerPresenceImpl, updated_at) == 0x18);
+static_assert(offsetof(ViewerPresenceImpl, state) == 0x20);
+static_assert(offsetof(ViewerPresenceImpl, pf) == 0x21);
+static_assert(offsetof(ViewerPresenceImpl, app_field) == 0x28);
+
+/// One friend as a viewer port reads them (20105 / 20106; friends 23.0.1 0x19b990): the thumbnail
+/// URL in the record and the cached presence block, its blob never filtered.
 struct FriendForViewerImpl {
     Uid user_id;
     std::uint64_t network_user_id;
     Nickname nickname;
     std::uint8_t pad_0x39[7];
     char thumbnail_url[kThumbnailUrlSize];
-    FriendPresenceImpl presence;
-    std::uint8_t pad_0x1c0[8];
+    ViewerPresenceImpl presence;
     std::uint8_t is_favourite;
     std::uint8_t is_new;
     std::uint8_t pad_0x1ca[6];
@@ -359,6 +381,29 @@ static_assert(offsetof(FriendForViewerImpl, presence) == 0xE0);
 static_assert(offsetof(FriendForViewerImpl, is_favourite) == 0x1C8);
 static_assert(offsetof(FriendForViewerImpl, is_new) == 0x1C9);
 static_assert(offsetof(FriendForViewerImpl, is_valid) == 0x1D0);
+
+/// The same as 20108 / 20109 write it (friends 23.0.1 0x19ae90, 0x19bb90): V1 up to the
+/// presence, then the friend note, the flags moved behind it. qlaunch's 23.0.1 Friend List reads
+/// 20108; overlayDisp takes the online pop-up's nickname from 20109.
+struct FriendForViewerImplV2 {
+    Uid user_id;
+    std::uint64_t network_user_id;
+    Nickname nickname;
+    std::uint8_t pad_0x39[7];
+    char thumbnail_url[kThumbnailUrlSize];
+    ViewerPresenceImpl presence;
+    char friend_note[0x51]; ///< $.items[*].friendNote
+    std::uint8_t is_favourite;
+    std::uint8_t is_new;
+    std::uint8_t pad_0x21b[4];
+    std::uint8_t is_valid;
+};
+static_assert(sizeof(FriendForViewerImplV2) == 0x220);
+static_assert(offsetof(FriendForViewerImplV2, presence) == 0xE0);
+static_assert(offsetof(FriendForViewerImplV2, friend_note) == 0x1C8);
+static_assert(offsetof(FriendForViewerImplV2, is_favourite) == 0x219);
+static_assert(offsetof(FriendForViewerImplV2, is_new) == 0x21A);
+static_assert(offsetof(FriendForViewerImplV2, is_valid) == 0x21F);
 
 /// One friend's profile page, as 20102 and 20107 return it (friends contract §B.3).
 ///
@@ -905,10 +950,13 @@ std::vector<Baas::Friend> Filtered(const std::vector<Baas::Friend>& friends,
 FriendImpl ToFriendImpl(const Baas::Friend& friend_, const Uid& user_id,
                         std::uint64_t own_presence_group_id, bool viewer);
 
-/// One friend as a viewer port reads them (20105 / 20106): the thumbnail URL is in the struct,
-/// and the presence blob is never filtered -- a viewer is trusted with it.
+/// One friend as a viewer port reads them (20105 / 20106, and 20108 / 20109 with the note): the
+/// thumbnail URL is in the record, and the presence blob is never filtered -- a viewer is trusted
+/// with it.
 FriendForViewerImpl ToFriendForViewerImpl(const Baas::Friend& friend_, const Uid& user_id,
                                           std::uint64_t own_presence_group_id);
+FriendForViewerImplV2 ToFriendForViewerImplV2(const Baas::Friend& friend_, const Uid& user_id,
+                                              std::uint64_t own_presence_group_id);
 
 /// One friend's profile page (20102 / 20107).
 FriendDetailedInfoImpl ToDetailedInfoImpl(const Baas::Friend& friend_, const Uid& user_id);

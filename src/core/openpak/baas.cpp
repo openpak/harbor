@@ -922,6 +922,12 @@ int SyncInvitations() {
 }
 
 void WarmUsers(const std::vector<std::uint64_t>& ids) {
+    // Nobody signed in can ask: nothing is marked as asked either, so the ids are still wanted
+    // once somebody is.
+    if (!Ready()) {
+        return;
+    }
+
     State& state = Get();
     std::vector<std::uint64_t> wanted;
     {
@@ -933,7 +939,7 @@ void WarmUsers(const std::vector<std::uint64_t>& ids) {
         }
     }
 
-    if (wanted.empty() || !Ready()) {
+    if (wanted.empty()) {
         return;
     }
 
