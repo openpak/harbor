@@ -453,6 +453,7 @@ bool WindowSystem::IsHomeButtonShortPressBlocked() {
 }
 
 void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
+    LOG_INFO(Service_AM, "system button press, type={}", static_cast<u32>(type));
     std::scoped_lock lk{m_lock};
     if (m_system.GetAppletManager().IsHomeSession()) {
         this->RouteSystemButtonLocked(type);

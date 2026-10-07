@@ -21,6 +21,7 @@
 #include "launch_timestamp_cache.h"
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
+#include "core/debug/thread_dump.h"
 #include "core/debugger/debugger.h"
 #include "core/device_memory.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -932,6 +933,10 @@ void System::RegisterCoreThread(std::size_t id) {
 
 void System::RegisterHostThread() {
     impl->kernel.RegisterHostThread();
+}
+
+void System::LogGuestThreads() {
+    Debug::LogGuestThreads(*this);
 }
 
 bool System::IsMulticore() const {
