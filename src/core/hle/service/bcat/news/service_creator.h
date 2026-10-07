@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
 
@@ -11,6 +13,7 @@ class System;
 }
 
 namespace Service::News {
+class NewsShared;
 class INewsService;
 class INewlyArrivedEventHolder;
 class INewsDataService;
@@ -19,7 +22,8 @@ class IOverwriteEventHolder;
 
 class IServiceCreator final : public ServiceFramework<IServiceCreator> {
 public:
-    explicit IServiceCreator(Core::System& system_, u32 permissions_, const char* name_);
+    explicit IServiceCreator(Core::System& system_, std::shared_ptr<NewsShared> shared_,
+                             u32 permissions_, const char* name_);
     ~IServiceCreator() override;
 
 private:
@@ -29,6 +33,7 @@ private:
     Result CreateNewsDatabaseService(OutInterface<INewsDatabaseService> out_interface);
     Result CreateOverwriteEventHolder(OutInterface<IOverwriteEventHolder> out_interface);
 
+    std::shared_ptr<NewsShared> shared;
     u32 permissions;
 };
 

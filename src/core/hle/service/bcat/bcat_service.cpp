@@ -14,6 +14,7 @@
 #include "core/hle/service/bcat/bcat_util.h"
 #include "core/hle/service/bcat/delivery_cache_progress_service.h"
 #include "core/hle/service/bcat/delivery_cache_storage_service.h"
+#include "core/hle/service/bcat/delivery_task_suspension_service.h"
 #include "core/hle/service/cmif_serialization.h"
 
 namespace Service::BCAT {
@@ -38,7 +39,7 @@ IBcatService::IBcatService(Core::System& system_, BcatBackend& backend_, u64 pro
             {20100, nullptr, "RequestSyncDeliveryCacheWithApplicationId"},
             {20101, nullptr, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName"},
             {20300, nullptr, "GetDeliveryCacheStorageUpdateNotifier"},
-            {20301, nullptr, "RequestSuspendDeliveryTask"},
+            {20301, D<&IBcatService::RequestSuspendDeliveryTask>, "RequestSuspendDeliveryTask"}, //8.0.0+
             {20400, nullptr, "RegisterSystemApplicationDeliveryTask"},
             {20401, nullptr, "UnregisterSystemApplicationDeliveryTask"},
             {20410, nullptr, "SetSystemApplicationDeliveryTaskTimer"},
@@ -90,6 +91,15 @@ Result IBcatService::RequestSyncDeliveryCacheWithDirectoryName(
 
     *out_interface = std::make_shared<IDeliveryCacheProgressService>(
         system, progress_backend.GetEvent(), progress_backend.GetImpl());
+    R_SUCCEED();
+}
+
+Result IBcatService::RequestSuspendDeliveryTask(
+    u64 application_id, OutInterface<IDeliveryTaskSuspensionService> out_interface) {
+    // The HOME menu holds this while a web applet (Online, eShop) uses the network.
+    LOG_DEBUG(Service_BCAT, "Delivery tasks suspended for {:016x}", application_id);
+
+    *out_interface = std::make_shared<IDeliveryTaskSuspensionService>(system);
     R_SUCCEED();
 }
 
