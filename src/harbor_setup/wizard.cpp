@@ -718,7 +718,7 @@ void Wizard::ChooseRecommendedDriver() {
     if (t30 != driver_choices.end()) {
         selected_driver = t30->id;
         LOG_INFO(Frontend, "harbor: driver {} chosen by default for this GPU", t30->id);
-        ShowStatus(t30->name + " is chosen for this GPU; the phone's driver stays one tap away.", Tone::Ok);
+        ShowStatus(t30->title + " is chosen for this GPU; the phone's driver stays one tap away.", Tone::Ok);
         return;
     }
     if (CanBrowseDrivers()) {
