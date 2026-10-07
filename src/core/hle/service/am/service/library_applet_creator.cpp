@@ -170,7 +170,7 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
             std::scoped_lock lk{caller_applet->lock};
             caller_applet->child_applets.push_back(applet);
         }
-        window_system.TrackApplet(applet, false);
+        (void)window_system.TrackApplet(applet, false);
         LOG_INFO(Service_AM, "am: library applet {} ({:016x}) created as pid {} ({}) for pid {}",
                  applet_id, program_id, applet->aruid.pid, mode, caller_applet->aruid.pid);
         return std::make_shared<ILibraryAppletAccessor>(system, broker, applet);

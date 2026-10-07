@@ -6,6 +6,8 @@
 
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/registered_cache.h"
+#include "core/core.h"
+#include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/am_types.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -23,6 +25,13 @@ namespace Service::AM {
 namespace {
 
 Result CreateGuestApplication(SharedPointer<IApplicationAccessor>* out_application_accessor, Core::System& system, WindowSystem& window_system, u64 program_id) {
+    // On a console qlaunch closes the running software first.
+    if (window_system.HasApplication()) {
+        LOG_WARNING(Service_AM, "am: CreateApplication {:016x} refused: an application has not completed",
+                    program_id);
+        R_THROW(ResultAppletLaunchFailed);
+    }
+
     FileSys::VirtualFile nca_raw{};
 
     // Get the program NCA from storage.
@@ -44,7 +53,7 @@ Result CreateGuestApplication(SharedPointer<IApplicationAccessor>* out_applicati
     applet->type = AppletType::Application;
     applet->library_applet_mode = LibraryAppletMode::AllForeground;
 
-    window_system.TrackApplet(applet, true);
+    R_UNLESS(window_system.TrackApplet(applet, true), ResultAppletLaunchFailed);
 
     *out_application_accessor = std::make_shared<IApplicationAccessor>(system, applet, window_system);
     R_SUCCEED();
@@ -78,6 +87,14 @@ Result IApplicationCreator::CreateApplication(
 
 Result IApplicationCreator::CreateSystemApplication(
     Out<SharedPointer<IApplicationAccessor>> out_application_accessor, u64 application_id) {
+    LOG_INFO(Service_AM, "called, application_id={:016X}", application_id);
+
+    if (m_window_system.HasApplication()) {
+        LOG_WARNING(Service_AM,
+                    "am: CreateSystemApplication {:016x} refused: an application has not completed",
+                    application_id);
+        R_THROW(ResultAppletLaunchFailed);
+    }
 
     FileSys::VirtualFile nca_raw{};
 
@@ -97,7 +114,16 @@ Result IApplicationCreator::CreateSystemApplication(
     applet->type = AppletType::LibraryApplet;
     applet->library_applet_mode = LibraryAppletMode::AllForeground;
 
-    m_window_system.TrackApplet(applet, true);
+    // The starter keeps the application's suspension rules but is told about focus with
+    // ChangeIntoForeground/ChangeIntoBackground, never FocusStateChanged. Behaviour follows the
+    // Ryujinx Harbor (MIT-licensed Ryujinx base).
+    if (system.GetAppletManager().IsHomeSession()) {
+        applet->lifecycle_manager.SetUsesFocusStateChanged(false);
+    }
+
+    R_UNLESS(m_window_system.TrackApplet(applet, true), ResultAppletLaunchFailed);
+    LOG_INFO(Service_AM, "am: system application {:016x} created as pid {}", application_id,
+             applet->aruid.pid);
 
     *out_application_accessor = std::make_shared<IApplicationAccessor>(system, applet, m_window_system);
     Core::LaunchTimestampCache::SaveLaunchTimestamp(application_id);

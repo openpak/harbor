@@ -170,7 +170,7 @@ Result ILibraryAppletAccessor::PopOutData(Out<SharedPointer<IStorage>> out_stora
     if (auto caller_applet = m_applet->caller_applet.lock(); caller_applet) {
         std::scoped_lock lk{caller_applet->lock};
         const bool focus_state_changed = caller_applet->lifecycle_manager.UpdateRequestedFocusState();
-        const bool is_front_app = m_applet->frontend && caller_applet->lifecycle_manager.IsApplication();
+        const bool is_front_app = m_applet->frontend && caller_applet->lifecycle_manager.UsesFocusStateChanged();
         if (focus_state_changed) caller_applet->lifecycle_manager.SignalSystemEventIfNeeded(system.Kernel());
         else if (is_front_app) caller_applet->lifecycle_manager.RequestFocusStateChangedNotification(system.Kernel());
     }

@@ -211,11 +211,13 @@ enum class ProgramSpecifyKind : u32 {
 };
 
 // Maufeat: Use enums for zindex instead of using random zindex numbers
+// A visible child applet draws one step above its caller (partial-foreground applets such as an
+// inline keyboard keep their caller on screen), so Overlay sits well above any applet chain.
 enum AppletZIndex : s32 {
     Background = 0,
     Foreground = 1,
     ForegroundVisible = 2,
-    Overlay = 3,
+    Overlay = 0x100,
 };
 
 struct CommonArguments {

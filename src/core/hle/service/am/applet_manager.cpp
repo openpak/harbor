@@ -290,7 +290,7 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
         overlay_applet->window_visible = true;
         overlay_applet->home_button_short_pressed_blocked = false;
         overlay_applet->home_button_long_pressed_blocked = false;
-        m_window_system->TrackApplet(overlay_applet, false);
+        (void)m_window_system->TrackApplet(overlay_applet, false);
         overlay_applet->process->Run();
         LOG_INFO(Service_AM, "am: overlay applet {:016x} started as pid {}",
                  overlay_applet->program_id, overlay_applet->aruid.pid);
@@ -366,10 +366,14 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     if (applet->applet_id == AppletId::QLaunch) {
         applet->lifecycle_manager.SetFocusHandlingMode(false);
         applet->lifecycle_manager.SetOutOfFocusSuspendingEnabled(false);
-        m_window_system->TrackApplet(applet, false);
+        if (!m_window_system->TrackApplet(applet, false)) {
+            return;
+        }
         m_window_system->RequestHomeMenuToGetForeground();
     } else {
-        m_window_system->TrackApplet(applet, true);
+        if (!m_window_system->TrackApplet(applet, true)) {
+            return;
+        }
         m_window_system->RequestApplicationToGetForeground();
     }
 
