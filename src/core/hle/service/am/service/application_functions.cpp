@@ -532,6 +532,9 @@ Result IApplicationFunctions::TryPopFromFriendInvitationStorageChannel(
 
     auto data = channel.back();
     channel.pop_back();
+    if (channel.empty()) {
+        m_applet->friend_invitation_storage_channel_event.Clear(system.Kernel());
+    }
 
     *out_storage = std::make_shared<IStorage>(system, std::move(data));
     R_SUCCEED();

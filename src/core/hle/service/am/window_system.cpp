@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 #include "common/settings.h"
@@ -18,6 +19,7 @@
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/window_system.h"
+#include "core/hle/service/friend/friend_service.h"
 #include "core/hle/service/psc/ovln/ovln_agent.h"
 #include "core/hle/service/psc/ovln/ovln_types.h"
 
@@ -100,6 +102,7 @@ void WindowSystem::Update() {
 }
 
 bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_application) {
+    std::optional<u64> started_application_id;
     {
         std::scoped_lock lk{m_lock};
 
@@ -121,12 +124,17 @@ bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_applicati
                 return false;
             }
             m_application = applet.get();
+            started_application_id = applet->program_id;
         }
 
         this->UpdateCurrentApplicationLocked();
 
         m_event_observer->TrackAppletProcess(*applet);
         m_applets.emplace(applet->aruid.pid, std::move(applet));
+    }
+
+    if (started_application_id) {
+        Service::Friend::OnApplicationStarted(m_system, *started_application_id);
     }
 
     this->NotifyApplicationChangedIfNeeded();
@@ -585,6 +593,7 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
         // If this was the application, we should try to switch to the home menu.
         if (applet.get() == m_application) {
             m_application = nullptr;
+            Service::Friend::OnApplicationExited();
             m_foreground_requested_applet = m_home_menu;
 
             // If we have a home menu, send it the application exited message.
