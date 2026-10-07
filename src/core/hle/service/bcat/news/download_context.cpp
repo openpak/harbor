@@ -51,7 +51,7 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
     Kernel::KProcess* process = nullptr;
     u64 address = 0;
     if (transfer_memory != nullptr) {
-        transfer_memory->Open();
+        transfer_memory->Open(system_.Kernel());
         process = transfer_memory->GetOwner();
         address = GetInteger(transfer_memory->GetSourceAddress());
         capacity = (std::min)(capacity, static_cast<u64>(transfer_memory->GetSize()));
@@ -61,7 +61,7 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
 
     // The worker owns copies of everything it needs. It never touches this object's members except
     // through `state`, which the object clears before it goes.
-    std::thread([&system = system_, state = state, completed = completed, process, address,
+    std::thread([&kernel_system = system_, shared_state = state, done_event = completed, process, address,
                  capacity, url = std::move(url)] {
         Result result = ResultNotDecoded;
         u64 size = 0;
@@ -87,8 +87,8 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
             }
         }
 
-        std::scoped_lock lock{state->mutex};
-        if (!state->alive) {
+        std::scoped_lock lock{shared_state->mutex};
+        if (!shared_state->alive) {
             return;
         }
 
@@ -101,9 +101,9 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
                         payload.size(), capacity);
         }
 
-        state->result = result;
-        state->size = size;
-        completed->Signal(system.Kernel());
+        shared_state->result = result;
+        shared_state->size = size;
+        done_event->Signal(kernel_system.Kernel());
     }).detach();
 }
 
@@ -114,7 +114,7 @@ IDownloadContext::~IDownloadContext() {
     }
 
     if (transfer_memory != nullptr) {
-        transfer_memory->Close();
+        transfer_memory->Close(system.Kernel());
     }
     service_context.CloseEvent(completed);
 }
