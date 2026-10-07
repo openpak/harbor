@@ -10,7 +10,10 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
+#include <vector>
+#include <algorithm>
 #include <mutex>
 #include <thread>
 
@@ -137,6 +140,9 @@ struct Registration {
 struct State {
     std::mutex mutex;
     std::thread thread;
+    /// OPENPAK_SIMULATE_PUSH_DIR's reader, for test runs that hold no connection.
+    std::thread simulated;
+    std::atomic<bool> simulating{false};
     std::atomic<bool> running{false};
     std::atomic<bool> connected{false};
 
@@ -164,6 +170,7 @@ struct State {
 
     ~State() {
         running = false;
+        simulating = false;
         wake.notify_all();
         {
             std::lock_guard lock{mutex};
@@ -173,6 +180,9 @@ struct State {
         }
         if (thread.joinable()) {
             thread.join();
+        }
+        if (simulated.joinable()) {
+            simulated.join();
         }
     }
 };
@@ -299,6 +309,10 @@ void OnMessage(const Message& message) {
     const std::string kind = Kind(message);
     LOG_DEBUG(WebService, "[OpenPak] Pushed: {}", kind);
 
+    // The consumers first: the friends module compares a pushed presence against the cache as it
+    // was before the event, so the refresh it causes must not have run yet.
+    RaiseHook(kind, message.body);
+
     if (kind == "presence_updated" || kind == "friend_request_authorized" ||
         kind == "friend_deleted") {
         Refresh("friends", [] { Baas::SyncFriendList(true); });
@@ -313,8 +327,6 @@ void OnMessage(const Message& message) {
             Baas::SyncInvitations();
         });
     }
-
-    RaiseHook(kind, message.body);
 }
 
 /// One connection, held until it ends. Returns whether it got as far as the handover.
@@ -469,6 +481,54 @@ std::string Kind(const Message& message) {
     return message.name;
 }
 
+/// Test runs, which must not hold a real connection, take messages from files instead: with
+/// OPENPAK_SIMULATE_PUSH_DIR set, every *.json put in that directory is read, deleted and handed
+/// to the handler a frontline message reaches (the file name is the message name, the content
+/// its body), as the Ryujinx Harbor's simulated pushes are.
+void StartSimulated() {
+    const char* dir = std::getenv("OPENPAK_SIMULATE_PUSH_DIR");
+    if (dir == nullptr || *dir == '\0') {
+        return;
+    }
+    State& state = Get();
+    if (state.simulating.exchange(true)) {
+        return;
+    }
+    const std::filesystem::path directory{dir};
+    std::error_code ec;
+    std::filesystem::create_directories(directory, ec);
+    LOG_WARNING(WebService, "[OpenPak] OPENPAK_SIMULATE_PUSH_DIR is set: push messages are read "
+                            "from files (test only)");
+
+    state.simulated = std::thread([&state, directory] {
+        while (state.simulating.load()) {
+            std::vector<std::filesystem::path> files;
+            std::error_code list_error;
+            for (const auto& entry : std::filesystem::directory_iterator(directory, list_error)) {
+                if (entry.path().extension() == ".json") {
+                    files.push_back(entry.path());
+                }
+            }
+            std::sort(files.begin(), files.end());
+            for (const auto& file : files) {
+                const std::string body = Platform::ReadFile(file);
+                std::error_code remove_error;
+                std::filesystem::remove(file, remove_error);
+                const Message message{file.stem().string(), body};
+                LOG_WARNING(WebService, "[OpenPak] Simulated push {}", Kind(message));
+                try {
+                    OnMessage(message);
+                } catch (const std::exception& e) {
+                    LOG_WARNING(WebService, "[OpenPak] Simulated push failed: {}", e.what());
+                }
+            }
+            std::unique_lock lock{state.mutex};
+            state.wake.wait_for(lock, std::chrono::milliseconds{500},
+                                [&state] { return !state.simulating.load(); });
+        }
+    });
+}
+
 void Start() {
     if (const char* off = std::getenv("OPENPAK_NO_PUSH"); off != nullptr && std::strcmp(off, "1") == 0) {
         return;
@@ -478,6 +538,8 @@ void Start() {
     if (state.running.exchange(true)) {
         return;
     }
+
+    StartSimulated();
 
     state.thread = std::thread([&state] {
         using namespace std::chrono_literals;
@@ -494,7 +556,9 @@ void Start() {
                 state.frontline.clear();
             }
 
-            const std::string user_id = Session::UserId({});
+            // Only a linked user has anything to be pushed: an unlinked device account's
+            // registration and tickets are refused (401), so it is never asked for.
+            const std::string user_id = Session::Linked({}) ? Session::UserId({}) : std::string{};
             bool held = false;
 
             if (!user_id.empty()) {
@@ -519,6 +583,12 @@ void Start() {
 
 void Stop() {
     State& state = Get();
+    if (state.simulating.exchange(false)) {
+        state.wake.notify_all();
+        if (state.simulated.joinable()) {
+            state.simulated.join();
+        }
+    }
     if (!state.running.exchange(false)) {
         return;
     }
