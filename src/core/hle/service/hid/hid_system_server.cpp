@@ -104,7 +104,7 @@ IHidSystemServer::IHidSystemServer(Core::System& system_, std::shared_ptr<Resour
         {511, &IHidSystemServer::GetVibrationMasterVolume, "GetVibrationMasterVolume"},
         {512, &IHidSystemServer::BeginPermitVibrationSession, "BeginPermitVibrationSession"},
         {513, &IHidSystemServer::EndPermitVibrationSession, "EndPermitVibrationSession"},
-        {514, nullptr, "Unknown514"},
+        {514, &IHidSystemServer::SendVibrationNotificationPattern, "SendVibrationNotificationPattern"},
         {520, nullptr, "EnableHandheldHids"},
         {521, nullptr, "DisableHandheldHids"},
         {522, nullptr, "SetJoyConRailEnabled"},
@@ -709,6 +709,28 @@ void IHidSystemServer::BeginPermitVibrationSession(HLERequestContext& ctx) {
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(result);
+}
+
+void IHidSystemServer::SendVibrationNotificationPattern(HLERequestContext& ctx) {
+    // Input as the Ryujinx Harbor observed it from qlaunch's System Settings page (pattern 0x21 on
+    // every item change), plus the pid descriptor; no output is assumed.
+    IPC::RequestParser rp{ctx};
+    struct Parameters {
+        u32 pattern;
+        u32 unknown;
+        u64 applet_resource_user_id;
+    };
+    static_assert(sizeof(Parameters) == 0x10, "Parameters has incorrect size.");
+
+    const auto parameters{rp.PopRaw<Parameters>()};
+
+    LOG_WARNING(Service_HID,
+                "unknown contract: hid:sys 514 SendVibrationNotificationPattern pattern={:#x} "
+                "unknown={:#x}; no output, no rumble",
+                parameters.pattern, parameters.unknown);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
 }
 
 void IHidSystemServer::EndPermitVibrationSession(HLERequestContext& ctx) {
