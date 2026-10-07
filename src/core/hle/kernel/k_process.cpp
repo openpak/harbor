@@ -1189,16 +1189,14 @@ KProcess::KProcess(KernelCore& kernel)
 KProcess::~KProcess() = default;
 
 Result KProcess::LoadFromMetadata(KernelCore& kernel, const FileSys::ProgramMetadata& metadata, std::size_t code_size, KProcessAddress aslr_space_start, size_t aslr_space_offset) {
-    // Create a resource limit for the process. Applet-pool processes share one, as on the console.
+    // Create a resource limit for the process. Each process gets its own, sized to its whole pool,
+    // as the Ryujinx Harbor does. With one limit shared by the Applet pool, the firmware web
+    // program panicked (2210-1024) at start whenever svcGetInfo(TotalMemorySize) gave it about
+    // 370 MiB (Login during the setup, beside qlaunch and the starter); it starts with 419.
     const auto pool = static_cast<KMemoryManager::Pool>(metadata.GetPoolPartition());
-    KResourceLimit* res_limit = nullptr;
-    if (pool == KMemoryManager::Pool::Applet && kernel.GetAppletResourceLimit() != nullptr) {
-        res_limit = kernel.GetAppletResourceLimit();
-        res_limit->Open(kernel);
-    } else {
-        const auto physical_memory_size = kernel.MemoryManager().GetSize(pool);
-        res_limit = Kernel::CreateResourceLimitForProcess(kernel.System(), physical_memory_size);
-    }
+    const auto physical_memory_size = kernel.MemoryManager().GetSize(pool);
+    auto* res_limit =
+        Kernel::CreateResourceLimitForProcess(kernel.System(), physical_memory_size);
 
     // Ensure we maintain a clean state on exit.
     SCOPE_EXIT {

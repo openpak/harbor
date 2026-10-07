@@ -12,7 +12,6 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/hle/kernel/k_memory_manager.h"
-#include "core/hle/kernel/k_resource_limit.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/glue/glue_manager.h"
@@ -43,15 +42,11 @@ namespace {
     }
 }
 
-// What the Applet pool and the limit its processes share have left after a process was created;
-// the second is what svcGetInfo(TotalMemorySize) reports to an applet.
+// What the Applet pool has left after a process was created or reloaded.
 void LogAppletPoolFree(Core::System& system, u64 program_id) {
-    auto& kernel = system.Kernel();
-    constexpr u64 MiB = 1024 * 1024;
-    const auto* limit = kernel.GetAppletResourceLimit();
-    LOG_INFO(Service_AM, "am: process {:016x} created, Applet pool {} MiB free, Applet limit {} MiB free",
-             program_id, kernel.MemoryManager().GetFreeSize(Kernel::KMemoryManager::Pool::Applet) / MiB,
-             limit ? limit->GetFreeValue(Kernel::LimitableResource::PhysicalMemoryMax) / MiB : 0);
+    LOG_INFO(Service_AM, "am: process {:016x} created, Applet pool {} MiB free", program_id,
+             system.Kernel().MemoryManager().GetFreeSize(Kernel::KMemoryManager::Pool::Applet) /
+                 (1024 * 1024));
 }
 
 [[nodiscard]] inline std::unique_ptr<Process> CreateProcessImpl(std::unique_ptr<Loader::AppLoader>& out_loader, Loader::ResultStatus& out_load_result, Core::System& system, FileSys::VirtualFile file, u64 program_id, u64 program_index) {
