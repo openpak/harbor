@@ -69,26 +69,36 @@ bool IsProgramInstalled(Core::System& system, AppletProgramId program_id) {
                                                      FileSys::ContentRecordType::Program);
 }
 
-// Firmware 22.0.0+ program ids (switchbrew applet table; behaviour follows the Ryujinx Harbor's
-// ILibraryAppletCreator table). Used in a HOME session when the firmware has the program.
-AppletProgramId AppletIdToFirmware22ProgramId(AppletId applet_id) {
-    switch (applet_id) {
-    case AppletId::Web:
-    case AppletId::WebAuth:
-        return AppletProgramId::WebOpen;
-    case AppletId::Shop:
-    case AppletId::LoginShare:
-    case AppletId::Lhub:
-    case AppletId::Login:
-    case AppletId::Share:
-        return AppletProgramId::WebSystemPages;
-    case AppletId::OfflineWeb:
-    case AppletId::OfflineWebApp3:
-    case AppletId::OfflineWebSystem:
-        return AppletProgramId::OfflineWeb;
-    default:
-        return static_cast<AppletProgramId>(0);
+// Firmware 23.0.1's own applet table: am's (applet id, program id) pairs, read from its rodata
+// (am 0100000000000023, at 0x15794c). Used in a HOME session when the firmware has the program.
+// Shop (0x14) is not in it; the Shop is the system web program like Login, as the Ryujinx Harbor
+// found on 22.x.
+AppletProgramId AppletIdToFirmware23ProgramId(AppletId applet_id) {
+    struct Entry {
+        u32 applet_id;
+        u64 program_id;
+    };
+    static constexpr Entry table[] = {
+        {0x0A, 0x0100000000001001}, {0x0B, 0x0100000000001002}, {0x0C, 0x0100000000001003},
+        {0x0D, 0x0100000000001004}, {0x0E, 0x0100000000001005}, {0x0F, 0x0100000000001006},
+        {0x10, 0x0100000000001007}, {0x11, 0x0100000000001008}, {0x12, 0x0100000000001009},
+        {0x15, 0x010000000000100D}, {0x16, 0x010000000000100E}, {0x1A, 0x0100000000001013},
+        {0x1B, 0x010000000000101A}, {0x1C, 0x010000000000101C}, {0x1D, 0x010000000000101D},
+        {0x1F, 0x010070000E3C0000}, {0x20, 0x010086000E49C000}, {0x1E, 0x0100000000001020},
+        {0x22, 0x0100000000001007}, {0x64, 0x0100000000001048}, {0x50, 0x0100000000001007},
+        {0x51, 0x0100000000001001}, {0x52, 0x0100000000001001}, {0x66, 0x0100000000001054},
+        {0x03, 0x0100000000001000}, {0x04, 0x0100000000001012}, {0x13, 0x0100000000001043},
+        {0x17, 0x010000000000100F}, {0x18, 0x0100000000001042}, {0x19, 0x0100000000001043},
+        {0x32, 0x010000000000100F}, {0x33, 0x010000000000100F}, {0x35, 0x0100000000001042},
+        {0x36, 0x0100000000001042}, {0x37, 0x0100000000001042}, {0x21, 0x0100000000001038},
+        {0x14, 0x0100000000001042},
+    };
+    for (const auto& entry : table) {
+        if (entry.applet_id == static_cast<u32>(applet_id)) {
+            return static_cast<AppletProgramId>(entry.program_id);
+        }
     }
+    return static_cast<AppletProgramId>(0);
 }
 
 AppletProgramId AppletIdToProgramId(AppletId applet_id) {
@@ -145,10 +155,10 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
                                                           LibraryAppletMode mode) {
     auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
     if (system.GetAppletManager().IsHomeSession()) {
-        const auto firmware22_id = AppletIdToFirmware22ProgramId(applet_id);
-        if (firmware22_id != static_cast<AppletProgramId>(0) &&
-            IsProgramInstalled(system, firmware22_id)) {
-            program_id = static_cast<u64>(firmware22_id);
+        const auto firmware_id = AppletIdToFirmware23ProgramId(applet_id);
+        if (firmware_id != static_cast<AppletProgramId>(0) &&
+            IsProgramInstalled(system, firmware_id)) {
+            program_id = static_cast<u64>(firmware_id);
         }
     }
     if (program_id == 0) {
