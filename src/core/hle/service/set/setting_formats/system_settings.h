@@ -110,9 +110,9 @@ struct SystemSettings {
     INSERT_PADDING_BYTES(0xC); // Reserved
     std::array<std::array<u8, 0x40>, 8> account_online_storage_settings;
 
-    bool pctl_ready_flag;
-    INSERT_PADDING_BYTES(0x3);
-    INSERT_PADDING_BYTES(0x3C); // Reserved
+    // nn::settings::system::PctlReadyFlag has no public layout; the eight bytes are kept as written.
+    u64 pctl_ready_flag;
+    INSERT_PADDING_BYTES(0x38); // Reserved
 
     // nn::settings::system::ThemeId
     std::array<u8, 0x80> theme_id_type0;

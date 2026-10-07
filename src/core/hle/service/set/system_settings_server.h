@@ -164,6 +164,15 @@ public:
     Result SetPlatformRegion(PlatformRegion platform_region);
     Result SetTouchScreenMode(TouchScreenMode touch_screen_mode);
     Result GetFieldTestingFlag(Out<bool> out_field_testing_flag);
+    Result SetFieldTestingFlag(bool field_testing_flag);
+    Result GetPctlReadyFlag(Out<u64> out_pctl_ready_flag);
+    Result SetPctlReadyFlag(u64 pctl_ready_flag);
+    Result SetChineseTraditionalInputMethod(
+        ChineseTraditionalInputMethod chinese_traditional_input_method);
+    Result GetHearingProtectionSafeguardFlag(Out<bool> out_flag);
+    Result SetHearingProtectionSafeguardFlag(bool flag);
+    Result GetHearingProtectionSafeguardRemainingTime(Out<s64> out_time);
+    Result SetHearingProtectionSafeguardRemainingTime(s64 time);
     Result GetPanelCrcMode(Out<s32> out_panel_crc_mode);
     Result SetPanelCrcMode(s32 panel_crc_mode);
     Result GetHttpAuthConfigs(Out<s32> out_count, OutBuffer<BufferAttr_HipcMapAlias> out_configs);

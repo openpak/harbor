@@ -37,8 +37,9 @@ SystemSettings DefaultSystemSettings() {
         .contrast_ratio = 0.5f,
     };
 
+    // A new NAND has not run the first-time setup: no flags, so qlaunch starts the starter.
     settings.initial_launch_settings_packed = {
-        .flags = {0x10001},
+        .flags = {0},
         .timestamp = {},
     };
 

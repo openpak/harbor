@@ -271,8 +271,8 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {153, C<&ISystemSettingsServer::SetUserSystemClockAutomaticCorrectionUpdatedTime>, "SetUserSystemClockAutomaticCorrectionUpdatedTime"},
         {154, nullptr, "GetAccountOnlineStorageSettings"},
         {155, nullptr, "SetAccountOnlineStorageSettings"},
-        {156, nullptr, "GetPctlReadyFlag"},
-        {157, nullptr, "SetPctlReadyFlag"},
+        {156, C<&ISystemSettingsServer::GetPctlReadyFlag>, "GetPctlReadyFlag"},
+        {157, C<&ISystemSettingsServer::SetPctlReadyFlag>, "SetPctlReadyFlag"},
         {158, nullptr, "GetAnalogStickUserCalibrationL"},
         {159, nullptr, "SetAnalogStickUserCalibrationL"},
         {160, nullptr, "GetAnalogStickUserCalibrationR"},
@@ -286,7 +286,7 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {168, nullptr, "GetThemeId"},
         {169, nullptr, "SetThemeId"},
         {170, C<&ISystemSettingsServer::GetChineseTraditionalInputMethod>, "GetChineseTraditionalInputMethod"},
-        {171, nullptr, "SetChineseTraditionalInputMethod"},
+        {171, C<&ISystemSettingsServer::SetChineseTraditionalInputMethod>, "SetChineseTraditionalInputMethod"},
         {172, nullptr, "GetPtmCycleCountReliability"},
         {173, nullptr, "SetPtmCycleCountReliability"},
         {174, C<&ISystemSettingsServer::GetHomeMenuScheme>, "GetHomeMenuScheme"},
@@ -317,15 +317,15 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {199, nullptr, "GetButtonConfigRegisteredSettings"},
         {200, nullptr, "SetButtonConfigRegisteredSettings"},
         {201, C<&ISystemSettingsServer::GetFieldTestingFlag>, "GetFieldTestingFlag"},
-        {202, nullptr, "SetFieldTestingFlag"},
+        {202, C<&ISystemSettingsServer::SetFieldTestingFlag>, "SetFieldTestingFlag"},
         {203, C<&ISystemSettingsServer::GetPanelCrcMode>, "GetPanelCrcMode"},
         {204, C<&ISystemSettingsServer::SetPanelCrcMode>, "SetPanelCrcMode"},
         {205, nullptr, "GetNxControllerSettingsEx"},
         {206, nullptr, "SetNxControllerSettingsEx"},
-        {207, nullptr, "GetHearingProtectionSafeguardFlag"},
-        {208, nullptr, "SetHearingProtectionSafeguardFlag"},
-        {209, nullptr, "GetHearingProtectionSafeguardRemainingTime"},
-        {210, nullptr, "SetHearingProtectionSafeguardRemainingTime"},
+        {207, C<&ISystemSettingsServer::GetHearingProtectionSafeguardFlag>, "GetHearingProtectionSafeguardFlag"},
+        {208, C<&ISystemSettingsServer::SetHearingProtectionSafeguardFlag>, "SetHearingProtectionSafeguardFlag"},
+        {209, C<&ISystemSettingsServer::GetHearingProtectionSafeguardRemainingTime>, "GetHearingProtectionSafeguardRemainingTime"},
+        {210, C<&ISystemSettingsServer::SetHearingProtectionSafeguardRemainingTime>, "SetHearingProtectionSafeguardRemainingTime"},
         {221, nullptr, "GetForceMonauralOutputFlag"}, //17.0.0+
         {222, nullptr, "SetForceMonauralOutputFlag"}, //17.0.0+
         {251, nullptr, "GetAccountIdentificationSettings"}, //18.0.0+
@@ -350,18 +350,11 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
 
     SetupSettings();
 
-    m_system_settings.region_code =
-        static_cast<SystemRegionCode>(::Settings::values.region_index.GetValue());
-
-    // TODO: Remove this when starter applet is fully functional
-    EulaVersion eula_version{
-        .version = 0x10000,
-        .region_code = m_system_settings.region_code,
-        .clock_type = EulaVersionClockType::SteadyClock,
-        .system_clock_context = m_system_settings.user_system_clock_context,
-    };
-    m_system_settings.eula_versions[0] = eula_version;
-    m_system_settings.eula_version_count = 1;
+    // The stored settings own the region and the EULA; the host's region setting only seeds a new NAND's
+    // global. After the first-time setup the stored region is the one in force.
+    if (m_system_settings.initial_launch_settings_packed.flags.InitialLaunchCompletionFlag.Value() != 0) {
+        SyncGlobalRegionFromCode(m_system_settings.region_code);
+    }
 }
 
 ISystemSettingsServer::~ISystemSettingsServer() {
@@ -1443,6 +1436,69 @@ Result ISystemSettingsServer::GetFieldTestingFlag(Out<bool> out_field_testing_fl
     LOG_INFO(Service_SET, "called, field_testing_flag={}", m_system_settings.field_testing_flag);
 
     *out_field_testing_flag = m_system_settings.field_testing_flag;
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetFieldTestingFlag(bool field_testing_flag) {
+    LOG_INFO(Service_SET, "called, field_testing_flag={}", field_testing_flag);
+
+    m_system_settings.field_testing_flag = field_testing_flag;
+    SetSaveNeeded();
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::GetPctlReadyFlag(Out<u64> out_pctl_ready_flag) {
+    LOG_INFO(Service_SET, "called");
+
+    *out_pctl_ready_flag = m_system_settings.pctl_ready_flag;
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetPctlReadyFlag(u64 pctl_ready_flag) {
+    LOG_INFO(Service_SET, "called");
+
+    m_system_settings.pctl_ready_flag = pctl_ready_flag;
+    SetSaveNeeded();
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetChineseTraditionalInputMethod(
+    ChineseTraditionalInputMethod chinese_traditional_input_method) {
+    LOG_INFO(Service_SET, "called, chinese_traditional_input_method={}",
+             chinese_traditional_input_method);
+
+    m_system_settings.chinese_traditional_input_method = chinese_traditional_input_method;
+    SetSaveNeeded();
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::GetHearingProtectionSafeguardFlag(Out<bool> out_flag) {
+    LOG_INFO(Service_SET, "called");
+
+    *out_flag = m_system_settings.hearing_protection_safeguard_flag;
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetHearingProtectionSafeguardFlag(bool flag) {
+    LOG_INFO(Service_SET, "called, flag={}", flag);
+
+    m_system_settings.hearing_protection_safeguard_flag = flag;
+    SetSaveNeeded();
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::GetHearingProtectionSafeguardRemainingTime(Out<s64> out_time) {
+    LOG_INFO(Service_SET, "called");
+
+    *out_time = m_system_settings.hearing_protection_safeguard_remaining_time;
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetHearingProtectionSafeguardRemainingTime(s64 time) {
+    LOG_INFO(Service_SET, "called, time={}", time);
+
+    m_system_settings.hearing_protection_safeguard_remaining_time = time;
+    SetSaveNeeded();
     R_SUCCEED();
 }
 

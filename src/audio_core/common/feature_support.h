@@ -16,7 +16,11 @@
 #include <ranges>
 
 namespace AudioCore {
-constexpr u32 CurrentRevision = 15;
+// Revisions 16-18 are accepted for compatibility with newer SDK clients (firmware 23.0.1's
+// starter requests REV18). They go through the existing renderer's parameter layouts and feature
+// gates, the update sections are still size-checked; revision-specific DSP changes are not
+// implemented. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+constexpr u32 CurrentRevision = 18;
 
 enum class SupportTags {
     CommandProcessingTimeEstimatorVersion4,
@@ -114,5 +118,16 @@ constexpr bool CheckFeatureSupported(SupportTags tag, u32 user_revision) {
 constexpr bool CheckValidRevision(u32 user_revision) {
     return GetRevisionNum(user_revision) <= CurrentRevision;
 };
+
+// Compile-time self-check: REV16-18 are valid and keep the modern layouts, REV19 is refused.
+static_assert(CheckValidRevision(Common::MakeMagic('R', 'E', 'V', '0' + 16)));
+static_assert(CheckValidRevision(Common::MakeMagic('R', 'E', 'V', '0' + 17)));
+static_assert(CheckValidRevision(Common::MakeMagic('R', 'E', 'V', '0' + 18)));
+static_assert(!CheckValidRevision(Common::MakeMagic('R', 'E', 'V', '0' + 19)));
+static_assert(GetRevisionNum(Common::MakeMagic('R', 'E', 'V', '0' + 18)) == 18);
+static_assert(CheckFeatureSupported(SupportTags::VoiceInParameterV2,
+                                    Common::MakeMagic('R', 'E', 'V', '0' + 18)));
+static_assert(CheckFeatureSupported(SupportTags::SplitterDestinationV2b,
+                                    Common::MakeMagic('R', 'E', 'V', '0' + 17)));
 
 } // namespace AudioCore
