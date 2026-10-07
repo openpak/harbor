@@ -11,6 +11,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/redact.h"
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "core/core.h"
@@ -1182,7 +1183,7 @@ Result ISystemSettingsServer::SetDeviceNickName(
     InLargeData<std::array<u8, 0x80>, BufferAttr_HipcMapAlias> device_name_buffer) {
     const std::string device_name = Common::StringFromBuffer(*device_name_buffer);
 
-    LOG_INFO(Service_SET, "called, device_name={}", device_name);
+    LOG_INFO(Service_SET, "called, device_name={}", Common::RedactLength(device_name));
 
     ::Settings::values.device_name = device_name;
     R_SUCCEED();

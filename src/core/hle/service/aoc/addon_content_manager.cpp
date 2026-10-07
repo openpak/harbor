@@ -47,8 +47,8 @@ static std::vector<u64> AccumulateAOCTitleIDs(Core::System& system) {
         std::remove_if(
             add_on_content.begin(), add_on_content.end(),
             [&rcu](u64 tid) {
-                return rcu.GetEntry(tid, FileSys::ContentRecordType::Data)->GetStatus() !=
-                       Loader::ResultStatus::Success;
+                const auto nca = rcu.GetEntry(tid, FileSys::ContentRecordType::Data);
+                return nca == nullptr || nca->GetStatus() != Loader::ResultStatus::Success;
             }),
         add_on_content.end());
     return add_on_content;
@@ -98,6 +98,11 @@ Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcess
 
     const auto current = GetCallerBaseTitleID(system, process_id);
 
+    // The DLC the user's folders, the frontend and the NAND/SD card hold now: the content providers
+    // are filled after this service starts (HOME launches a title long after boot), so the list is
+    // taken when it is asked for.
+    add_on_content = AccumulateAOCTitleIDs(system);
+
     const auto& disabled = Settings::values.disabled_addons[current];
     if (std::find(disabled.begin(), disabled.end(), "DLC") != disabled.end()) {
         *out_count = 0;
@@ -107,6 +112,7 @@ Result IAddOnContentManager::CountAddOnContent(Out<u32> out_count, ClientProcess
     *out_count = static_cast<u32>(
         std::count_if(add_on_content.begin(), add_on_content.end(),
                       [current](u64 tid) { return CheckAOCTitleIDMatchesBase(tid, current); }));
+    LOG_INFO(Service_AOC, "title {:016X} has {} add-on content(s)", current, *out_count);
 
     R_SUCCEED();
 }
@@ -118,6 +124,7 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
               process_id.pid);
 
     const auto current = GetCallerBaseTitleID(system, process_id);
+    add_on_content = AccumulateAOCTitleIDs(system);
 
     std::vector<u32> out;
     const auto& disabled = Settings::values.disabled_addons[current];
@@ -137,6 +144,8 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
     std::rotate(out.begin(), out.begin() + offset, out.end());
 
     std::memcpy(out_addons.data(), out.data(), *out_count * sizeof(u32));
+    LOG_INFO(Service_AOC, "title {:016X} lists {} add-on content(s) from offset {}", current,
+             *out_count, offset);
 
     R_SUCCEED();
 }
@@ -161,8 +170,10 @@ Result IAddOnContentManager::GetAddOnContentBaseId(Out<u64> out_title_id,
 }
 
 Result IAddOnContentManager::PrepareAddOnContent(s32 addon_index, ClientProcessId process_id) {
-    LOG_WARNING(Service_AOC, "(STUBBED) called with addon_index={}, process_id={}", addon_index,
-                process_id.pid);
+    // The DLC is mounted by the file system service when the title opens its data storage; the
+    // content is already registered, so there is nothing to prepare.
+    LOG_INFO(Service_AOC, "prepare add-on content index {} for title {:016X}", addon_index,
+             GetCallerBaseTitleID(system, process_id));
 
     R_SUCCEED();
 }

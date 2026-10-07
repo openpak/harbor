@@ -13,6 +13,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/kernel/k_process.h"
@@ -31,6 +32,29 @@
 namespace Service::NS {
 
 namespace {
+
+// The name, icon and NACP HOME shows come from the update when the title has one (it is the
+// version that runs), else from the base title; Eden's own lookup prefers the base.
+FileSys::PatchManager::Metadata GetApplicationControlMetadata(Core::System& system,
+                                                              u64 application_id) {
+    const auto& disabled = Settings::values.disabled_addons[application_id];
+    if (std::find(disabled.begin(), disabled.end(), "Update") == disabled.end()) {
+        const FileSys::PatchManager update{FileSys::GetUpdateTitleID(application_id),
+                                           system.GetFileSystemController(),
+                                           system.GetContentProvider()};
+        auto metadata = update.GetControlMetadata();
+        if (metadata.first != nullptr) {
+            return metadata;
+        }
+    }
+    const FileSys::PatchManager base{application_id, system.GetFileSystemController(),
+                                     system.GetContentProvider()};
+    auto metadata = base.GetControlMetadata();
+    if (metadata.first != nullptr) {
+        return metadata;
+    }
+    return FileSys::PatchManager::GetMetadataFromBaseOrUpdate(system, application_id);
+}
 
 void JPGToMemory(void* context, void* data, int size) {
     auto* buffer = static_cast<std::vector<u8>*>(context);
@@ -158,8 +182,7 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationControlData(
     LOG_INFO(Service_NS, "called with control_source={}, application_id={:016X}",
              application_control_source, application_id);
 
-    const FileSys::PatchManager pm{application_id, system.GetFileSystemController(), system.GetContentProvider()};
-    const auto control = pm.GetControlMetadata();
+    const auto control = GetApplicationControlMetadata(system, application_id);
     const auto size = out_buffer.size();
 
     const auto icon_size = control.second ? control.second->GetSize() : 0;
@@ -240,9 +263,7 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationControlData2(
     LOG_INFO(Service_NS, "called with control_source={}, flags=({:02X},{:02X}), application_id={:016X}",
              application_control_source, flag1, flag2, application_id);
 
-    const FileSys::PatchManager pm{application_id, system.GetFileSystemController(),
-                                   system.GetContentProvider()};
-    const auto control = pm.GetControlMetadata();
+    const auto control = GetApplicationControlMetadata(system, application_id);
     const auto size = out_buffer.size();
 
     const auto nacp_size = sizeof(FileSys::RawNACP);
@@ -344,8 +365,7 @@ void IReadOnlyApplicationControlDataInterface::ListApplicationIcon(HLERequestCon
         // [list of u64] - size of icons
         for (size_t i = 0; i < app_count; ++i) {
             const u64 app_id = app_ids_buffer[i];
-            const FileSys::PatchManager pm{app_id, system.GetFileSystemController(), system.GetContentProvider()};
-            if (const auto control = pm.GetControlMetadata(); control.second) {
+            if (const auto control = GetApplicationControlMetadata(system, app_id); control.second) {
                 u64 full_size = control.second->GetSize();
                 memory.WriteBlock(t_mem_address + out_length, &full_size, sizeof(u64));
             }
@@ -355,8 +375,7 @@ void IReadOnlyApplicationControlDataInterface::ListApplicationIcon(HLERequestCon
         // [list of raw icon data]
         for (size_t i = 0; i < app_count; ++i) {
             const u64 app_id = app_ids_buffer[i];
-            const FileSys::PatchManager pm{app_id, system.GetFileSystemController(), system.GetContentProvider()};
-            if (const auto control = pm.GetControlMetadata(); control.second) {
+            if (const auto control = GetApplicationControlMetadata(system, app_id); control.second) {
                 if (auto const full_size = control.second->GetSize(); full_size > 0) {
                     std::vector<u8> full_icon_data(full_size);
                     control.second->Read(full_icon_data.data(), full_size, 0);
@@ -393,9 +412,7 @@ void IReadOnlyApplicationControlDataInterface::ListApplicationTitle(HLERequestCo
         const auto t_mem_address = t_mem->GetSourceAddress();
         for (size_t i = 0; i < app_count; ++i) {
             const u64 app_id = application_ids[i];
-            const FileSys::PatchManager pm{app_id, system.GetFileSystemController(),
-                                           system.GetContentProvider()};
-            const auto control = pm.GetControlMetadata();
+            const auto control = GetApplicationControlMetadata(system, app_id);
             FileSys::LanguageEntry entry{};
             if (control.first != nullptr) {
                 entry = control.first->GetLanguageEntry();
@@ -415,9 +432,7 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationControlData3(OutB
     LOG_INFO(Service_NS, "called with control_source={}, flags=({:02X},{:02X}), application_id={:016X}",
              application_control_source, flag1, flag2, application_id);
 
-    const FileSys::PatchManager pm{application_id, system.GetFileSystemController(),
-                                   system.GetContentProvider()};
-    const auto control = pm.GetControlMetadata();
+    const auto control = GetApplicationControlMetadata(system, application_id);
     const auto size = out_buffer.size();
 
     const auto nacp_size = sizeof(FileSys::RawNACP);
