@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nca_metadata.h"
@@ -564,7 +565,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
 IApplicationManagerInterface::~IApplicationManagerInterface() = default;
 
 Result IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id) {
-    LOG_DEBUG(Service_NS, "called, user_id={}", user_id.FormattedString());
+    LOG_DEBUG(Service_NS, "called, user_id={}", Common::Redact(user_id));
     R_SUCCEED();
 }
 
@@ -830,7 +831,7 @@ Result IApplicationManagerInterface::GetApplicationRightsOnClient(
     OutArray<ApplicationRightsOnClient, BufferAttr_HipcMapAlias> out_rights, Out<u32> out_count,
     u32 flags, u64 application_id, Uid account_id) {
     LOG_WARNING(Service_NS, "(STUBBED) called, flags={}, application_id={:016X}, account_id={}",
-                flags, application_id, account_id.uuid.FormattedString());
+                flags, application_id, Common::Redact(account_id));
 
     if (!out_rights.empty()) {
         ApplicationRightsOnClient rights{};

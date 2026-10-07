@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/olsc_service_for_application.h"
 
@@ -56,7 +57,7 @@ Result IOlscServiceForApplication::GetSaveDataBackupSetting(Out<u8> out_save_dat
 Result IOlscServiceForApplication::SetSaveDataBackupSettingEnabled(bool enabled,
                                                                    NS::Uid account_id) {
     LOG_WARNING(Service_OLSC, "(STUBBED) called, enabled={}, account_id={}", enabled,
-                account_id.uuid.FormattedString());
+                Common::Redact(account_id));
     R_SUCCEED();
 }
 
