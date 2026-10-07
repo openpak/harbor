@@ -125,6 +125,10 @@ output_engine=3
 EOF
 fi
 
+# Data directories always point into this run. Eden stores absolute paths in the config, so a run
+# copied from another run would otherwise keep writing into the original's NAND and SD card.
+sed -i -E "s#^([a-z_]+_directory=).*/user(/.*)?\$#\\1$RUN/user\\2#" "$CONFIG"
+
 # Console mode (re-applied on every start, so --docked works on an existing run).
 sed -i '/^use_docked_mode/d' "$CONFIG"
 if ! grep -q '^\[System\]' "$CONFIG"; then printf '\n[System]\n' >> "$CONFIG"; fi
