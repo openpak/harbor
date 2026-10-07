@@ -4,6 +4,7 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.widget.LinearLayout
@@ -57,6 +58,13 @@ object HarborConsole {
             }
             HarborNative.applyConsolePreset()
             Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
+            // The driver loads now, so a selected one that failed stops the boot here, not in HOME.
+            val driverProblem = HarborNative.checkGpuDriver()
+            if (driverProblem.isNotEmpty()) {
+                Log.error("[Harbor] console not started: $driverProblem")
+                from.runOnUiThread { showDriverRefusal(from, driverProblem) }
+                return@thread
+            }
             // The in-game drawer stays shut; the Harbor menu replaces it.
             IntSetting.LOCK_DRAWER.setInt(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
             IntSetting.RENDERER_SCREEN_LAYOUT.setInt(Settings.EmulationOrientation.SensorLandscape.int)
@@ -153,6 +161,30 @@ object HarborConsole {
         }
         val installed = GpuDriverHelper.installedCustomDriverData
         return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
+    }
+
+    /**
+     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver): the console does
+     * not boot on the phone's own driver instead. The setup chooses another; Exit closes Harbor.
+     */
+    fun showDriverRefusal(from: Activity, problem: String) {
+        if (from.isFinishing) {
+            return
+        }
+        val dialog = AlertDialog.Builder(from, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(R.string.harbor_driver_failed_title)
+            .setMessage(problem + "\n\n" + from.getString(R.string.harbor_driver_failed_hint))
+            .setCancelable(false)
+            .setPositiveButton(R.string.harbor_menu_setup_again) { _, _ ->
+                HarborNative.stopOpenPak()
+                restartIntoSetup(from)
+            }
+            .setNegativeButton(R.string.harbor_menu_exit) { _, _ ->
+                HarborNative.stopOpenPak()
+                from.finishAndRemoveTask()
+            }
+            .show()
+        HarborPanelInput.attach(dialog)
     }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */

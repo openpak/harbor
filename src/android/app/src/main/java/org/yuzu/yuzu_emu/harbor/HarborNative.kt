@@ -50,6 +50,12 @@ object HarborNative {
     /** The Joy-Cons off (true) or back on the console's rails. */
     external fun setJoyconsDetached(detached: Boolean)
 
+    /**
+     * Loads the console's graphics driver and checks it is the one the setup chose: "" when it is,
+     * else why the console must not boot. Not on the UI thread.
+     */
+    external fun checkGpuDriver(): String
+
     /** Whether the Joy-Cons are off the rails. */
     external fun joyconsDetached(): Boolean
 

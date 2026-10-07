@@ -20,6 +20,8 @@ import org.libsdl.app.SDL
 import java.lang.ref.WeakReference
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.fragments.CoreErrorDialogFragment
+import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborNative
 import org.yuzu.yuzu_emu.utils.DocumentsTree
 import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.Log
@@ -406,6 +408,16 @@ object NativeLibrary {
         if (emulationActivity == null) {
             Log.warning("[NativeLibrary] EmulationActivity is null, can't exit.")
             return
+        }
+        // Harbor: the console refused the phone's own driver in place of the selected one.
+        if (HarborConsole.active && resultCode == ErrorVideoCore) {
+            val problem = HarborNative.checkGpuDriver()
+            if (problem.isNotEmpty()) {
+                emulationActivity.runOnUiThread {
+                    HarborConsole.showDriverRefusal(emulationActivity, problem)
+                }
+                return
+            }
         }
 
         val builder = MaterialAlertDialogBuilder(emulationActivity)

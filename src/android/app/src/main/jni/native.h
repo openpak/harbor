@@ -39,6 +39,15 @@ public:
                              const std::string& custom_driver_name,
                              const std::string& file_redirect_dir);
 
+    /// Harbor: loads the Vulkan driver the console will render with and checks it is the selected
+    /// custom one. Empty when it is (or none was selected), else why not. A failed custom driver on
+    /// an Adreno 6xx is a refusal (the phone's own driver crashes the HOME menu there); elsewhere it
+    /// is only logged and the result is empty. Cached until the driver changes.
+    std::string CheckGpuDriver();
+
+    /// The Vulkan loader of the installed custom driver, or null when the system driver is used.
+    std::shared_ptr<Common::DynamicLibrary> CustomDriverLibrary();
+
     bool IsRunning() const;
     bool IsPaused() const;
     void PauseEmulation();
@@ -91,6 +100,9 @@ private:
 
     // GPU driver parameters
     std::shared_ptr<Common::DynamicLibrary> m_vulkan_library;
+    std::string m_custom_driver_path; ///< Selected custom driver (dir + library), empty for none
+    std::optional<std::string> m_driver_check;
+    std::mutex m_driver_mutex;
 
     // Synchronization
     std::condition_variable_any m_cv;
