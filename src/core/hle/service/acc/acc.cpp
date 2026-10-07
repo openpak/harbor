@@ -37,6 +37,7 @@
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/server_manager.h"
 #include "core/loader/loader.h"
+#include "core/openpak/account.h"
 #include "core/openpak/async_worker.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
@@ -1321,6 +1322,9 @@ void Module::Interface::CompleteUserRegistration(HLERequestContext& ctx) {
 
     LOG_INFO(Service_ACC, "acc: CompleteUserRegistration, {} user(s), saved",
              profile_manager->GetUserCount());
+    // The wizard's OpenPak sign-in links the first firmware user to that account (it returns at
+    // once and does nothing unless OpenPak is on and signed in).
+    OpenPak::OnFirmwareUserRegistered(user_id.RawString());
     rb.Push(ResultSuccess);
 }
 
