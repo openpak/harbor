@@ -65,6 +65,8 @@ private:
     Result PushToGeneralChannel(SharedPointer<IStorage> storage); // cmd 20
     Result GetHomeButtonReaderLockAccessor(Out<SharedPointer<ILockAccessor>> out_lock_accessor);
     Result SetHandlingHomeButtonShortPressedEnabled(bool enabled);
+    Result GetCradleFwVersion(Out<u32> out_pdc_h, Out<u32> out_pdc_a, Out<u32> out_mcu,
+                              Out<u32> out_dp2hdmi);
     Result Unknown610(u64 unk);
     Result Unknown611(u8 unk);
     Result BeginVrMode3d();

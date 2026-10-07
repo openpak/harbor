@@ -22,6 +22,20 @@ namespace Service::AM {
         Result SetHandlingHomeButtonShortPressedEnabled(bool enabled);
         Result SetHandlingTouchScreenInputEnabled(bool enabled);
         Result Unknown70();
+        Result SetGpuTimeSliceBoost(u64 time_ns);
+        Result TerminateApplicationAndSetReason(u32 reason);
+        Result SetScreenShotPermissionGlobally(bool enabled);
+        Result StartShutdownSequenceForOverlay();
+        Result StartRebootSequenceForOverlay();
+        Result SetHealthWarningShowingState(bool showing);
+        Result GetApplicationNintendoLogo();
+        Result GetApplicationStartupMovie();
+        Result SetGpuTimeSliceBoostForApplication(u64 time_ns);
+        Result Unknown60(bool value);
+        Result Unknown71();
+        Result Unknown75();
+        Result SetRequiresGpuResourceUse(bool enabled);
+        Result BeginToObserveHidInputForDevelop();
 
     private:
         const std::shared_ptr<Applet> m_applet;

@@ -7,6 +7,7 @@
 #include "core/hle/result.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/service/home_menu_functions.h"
+#include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/window_system.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/am/am_results.h"
@@ -25,8 +26,8 @@ IHomeMenuFunctions::IHomeMenuFunctions(Core::System& system_, std::shared_ptr<Ap
         {12, D<&IHomeMenuFunctions::UnlockForeground>, "UnlockForeground"},
         {20, D<&IHomeMenuFunctions::PopFromGeneralChannel>, "PopFromGeneralChannel"},
         {21, D<&IHomeMenuFunctions::GetPopFromGeneralChannelEvent>, "GetPopFromGeneralChannelEvent"},
-        {30, nullptr, "GetHomeButtonWriterLockAccessor"},
-        {31, nullptr, "GetWriterLockAccessorEx"},
+        {30, D<&IHomeMenuFunctions::GetHomeButtonWriterLockAccessor>, "GetHomeButtonWriterLockAccessor"},
+        {31, D<&IHomeMenuFunctions::GetWriterLockAccessorEx>, "GetWriterLockAccessorEx"},
         {40, D<&IHomeMenuFunctions::IsSleepEnabled>, "IsSleepEnabled"},
         {41, D<&IHomeMenuFunctions::IsRebootEnabled>, "IsRebootEnabled"},
         {50, nullptr, "LaunchSystemApplet"},
@@ -96,6 +97,22 @@ Result IHomeMenuFunctions::IsForceTerminateApplicationDisabledForDebug(
     Out<bool> out_is_force_terminate_application_disabled_for_debug) {
     LOG_INFO(Service_AM, "called");
     *out_is_force_terminate_application_disabled_for_debug = false;
+    R_SUCCEED();
+}
+
+Result IHomeMenuFunctions::GetHomeButtonWriterLockAccessor(
+    Out<SharedPointer<ILockAccessor>> out_lock_accessor) {
+    // qlaunch's invitation-to-MyPage shortcut checks this lock.
+    LOG_DEBUG(Service_AM, "called");
+    *out_lock_accessor = std::make_shared<ILockAccessor>(system, m_window_system.GetLockState(0));
+    R_SUCCEED();
+}
+
+Result IHomeMenuFunctions::GetWriterLockAccessorEx(
+    Out<SharedPointer<ILockAccessor>> out_lock_accessor, u32 button_type) {
+    LOG_DEBUG(Service_AM, "called, button_type={}", button_type);
+    *out_lock_accessor =
+        std::make_shared<ILockAccessor>(system, m_window_system.GetLockState(button_type));
     R_SUCCEED();
 }
 

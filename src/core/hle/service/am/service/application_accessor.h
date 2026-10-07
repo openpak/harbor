@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "common/uuid.h"
 #include "core/hle/service/am/am_types.h"
 #include "core/hle/service/cmif_types.h"
@@ -35,9 +37,24 @@ private:
     Result CheckRightsEnvironmentAvailable(Out<bool> out_is_available);
     Result GetNsRightsEnvironmentHandle(Out<u64> out_handle);
     Result ReportApplicationExitTimeout();
+    Result IsCompleted(Out<bool> out_is_completed);
+    Result TerminateAllLibraryApplets();
+    Result AreAnyLibraryAppletsLeft(Out<bool> out_are_any_left);
+    Result GetApplicationId(Out<u64> out_application_id);
+    Result GetApplicationLaunchProperty(OutBuffer<BufferAttr_HipcMapAlias> out_launch_property);
+    Result GetApplicationLaunchRequestInfo(Out<u32> out_unknown0, Out<u32> out_unknown1,
+                                           Out<u64> out_unknown2);
+    Result GetDesirableUids(Out<s32> out_count,
+                            OutArray<Common::UUID, BufferAttr_HipcMapAlias> out_uids);
+    Result SetApplicationAttribute(InLargeData<AppletAttribute, BufferAttr_HipcMapAlias> attribute);
+    Result HasSaveDataAccessPermission(Out<bool> out_has_permission, u64 application_id);
+    Result PushToFriendInvitationStorageChannel(SharedPointer<IStorage> storage);
+
+    bool IsSystemApplication() const;
 
     WindowSystem& m_window_system;
     const std::shared_ptr<Applet> m_applet;
+    std::optional<Common::UUID> m_last_preselected_user{};
 };
 
 } // namespace Service::AM

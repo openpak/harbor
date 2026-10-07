@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "core/hle/result.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/service/display_controller.h"
@@ -22,7 +24,7 @@ IDisplayController::IDisplayController(Core::System& system_, std::shared_ptr<Ap
         {3, nullptr, "GetCallerAppletCaptureImage"},
         {4, nullptr, "UpdateCallerAppletCaptureImage"},
         {5, D<&IDisplayController::GetLastForegroundCaptureImageEx>, "GetLastForegroundCaptureImageEx"},
-        {6, nullptr, "GetLastApplicationCaptureImageEx"},
+        {6, D<&IDisplayController::GetLastApplicationCaptureImageEx>, "GetLastApplicationCaptureImageEx"},
         {7, D<&IDisplayController::GetCallerAppletCaptureImageEx>, "GetCallerAppletCaptureImageEx"},
         {8, D<&IDisplayController::TakeScreenShotOfOwnLayer>, "TakeScreenShotOfOwnLayer"},
         {9, nullptr, "CopyBetweenCaptureBuffers"},
@@ -36,14 +38,14 @@ IDisplayController::IDisplayController(Core::System& system_, std::shared_ptr<Ap
         {17, nullptr, "AcquireLastForegroundCaptureBufferEx"},
         {18, nullptr, "AcquireCallerAppletCaptureBufferEx"},
         {20, D<&IDisplayController::ClearCaptureBuffer>, "ClearCaptureBuffer"},
-        {21, nullptr, "ClearAppletTransitionBuffer"},
+        {21, D<&IDisplayController::ClearAppletTransitionBuffer>, "ClearAppletTransitionBuffer"},
         {22, D<&IDisplayController::AcquireLastApplicationCaptureSharedBuffer>, "AcquireLastApplicationCaptureSharedBuffer"},
         {23, D<&IDisplayController::ReleaseLastApplicationCaptureSharedBuffer>, "ReleaseLastApplicationCaptureSharedBuffer"},
         {24, D<&IDisplayController::AcquireLastForegroundCaptureSharedBuffer>, "AcquireLastForegroundCaptureSharedBuffer"},
         {25, D<&IDisplayController::ReleaseLastForegroundCaptureSharedBuffer>, "ReleaseLastForegroundCaptureSharedBuffer"},
         {26, D<&IDisplayController::AcquireCallerAppletCaptureSharedBuffer>, "AcquireCallerAppletCaptureSharedBuffer"},
         {27, D<&IDisplayController::ReleaseCallerAppletCaptureSharedBuffer>, "ReleaseCallerAppletCaptureSharedBuffer"},
-        {28, nullptr, "TakeScreenShotOfOwnLayerEx"},
+        {28, D<&IDisplayController::TakeScreenShotOfOwnLayerEx>, "TakeScreenShotOfOwnLayerEx"},
     };
     // clang-format on
 
@@ -56,6 +58,27 @@ Result IDisplayController::GetLastForegroundCaptureImageEx(
     Out<bool> out_was_written, OutBuffer<BufferAttr_HipcMapAlias> out_image_data) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
     *out_was_written = true;
+    R_SUCCEED();
+}
+
+Result IDisplayController::GetLastApplicationCaptureImageEx(
+    Out<bool> out_was_written, OutBuffer<BufferAttr_HipcMapAlias> out_image_data) {
+    // No application frame is kept for this copy: the image is "not written" and left black.
+    LOG_DEBUG(Service_AM, "called");
+    std::fill(out_image_data.begin(), out_image_data.end(), u8{0});
+    *out_was_written = false;
+    R_SUCCEED();
+}
+
+Result IDisplayController::ClearAppletTransitionBuffer(u32 color) {
+    LOG_DEBUG(Service_AM, "called, color={:08x}", color);
+    R_SUCCEED();
+}
+
+Result IDisplayController::TakeScreenShotOfOwnLayerEx(bool unknown0, bool unknown1,
+                                                      s32 fbshare_layer_index) {
+    LOG_DEBUG(Service_AM, "called, unknown0={} unknown1={} fbshare_layer_index={}", unknown0,
+              unknown1, fbshare_layer_index);
     R_SUCCEED();
 }
 

@@ -6,7 +6,10 @@
 
 #include "common/settings.h"
 #include "core/hle/service/am/am_results.h"
+#include "core/core.h"
 #include "core/hle/service/am/applet.h"
+#include "core/hle/service/am/applet_manager.h"
+#include "core/hle/service/am/window_system.h"
 #include "core/hle/service/am/service/common_state_getter.h"
 #include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/service/storage.h"
@@ -17,6 +20,18 @@
 #include "core/hle/service/vi/vi_types.h"
 
 namespace Service::AM {
+
+namespace {
+// In a HOME session readers and writers of one button share its lock.
+std::shared_ptr<LockState> SharedLockState(Core::System& system, u32 button_type) {
+    if (!system.GetAppletManager().IsHomeSession()) {
+        return nullptr;
+    }
+    auto* const window_system = system.GetAppletManager().GetWindowSystem();
+    return window_system ? window_system->GetLockState(button_type) : nullptr;
+}
+} // namespace
+
 
 ICommonStateGetter::ICommonStateGetter(Core::System& system_, std::shared_ptr<Applet> applet)
     : ServiceFramework{system_, "ICommonStateGetter"}, m_applet{std::move(applet)} {
@@ -42,7 +57,7 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_, std::shared_ptr<Ap
         {30, D<&ICommonStateGetter::GetHomeButtonReaderLockAccessor>, "GetHomeButtonReaderLockAccessor"},
         {31, D<&ICommonStateGetter::GetReaderLockAccessorEx>, "GetReaderLockAccessorEx"}, //2.0.0+
         {32, D<&ICommonStateGetter::GetWriterLockAccessorEx>, "GetWriterLockAccessorEx"}, //7.0.0+
-        {40, nullptr, "GetCradleFwVersion"}, //2.0.0+
+        {40, D<&ICommonStateGetter::GetCradleFwVersion>, "GetCradleFwVersion"}, //2.0.0+
         {50, D<&ICommonStateGetter::IsVrModeEnabled>, "IsVrModeEnabled"}, //3.0.0+
         {51, D<&ICommonStateGetter::SetVrModeEnabled>, "SetVrModeEnabled"}, //3.0.0+
         {52, D<&ICommonStateGetter::SetLcdBacklighOffEnabled>, "SetLcdBacklighOffEnabled"}, //4.0.0+
@@ -154,14 +169,16 @@ Result ICommonStateGetter::GetAcquiredSleepLockEvent(
 Result ICommonStateGetter::GetReaderLockAccessorEx(
     Out<SharedPointer<ILockAccessor>> out_lock_accessor, u32 button_type) {
     LOG_INFO(Service_AM, "called, button_type={}", button_type);
-    *out_lock_accessor = std::make_shared<ILockAccessor>(system);
+    *out_lock_accessor =
+        std::make_shared<ILockAccessor>(system, SharedLockState(system, button_type));
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::GetWriterLockAccessorEx(
     Out<SharedPointer<ILockAccessor>> out_lock_accessor, u32 button_type) {
     LOG_INFO(Service_AM, "called, button_type={}", button_type);
-    *out_lock_accessor = std::make_shared<ILockAccessor>(system);
+    *out_lock_accessor =
+        std::make_shared<ILockAccessor>(system, SharedLockState(system, button_type));
     R_SUCCEED();
 }
 
@@ -366,7 +383,7 @@ Result ICommonStateGetter::PushToGeneralChannel(SharedPointer<IStorage> storage)
 
 Result ICommonStateGetter::GetHomeButtonReaderLockAccessor(Out<SharedPointer<ILockAccessor>> out_lock_accessor) {
     LOG_DEBUG(Service_AM, "called");
-    *out_lock_accessor = std::make_shared<ILockAccessor>(system);
+    *out_lock_accessor = std::make_shared<ILockAccessor>(system, SharedLockState(system, 0));
     R_SUCCEED();
 }
 
@@ -374,7 +391,23 @@ Result ICommonStateGetter::SetHandlingHomeButtonShortPressedEnabled(bool enabled
     LOG_DEBUG(Service_AM, "called, enabled={} applet_id={}", enabled, m_applet->applet_id);
 
     std::scoped_lock lk{m_applet->lock};
-    m_applet->home_button_short_pressed_blocked = !enabled;
+    if (system.GetAppletManager().IsHomeSession()) {
+        // The applet takes the HOME short press itself while it holds the foreground.
+        m_applet->handles_home_button_short_press = enabled;
+    } else {
+        m_applet->home_button_short_pressed_blocked = !enabled;
+    }
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::GetCradleFwVersion(Out<u32> out_pdc_h, Out<u32> out_pdc_a,
+                                              Out<u32> out_mcu, Out<u32> out_dp2hdmi) {
+    // What a console answers with no dock attached is not public: zeros, as the Ryujinx Harbor.
+    LOG_WARNING(Service_AM, "unknown contract: ICommonStateGetter 40 GetCradleFwVersion -> zeros");
+    *out_pdc_h = 0;
+    *out_pdc_a = 0;
+    *out_mcu = 0;
+    *out_dp2hdmi = 0;
     R_SUCCEED();
 }
 
