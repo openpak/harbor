@@ -8,6 +8,7 @@
 
 #include <array>
 #include <optional>
+#include <span>
 
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -76,6 +77,11 @@ public:
     /// Re-reads profiles.dat when an emulation session starts. Outside a HOME session a console
     /// with no user gets the default one, as before.
     void ReloadForSession(bool home_session);
+
+    /// IProfile 30 GetImageId: 16 bytes qlaunch compares to notice a new profile picture (it
+    /// reloads the HOME icon when they change). Derived from the image bytes, so it changes with
+    /// the picture and survives restarts.
+    static std::array<u8, 0x10> ImageId(std::span<const u8> image);
 
     Result AddUser(const ProfileInfo& user);
     Result CreateNewUser(Common::UUID uuid, const ProfileUsername& username);

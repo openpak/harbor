@@ -103,6 +103,7 @@ struct KernelCore::Impl {
         // Initialize kernel memory and resources.
         InitializeSystemResourceLimit(kernel, system.CoreTiming());
         InitializeMemoryLayout();
+        InitializeAppletResourceLimit(kernel);
         InitializeShutdownThreads();
         InitializePhysicalCores();
         InitializePreemption(kernel);
@@ -161,6 +162,7 @@ struct KernelCore::Impl {
         CleanupObject(time_shared_mem);
         CleanupObject(hidbus_shared_mem);
         CleanupObject(system_resource_limit);
+        CleanupObject(applet_resource_limit);
 
         for (u32 core_id = 0; core_id < Core::Hardware::NUM_CPU_CORES; core_id++) {
             if (shutdown_threads[core_id]) {
@@ -206,6 +208,19 @@ struct KernelCore::Impl {
     }
 
     void CloseServices() {
+        // Stop the host threads that would otherwise keep calling into a kernel being torn down.
+        std::vector<std::function<void()>> stops;
+        {
+            std::scoped_lock lk{host_thread_stop_lock};
+            for (auto& [id, stop] : host_thread_stops) {
+                stops.push_back(std::move(stop));
+            }
+            host_thread_stops.clear();
+        }
+        for (auto& stop : stops) {
+            stop();
+        }
+
         // Ensures all servers gracefully shutdown.
         std::scoped_lock lk{server_lock};
         server_managers.clear();
@@ -251,8 +266,24 @@ struct KernelCore::Impl {
         system_resource_limit->Reserve(kernel, LimitableResource::PhysicalMemoryMax, kernel_size);
 
         // Reserve secure applet memory, introduced in firmware 5.0.0
-        constexpr u64 secure_applet_memory_size{4_MiB};
+        constexpr u64 secure_applet_memory_size{KSystemControl::SecureAppletMemorySize};
         ASSERT(system_resource_limit->Reserve(kernel, LimitableResource::PhysicalMemoryMax, secure_applet_memory_size));
+    }
+
+    // Creates the one resource limit every Applet-pool process shares, as pm does on the console:
+    // svcGetInfo(TotalMemorySize) then tells an applet what the pool really has left, and the web
+    // applet sizes its heap from that. The object counts are four times a single process's.
+    void InitializeAppletResourceLimit(KernelCore& kernel) {
+        applet_resource_limit = KResourceLimit::Create(system.Kernel());
+        applet_resource_limit->Initialize();
+        KResourceLimit::Register(kernel, applet_resource_limit);
+
+        const s64 pool_size = static_cast<s64>(memory_manager->GetSize(KMemoryManager::Pool::Applet));
+        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::PhysicalMemoryMax, pool_size).IsSuccess());
+        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::ThreadCountMax, 4 * 800).IsSuccess());
+        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::EventCountMax, 4 * 900).IsSuccess());
+        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::TransferMemoryCountMax, 4 * 200).IsSuccess());
+        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::SessionCountMax, 4 * 1133).IsSuccess());
     }
 
     void InitializePreemption(KernelCore& kernel) {
@@ -784,6 +815,7 @@ struct KernelCore::Impl {
 
     Init::KSlabResourceCounts slab_resource_counts{};
     KResourceLimit* system_resource_limit{};
+    KResourceLimit* applet_resource_limit{};
 
     KPageBufferSlabHeap page_buffer_slab_heap;
 
@@ -798,6 +830,10 @@ struct KernelCore::Impl {
 
     std::mutex server_lock;
     std::vector<std::unique_ptr<Service::ServerManager>> server_managers;
+
+    std::mutex host_thread_stop_lock;
+    std::vector<std::pair<u64, std::function<void()>>> host_thread_stops;
+    u64 next_host_thread_stop_id{1};
 
     std::array<std::optional<Kernel::PhysicalCore>, Core::Hardware::NUM_CPU_CORES> cores;
 
@@ -867,12 +903,28 @@ void KernelCore::CloseServices() {
     impl->CloseServices();
 }
 
+u64 KernelCore::AddHostThreadStop(std::function<void()> stop) {
+    std::scoped_lock lk{impl->host_thread_stop_lock};
+    const u64 id = impl->next_host_thread_stop_id++;
+    impl->host_thread_stops.emplace_back(id, std::move(stop));
+    return id;
+}
+
+void KernelCore::RemoveHostThreadStop(u64 id) {
+    std::scoped_lock lk{impl->host_thread_stop_lock};
+    std::erase_if(impl->host_thread_stops, [id](const auto& entry) { return entry.first == id; });
+}
+
 const KResourceLimit* KernelCore::GetSystemResourceLimit() const {
     return impl->system_resource_limit;
 }
 
 KResourceLimit* KernelCore::GetSystemResourceLimit() {
     return impl->system_resource_limit;
+}
+
+KResourceLimit* KernelCore::GetAppletResourceLimit() {
+    return impl->applet_resource_limit;
 }
 
 void KernelCore::AppendNewProcess(KProcess* process) {
