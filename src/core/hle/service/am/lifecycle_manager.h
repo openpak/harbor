@@ -52,6 +52,18 @@ public:
         return m_is_application;
     }
 
+    // Applications learn focus changes through FocusStateChanged; every other applet through
+    // ChangeIntoForeground/ChangeIntoBackground. The starter (a system application) follows the
+    // application's suspension rules but takes the applet messages: its hand-offs to qlaunch wait
+    // for 2 and then 1, and it ignores 15.
+    bool UsesFocusStateChanged() const {
+        return m_uses_focus_state_changed;
+    }
+
+    void SetUsesFocusStateChanged(bool enabled) {
+        m_uses_focus_state_changed = enabled;
+    }
+
     bool GetForcedSuspend() {
         return m_forced_suspend;
     }
@@ -163,6 +175,7 @@ private:
     std::list<AppletMessage> m_unordered_messages{};
 
     bool m_is_application{};
+    bool m_uses_focus_state_changed{};
     bool m_focus_state_changed_notification_enabled{true};
     bool m_operation_mode_changed_notification_enabled{true};
     bool m_hdcp_state_changed_notification_enabled{true};

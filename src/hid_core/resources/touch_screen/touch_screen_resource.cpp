@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+
 #include "common/logging.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/k_event.h"
@@ -18,6 +20,39 @@
 
 namespace Service::HID {
 constexpr auto GestureUpdatePeriod = std::chrono::nanoseconds{4 * 1000 * 1000}; // (4ms, 1000Hz)
+
+namespace {
+constexpr u64 FingerBit(u32 finger) {
+    return finger < 64 ? u64{1} << finger : 0;
+}
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), per finger.
+// A finger down when this aruid got the touch screen back is hidden from it until lifted.
+const TouchScreenState& HideHeldTouches(u64& held_fingers, const TouchScreenState& touch,
+                                        TouchScreenState& out) {
+    if (held_fingers == 0) {
+        return touch;
+    }
+
+    u64 still_down{};
+    out = touch;
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(touch.entry_count); i++) {
+        const u64 bit = FingerBit(touch.states[i].finger);
+        if ((held_fingers & bit) != 0) {
+            still_down |= bit;
+            continue;
+        }
+        out.states[count++] = touch.states[i];
+    }
+    for (std::size_t i = count; i < out.states.size(); i++) {
+        out.states[i] = {};
+    }
+    out.entry_count = static_cast<s32>(count);
+    held_fingers = still_down;
+    return out;
+}
+} // namespace
 
 TouchResource::TouchResource(Core::System& system_) : system{system_} {
     m_set_sys = system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys");
@@ -511,7 +546,7 @@ void TouchResource::OnTouchUpdate(s64 timestamp) {
     std::scoped_lock lock{*shared_mutex};
 
     for (std::size_t aruid_index = 0; aruid_index < AruidIndexMax; aruid_index++) {
-        const auto* applet_data = applet_resource->GetAruidDataByIndex(aruid_index);
+        auto* applet_data = applet_resource->GetAruidDataByIndex(aruid_index);
         TouchAruidData& data = aruid_data[aruid_index];
 
         if (applet_data == nullptr || !applet_data->flag.is_assigned) {
@@ -549,12 +584,16 @@ void TouchResource::OnTouchUpdate(s64 timestamp) {
 
             auto& touch_shared = applet_data->shared_memory_format->touch_screen;
 
+            const auto& host_touch = HostTouchState(applet_data->aruid);
             if (applet_data->flag.enable_touchscreen) {
-                StorePreviousTouchState(previous_touch_state, data.finger_map, current_touch_state, true);
-                touch_shared.touch_screen_lifo.WriteNextEntry(current_touch_state);
+                TouchScreenState filtered;
+                const auto& touch =
+                    HideHeldTouches(applet_data->input_focus.held_fingers, host_touch, filtered);
+                StorePreviousTouchState(previous_touch_state, data.finger_map, touch, true);
+                touch_shared.touch_screen_lifo.WriteNextEntry(touch);
             } else {
                 TouchScreenState denied{};
-                denied.sampling_number = current_touch_state.sampling_number;
+                denied.sampling_number = host_touch.sampling_number;
                 denied.entry_count = 0;
                 data.finger_map.finger_count = 0;
                 data.finger_map.finger_ids = {};
@@ -562,6 +601,37 @@ void TouchResource::OnTouchUpdate(s64 timestamp) {
             }
         }
     }
+}
+
+void TouchResource::HoldTouches(u64 aruid) {
+    std::scoped_lock lock{*shared_mutex};
+    auto* data = applet_resource->GetAruidData(aruid);
+    if (data == nullptr) {
+        return;
+    }
+
+    const auto& touch = HostTouchState(aruid);
+    u64 held_fingers{};
+    for (std::size_t i = 0; i < static_cast<std::size_t>(touch.entry_count); i++) {
+        held_fingers |= FingerBit(touch.states[i].finger);
+    }
+    data->input_focus.held_fingers = held_fingers;
+}
+
+void TouchResource::SetSelfTestTouches(std::span<const u64> aruids,
+                                       const TouchScreenState& state) {
+    std::scoped_lock lock{*shared_mutex};
+    self_test_aruids.assign(aruids.begin(), aruids.end());
+    self_test_touch_state = state;
+}
+
+const TouchScreenState& TouchResource::HostTouchState(u64 aruid) const {
+    if (!self_test_aruids.empty() &&
+        std::find(self_test_aruids.begin(), self_test_aruids.end(), aruid) !=
+            self_test_aruids.end()) {
+        return self_test_touch_state;
+    }
+    return current_touch_state;
 }
 
 void TouchResource::SanitizeInput(TouchScreenState& state) const {

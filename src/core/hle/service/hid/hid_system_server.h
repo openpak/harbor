@@ -53,6 +53,7 @@ private:
     void GetVibrationMasterVolume(HLERequestContext& ctx);
     void BeginPermitVibrationSession(HLERequestContext& ctx);
     void EndPermitVibrationSession(HLERequestContext& ctx);
+    void SendVibrationNotificationPattern(HLERequestContext& ctx);
     void IsJoyConRailEnabled(HLERequestContext& ctx);
     void IsJoyConAttachedOnAllRail(HLERequestContext& ctx);
     void AcquireConnectionTriggerTimeoutEvent(HLERequestContext& ctx);

@@ -127,6 +127,7 @@ add_library(hid_core STATIC
     resources/controller_base.h
     resources/hid_firmware_settings.cpp
     resources/hid_firmware_settings.h
+    resources/input_focus_self_test.cpp
     resources/irs_ring_lifo.h
     resources/ring_lifo.h
     resources/shared_memory_format.h

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <mutex>
 #include <span>
+#include <vector>
 
 #include "common/common_types.h"
 #include "hid_core/hid_types.h"
@@ -156,6 +157,14 @@ public:
 
     void EnableAppletToGetInput(u64 aruid);
 
+    // The aruid gets the input back: the buttons down right now stay hidden from it until
+    // released.
+    void HoldPressedButtons(u64 aruid);
+
+    // Self-test only (HARBOR_HID_SELFTEST): the listed aruids read these host buttons instead of
+    // the controller's. An empty list restores the controllers.
+    void SetSelfTestButtons(std::span<const u64> aruids, Core::HID::NpadButton buttons);
+
 private:
     struct NpadControllerData {
         NpadInternalState* shared_memory = nullptr;
@@ -178,6 +187,8 @@ private:
     void ControllerUpdate(Kernel::KernelCore& kernel, Core::HID::ControllerTriggerType type, std::size_t controller_idx);
     void InitNewlyAddedController(Kernel::KernelCore& kernel, u64 aruid, Core::HID::NpadIdType npad_id);
     void RequestPadStateUpdate(Kernel::KernelCore& kernel, u64 aruid, Core::HID::NpadIdType npad_id);
+    Core::HID::NpadButtonState ReadHostButtons(const NpadControllerData& controller,
+                                               u64 aruid) const;
     void WriteEmptyEntry(NpadInternalState* npad);
 
     NpadControllerData& GetControllerFromHandle(
@@ -204,6 +215,8 @@ private:
     NpadVibration vibration_handler{};
 
     std::atomic<u64> press_state{};
+    std::vector<u64> self_test_aruids;
+    Core::HID::NpadButton self_test_buttons{};
     std::array<std::array<NpadControllerData, MaxSupportedNpadIdTypes>, AruidIndexMax> controller_data{};
 };
 } // namespace Service::HID

@@ -77,11 +77,14 @@ Result AppletResource::RegisterAppletResourceUserId(u64 aruid, bool enable_input
 
     aruid_data.aruid = aruid;
     aruid_data.flag.is_initialized.Assign(true);
+    aruid_data.input_focus = {};
     if (enable_input) {
         aruid_data.flag.enable_pad_input.Assign(true);
         aruid_data.flag.enable_six_axis_sensor.Assign(true);
         aruid_data.flag.bit_18.Assign(true);
         aruid_data.flag.enable_touchscreen.Assign(true);
+    } else {
+        aruid_data.input_focus.is_managed = true;
     }
 
     data_index = AruidIndexMax;
@@ -122,6 +125,7 @@ void AppletResource::UnregisterAppletResourceUserId(u64 aruid) {
     DestroySevenSixAxisTransferMemory();
     data[index].flag.raw = 0;
     data[index].aruid = 0;
+    data[index].input_focus = {};
 
     registration_list.flag[index] = RegistrationStatus::PendingDelete;
 
@@ -202,16 +206,6 @@ Result AppletResource::DestroySevenSixAxisTransferMemory() {
     return ResultSuccess;
 }
 
-void AppletResource::EnableInput(u64 aruid, bool is_enabled) {
-    const u64 index = GetIndexFromAruid(aruid);
-    if (index >= AruidIndexMax) {
-        return;
-    }
-
-    data[index].flag.enable_pad_input.Assign(is_enabled);
-    data[index].flag.enable_touchscreen.Assign(is_enabled);
-}
-
 bool AppletResource::SetAruidValidForVibration(u64 aruid, bool is_enabled) {
     const u64 index = GetIndexFromAruid(aruid);
     if (index >= AruidIndexMax) {
@@ -240,22 +234,34 @@ void AppletResource::EnableSixAxisSensor(u64 aruid, bool is_enabled) {
     data[index].flag.enable_six_axis_sensor.Assign(is_enabled);
 }
 
-void AppletResource::EnablePadInput(u64 aruid, bool is_enabled) {
+bool AppletResource::EnablePadInput(u64 aruid, bool is_enabled) {
     const u64 index = GetIndexFromAruid(aruid);
     if (index >= AruidIndexMax) {
-        return;
+        return false;
     }
 
-    data[index].flag.enable_pad_input.Assign(is_enabled);
+    auto& aruid_data = data[index];
+    const bool gained = is_enabled && !aruid_data.flag.enable_pad_input;
+    aruid_data.flag.enable_pad_input.Assign(is_enabled);
+    if (!is_enabled) {
+        aruid_data.input_focus.is_managed = true;
+    }
+    return gained && aruid_data.input_focus.is_managed;
 }
 
-void AppletResource::EnableTouchScreen(u64 aruid, bool is_enabled) {
+bool AppletResource::EnableTouchScreen(u64 aruid, bool is_enabled) {
     const u64 index = GetIndexFromAruid(aruid);
     if (index >= AruidIndexMax) {
-        return;
+        return false;
     }
 
-    data[index].flag.enable_touchscreen.Assign(is_enabled);
+    auto& aruid_data = data[index];
+    const bool gained = is_enabled && !aruid_data.flag.enable_touchscreen;
+    aruid_data.flag.enable_touchscreen.Assign(is_enabled);
+    if (!is_enabled) {
+        aruid_data.input_focus.is_managed = true;
+    }
+    return gained && aruid_data.input_focus.is_managed;
 }
 
 void AppletResource::SetIsPalmaConnectable(u64 aruid, bool is_connectable) {
@@ -302,6 +308,7 @@ Result AppletResource::RegisterCoreAppletResource() {
 
         aruid_data.aruid = 0;
         aruid_data.flag.is_initialized.Assign(true);
+        aruid_data.input_focus = {};
         aruid_data.flag.enable_pad_input.Assign(true);
         aruid_data.flag.enable_six_axis_sensor.Assign(true);
         aruid_data.flag.bit_18.Assign(true);

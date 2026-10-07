@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
+
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -109,7 +111,22 @@ void ResourceManager::Initialize() {
     InitializeConsoleSixAxisSampler();
     InitializeAHidSampler();
 
+    // Only once every sampler exists: the motion update reads seven_six_axis and
+    // console_six_axis, which InitializeConsoleSixAxisSampler creates after the common sampler.
+    // Scheduled earlier, a tick on the host timing thread could find them null.
+    system.CoreTiming().ScheduleLoopingEvent(npad_update_ns, npad_update_ns, npad_update_event);
+    system.CoreTiming().ScheduleLoopingEvent(default_update_ns, default_update_ns,
+                                             default_update_event);
+    system.CoreTiming().ScheduleLoopingEvent(mouse_keyboard_update_ns, mouse_keyboard_update_ns,
+                                             mouse_keyboard_update_event);
+    system.CoreTiming().ScheduleLoopingEvent(motion_update_ns, motion_update_ns,
+                                             motion_update_event);
+
     is_initialized = true;
+
+    if (std::getenv("HARBOR_HID_SELFTEST") != nullptr) {
+        RunInputFocusSelfTest();
+    }
 }
 
 std::shared_ptr<AppletResource> ResourceManager::GetAppletResource() const {
@@ -250,14 +267,6 @@ void ResourceManager::InitializeHidCommonSampler() {
     home_button->SetAppletResource(applet_resource, &shared_mutex);
     sleep_button->SetAppletResource(applet_resource, &shared_mutex);
     capture_button->SetAppletResource(applet_resource, &shared_mutex);
-
-    system.CoreTiming().ScheduleLoopingEvent(npad_update_ns, npad_update_ns, npad_update_event);
-    system.CoreTiming().ScheduleLoopingEvent(default_update_ns, default_update_ns,
-                                             default_update_event);
-    system.CoreTiming().ScheduleLoopingEvent(mouse_keyboard_update_ns, mouse_keyboard_update_ns,
-                                             mouse_keyboard_update_event);
-    system.CoreTiming().ScheduleLoopingEvent(motion_update_ns, motion_update_ns,
-                                             motion_update_event);
 }
 
 void ResourceManager::InitializeTouchScreenSampler() {
@@ -332,7 +341,8 @@ void ResourceManager::FreeAppletResourceId(u64 aruid) {
 
 void ResourceManager::EnableInput(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnableInput(aruid, is_enabled);
+    EnablePadInput(aruid, is_enabled);
+    EnableTouchScreen(aruid, is_enabled);
 }
 
 void ResourceManager::EnableSixAxisSensor(u64 aruid, bool is_enabled) {
@@ -342,12 +352,18 @@ void ResourceManager::EnableSixAxisSensor(u64 aruid, bool is_enabled) {
 
 void ResourceManager::EnablePadInput(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnablePadInput(aruid, is_enabled);
+    if (applet_resource->EnablePadInput(aruid, is_enabled)) {
+        // The button that closed the applet in front is still down: it must not reach this
+        // aruid as a new press.
+        npad->HoldPressedButtons(aruid);
+    }
 }
 
 void ResourceManager::EnableTouchScreen(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnableTouchScreen(aruid, is_enabled);
+    if (applet_resource->EnableTouchScreen(aruid, is_enabled)) {
+        touch_resource->HoldTouches(aruid);
+    }
 }
 
 NpadVibrationBase* ResourceManager::GetVibrationDevice(

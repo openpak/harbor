@@ -73,6 +73,10 @@ public:
     ProfileManager();
     ~ProfileManager();
 
+    /// Re-reads profiles.dat when an emulation session starts. Outside a HOME session a console
+    /// with no user gets the default one, as before.
+    void ReloadForSession(bool home_session);
+
     Result AddUser(const ProfileInfo& user);
     Result CreateNewUser(Common::UUID uuid, const ProfileUsername& username);
     Result CreateNewUser(Common::UUID uuid, const std::string& username);
@@ -120,6 +124,7 @@ public:
 
 private:
     void ParseUserSaveFile();
+    void OpenCurrentUser();
     std::optional<std::size_t> AddToProfiles(const ProfileInfo& profile);
     void RemoveAllProfiles();
 

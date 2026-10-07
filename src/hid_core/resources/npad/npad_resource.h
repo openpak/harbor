@@ -111,6 +111,7 @@ public:
     std::size_t GetNpadCaptureButtonAssignment(std::span<Core::HID::NpadButton> out_list, u64 aruid) const;
 
     Result SetNpadSystemExtStateEnabled(u64 aruid, bool is_enabled);
+    Result GetNpadSystemExtState(bool& is_enabled, u64 aruid) const;
 
 private:
     NPadData active_data{};
