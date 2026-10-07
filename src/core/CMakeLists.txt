@@ -399,6 +399,7 @@ add_library(core STATIC
     hle/service/acc/nintendo_account_oauth.h
     hle/service/acc/oauth_procedure.cpp
     hle/service/acc/oauth_procedure.h
+    hle/service/acc/oauth_procedure_rules.h
     hle/service/acc/openpak_account.cpp
     hle/service/acc/openpak_account.h
     hle/service/acc/openpak_async.cpp

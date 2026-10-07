@@ -19,6 +19,7 @@
 #include "core/hle/service/acc/errors.h"
 #include "core/hle/service/acc/nintendo_account_oauth.h"
 #include "core/hle/service/acc/oauth_procedure.h"
+#include "core/hle/service/acc/oauth_procedure_rules.h"
 #include "core/hle/service/acc/openpak_async.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -31,20 +32,18 @@ namespace oauth = NintendoAccountOAuth;
 
 namespace detail {
 
-// The module's procedure stages (+0x18): fresh, suspended, resumed, response applied.
-enum class Stage { Fresh, Suspended, Resumed, Applied };
-
-// Session kinds in the module's store (0x0860eea0): linkage 0, registration 3.
-constexpr int LinkageKind = 0;
-constexpr int RegistrationKind = 3;
-
 /// What a procedure knows, shared with the work it starts (which may outlive the IPC object).
 struct ProcedureState {
-    explicit ProcedureState(int kind_) : kind{kind_} {}
+    explicit ProcedureState(ProcedureRules::Kind kind_) : kind{kind_} {}
 
-    const int kind;
+    /// The rules' view of this procedure. Call with `mutex` held.
+    ProcedureRules::Machine Machine() const {
+        return {.kind = kind, .stage = stage, .has_code = !code.empty(), .registered = registered};
+    }
+
+    const ProcedureRules::Kind kind;
     std::mutex mutex;
-    Stage stage = Stage::Fresh;
+    ProcedureRules::Stage stage = ProcedureRules::Stage::Fresh;
     std::string verifier;
     std::string state;
     std::string code;
@@ -52,6 +51,7 @@ struct ProcedureState {
     /// registration is going to create for a registration.
     std::string uid;
     std::optional<OpenPakAccount::NintendoAccountLink> link;
+    bool registered = false;
     /// The IPC object is gone: a registration that never registered drops its device account.
     bool abandoned = false;
 };
@@ -61,10 +61,9 @@ struct ProcedureState {
 namespace {
 
 using detail::ProcedureState;
-using detail::Stage;
+using ProcedureRules::Kind;
+using ProcedureRules::Stage;
 
-constexpr std::size_t RequestUrlSize = 0x1000;
-constexpr std::size_t CallbackUriSize = 0x100;
 constexpr std::size_t NicknameSize = 0x21;
 // acc:su 211 maps this much of the caller's transfer memory as the procedure's work area.
 constexpr u32 MinimumWorkMemorySize = 0x22000;
@@ -75,7 +74,7 @@ struct Suspended {
 };
 
 std::mutex sessions_mutex;
-std::map<std::pair<int, ProcedureSessionId>, Suspended> sessions;
+std::map<std::pair<Kind, ProcedureSessionId>, Suspended> sessions;
 
 ProcedureSessionId NewSessionId() {
     std::random_device random;
@@ -91,23 +90,29 @@ void PushError(HLERequestContext& ctx, Result result) {
 /// A fixed-size string into a receive-list buffer, zero padded.
 void WriteFixed(HLERequestContext& ctx, VAddr address, std::size_t capacity, std::size_t size,
                 std::string_view text) {
-    std::vector<u8> buffer(std::min(size, capacity));
-    std::memcpy(buffer.data(), text.data(), std::min(text.size(), buffer.size() - 1));
+    const auto buffer = ProcedureRules::FixedString(text, capacity, size);
     ctx.GetMemory().WriteBlock(address, buffer.data(), buffer.size());
 }
 
 /// GetRequest's two 0x1A pointer outputs: RequestUrl (0x1000) and CallbackUri (0x100). Written by
 /// hand, one per receive-list entry; a single entry large enough for both takes them back to back.
 Result WriteRequest(HLERequestContext& ctx, ProcedureState& state, int theme) {
+    using ProcedureRules::CallbackUriSize;
+    using ProcedureRules::RequestLayout;
+    using ProcedureRules::RequestUrlSize;
+
     std::lock_guard lock{state.mutex};
-    if (!state.code.empty() || state.stage != Stage::Fresh) {
+    if (!ProcedureRules::CanGetRequest(state.Machine())) {
         return ResultInvalidProcedureState;
     }
 
     const auto& c = ctx.BufferDescriptorC();
-    const bool two = c.size() >= 2 && c[0].Size() > 0 && c[1].Size() > 0;
-    const bool one = c.size() == 1 && c[0].Size() >= RequestUrlSize + CallbackUriSize;
-    if (!two && !one) {
+    std::vector<std::size_t> sizes;
+    for (const auto& entry : c) {
+        sizes.push_back(entry.Size());
+    }
+    const RequestLayout layout = ProcedureRules::PlanRequest(sizes);
+    if (layout == RequestLayout::Refused) {
         LOG_WARNING(Service_ACC, "acc: GetRequest with {} receive-list entries, two expected",
                     c.size());
         return ResultInvalidBuffer;
@@ -117,7 +122,7 @@ Result WriteRequest(HLERequestContext& ctx, ProcedureState& state, int theme) {
     state.state = oauth::NewState();
     const std::string url = oauth::RequestUrl(state.verifier, state.state, theme);
 
-    if (two) {
+    if (layout == RequestLayout::TwoEntries) {
         WriteFixed(ctx, c[0].Address(), RequestUrlSize, c[0].Size(), url);
         WriteFixed(ctx, c[1].Address(), CallbackUriSize, c[1].Size(), oauth::RedirectUri);
     } else {
@@ -140,6 +145,7 @@ Result SuspendInto(ProcedureState& state, ProcedureSessionId& out) {
     return ResultSuccess;
 }
 
+/// Takes a suspended session's verifier and state; the stage is the one a resume starts at.
 Result ResumeFrom(ProcedureState& state, const ProcedureSessionId& id) {
     Suspended suspended;
     {
@@ -158,6 +164,7 @@ Result ResumeFrom(ProcedureState& state, const ProcedureSessionId& id) {
     std::lock_guard lock{state.mutex};
     state.verifier = std::move(suspended.verifier);
     state.state = std::move(suspended.state);
+    state.stage = ProcedureRules::AfterResume(state.kind);
     return ResultSuccess;
 }
 
@@ -175,8 +182,7 @@ std::vector<std::string> OtherUsers(const ProfileManager& profile_manager) {
 /// ApplyResponseAsync: the callback check here, the network work on the worker.
 void StartApply(HLERequestContext& ctx, Core::System& system,
                 const std::shared_ptr<OpenPak::AsyncWorker>& worker,
-                const std::shared_ptr<ProcedureState>& state, bool can_apply,
-                bool profile_required, std::vector<std::string> others,
+                const std::shared_ptr<ProcedureState>& state, bool profile_required, std::vector<std::string> others,
                 std::function<void(const OpenPakAccount::NintendoAccountLink&)> applied) {
     if (!ctx.CanReadBuffer(0) || ctx.GetReadBufferSize(0) == 0) {
         // The command stub refuses an empty buffer before the module sees it.
@@ -193,7 +199,7 @@ void StartApply(HLERequestContext& ctx, Core::System& system,
     std::string uid;
     {
         std::lock_guard lock{state->mutex};
-        if (!state->code.empty() || !can_apply) {
+        if (!ProcedureRules::CanApply(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
@@ -224,13 +230,13 @@ void StartApply(HLERequestContext& ctx, Core::System& system,
             abandoned = state->abandoned;
             if (result.IsSuccess() && !abandoned) {
                 state->link = link;
-                state->stage = Stage::Applied;
+                state->stage = ProcedureRules::AfterApply(state->Machine(), true);
             }
         }
         if (result.IsSuccess() && !abandoned && applied) {
             applied(link);
         }
-        if ((abandoned || result.IsError()) && state->kind == detail::RegistrationKind) {
+        if ((abandoned || result.IsError()) && state->kind == Kind::Registration) {
             // Nobody will register this user: the device account made for it goes with it.
             OpenPak::Session::ForgetProfile(uid);
         }
@@ -253,7 +259,7 @@ IOAuthProcedureForUserRegistration::IOAuthProcedureForUserRegistration(
     Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_)
     : ServiceFramework{system_, "IOAuthProcedureForUserRegistration"},
       worker{std::move(worker_)},
-      state{std::make_shared<ProcedureState>(detail::RegistrationKind)},
+      state{std::make_shared<ProcedureState>(Kind::Registration)},
       profile_manager{system_.GetProfileManager()} {
     // clang-format off
     static const FunctionInfo functions[] = {
@@ -286,7 +292,7 @@ IOAuthProcedureForUserRegistration::~IOAuthProcedureForUserRegistration() {
     {
         std::lock_guard lock{state->mutex};
         state->abandoned = true;
-        if (state->stage == Stage::Applied && registered_uid.IsInvalid()) {
+        if (state->stage == Stage::Applied && !state->registered) {
             forget = state->uid;
         }
     }
@@ -302,17 +308,16 @@ Result IOAuthProcedureForUserRegistration::Resume(const ProcedureSessionId& id) 
 
 void IOAuthProcedureForUserRegistration::PrepareAsync(HLERequestContext& ctx) {
     // The module's worker only checks the stage (0x085a1e40); nothing goes over the network.
-    Stage stage;
+    bool ready;
     {
         std::lock_guard lock{state->mutex};
-        stage = state->stage;
+        ready = ProcedureRules::PrepareSucceeds(state->Machine());
     }
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
     rb.PushIpcInterface<OpenPakAsyncContext>(
         ctx, system, worker,
-        OpenPakAsyncContext::Done(stage == Stage::Fresh ? ResultSuccess
-                                                        : ResultInvalidProcedureState));
+        OpenPakAsyncContext::Done(ready ? ResultSuccess : ResultInvalidProcedureState));
 }
 
 void IOAuthProcedureForUserRegistration::GetRequest(HLERequestContext& ctx) {
@@ -334,22 +339,17 @@ void IOAuthProcedureForUserRegistration::ApplyResponseForUserCreationAsync(
 }
 
 void IOAuthProcedureForUserRegistration::Apply(HLERequestContext& ctx, bool profile_required) {
-    bool can_apply;
-    {
-        std::lock_guard lock{state->mutex};
-        can_apply = state->stage == Stage::Fresh;
-    }
-    StartApply(ctx, system, worker, state, can_apply, profile_required,
-               OtherUsers(profile_manager), {});
+    StartApply(ctx, system, worker, state, profile_required, OtherUsers(profile_manager), {});
 }
 
 void IOAuthProcedureForUserRegistration::Suspend(HLERequestContext& ctx) {
     {
         std::lock_guard lock{state->mutex};
-        if (state->stage != Stage::Fresh) {
+        if (!ProcedureRules::CanSuspend(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
+        state->stage = ProcedureRules::AfterSuspend(state->Machine());
     }
     ProcedureSessionId id;
     SuspendInto(*state, id);
@@ -362,7 +362,7 @@ void IOAuthProcedureForUserRegistration::Suspend(HLERequestContext& ctx) {
 
 void IOAuthProcedureForUserRegistration::GetAccountId(HLERequestContext& ctx) {
     std::lock_guard lock{state->mutex};
-    if (state->stage != Stage::Applied) {
+    if (!ProcedureRules::CanReadApplied(state->Machine())) {
         PushError(ctx, ResultInvalidProcedureState);
         return;
     }
@@ -373,7 +373,7 @@ void IOAuthProcedureForUserRegistration::GetAccountId(HLERequestContext& ctx) {
 
 void IOAuthProcedureForUserRegistration::GetLinkedNintendoAccountId(HLERequestContext& ctx) {
     std::lock_guard lock{state->mutex};
-    if (state->stage != Stage::Applied) {
+    if (!ProcedureRules::CanReadApplied(state->Machine())) {
         PushError(ctx, ResultInvalidProcedureState);
         return;
     }
@@ -386,7 +386,7 @@ void IOAuthProcedureForUserRegistration::GetNickname(HLERequestContext& ctx) {
     std::string nickname;
     {
         std::lock_guard lock{state->mutex};
-        if (state->stage != Stage::Applied) {
+        if (!ProcedureRules::CanReadApplied(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
@@ -406,7 +406,7 @@ void IOAuthProcedureForUserRegistration::GetProfileImage(HLERequestContext& ctx)
     std::vector<u8> image;
     {
         std::lock_guard lock{state->mutex};
-        if (state->stage != Stage::Applied) {
+        if (!ProcedureRules::CanReadApplied(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
@@ -471,7 +471,7 @@ void IOAuthProcedureForUserRegistration::Register(HLERequestContext& ctx, std::s
     std::string uid_text;
     {
         std::lock_guard lock{state->mutex};
-        if (state->stage != Stage::Applied || registered_uid.IsValid()) {
+        if (!ProcedureRules::CanRegister(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
@@ -513,6 +513,10 @@ void IOAuthProcedureForUserRegistration::Register(HLERequestContext& ctx, std::s
         profile_manager.OpenUser(uid);
     }
     registered_uid = uid;
+    {
+        std::lock_guard lock{state->mutex};
+        state->registered = true;
+    }
 
     LOG_INFO(Service_ACC, "acc: user registered from a Nintendo Account, {} user(s)",
              profile_manager.GetUserCount());
@@ -540,7 +544,7 @@ void IOAuthProcedureForUserRegistration::GetUid(HLERequestContext& ctx) {
 
 void IOAuthProcedureForUserRegistration::IsProfileAvailable(HLERequestContext& ctx) {
     std::lock_guard lock{state->mutex};
-    if (state->stage != Stage::Applied) {
+    if (!ProcedureRules::CanReadApplied(state->Machine())) {
         PushError(ctx, ResultInvalidProcedureState);
         return;
     }
@@ -556,7 +560,7 @@ IOAuthProcedureForNintendoAccountLinkage::IOAuthProcedureForNintendoAccountLinka
     Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_, Common::UUID user_id_)
     : ServiceFramework{system_, "IOAuthProcedureForNintendoAccountLinkage"},
       worker{std::move(worker_)},
-      state{std::make_shared<ProcedureState>(detail::LinkageKind)}, user_id{user_id_} {
+      state{std::make_shared<ProcedureState>(Kind::Linkage)}, user_id{user_id_} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &IOAuthProcedureForNintendoAccountLinkage::PrepareAsync, "PrepareAsync"},
@@ -581,12 +585,7 @@ IOAuthProcedureForNintendoAccountLinkage::~IOAuthProcedureForNintendoAccountLink
 }
 
 Result IOAuthProcedureForNintendoAccountLinkage::Resume(const ProcedureSessionId& id) {
-    const Result result = ResumeFrom(*state, id);
-    if (result.IsSuccess()) {
-        std::lock_guard lock{state->mutex};
-        state->stage = Stage::Resumed;
-    }
-    return result;
+    return ResumeFrom(*state, id);
 }
 
 void IOAuthProcedureForNintendoAccountLinkage::PrepareAsync(HLERequestContext& ctx) {
@@ -613,14 +612,9 @@ void IOAuthProcedureForNintendoAccountLinkage::ApplyResponse(HLERequestContext& 
 }
 
 void IOAuthProcedureForNintendoAccountLinkage::ApplyResponseAsync(HLERequestContext& ctx) {
-    bool can_apply;
-    {
-        std::lock_guard lock{state->mutex};
-        can_apply = state->stage == Stage::Fresh || state->stage == Stage::Resumed;
-    }
     const Common::UUID uid = user_id;
     // The module syncs the user's profile from the account after the federation (0x085f9360).
-    StartApply(ctx, system, worker, state, can_apply, false,
+    StartApply(ctx, system, worker, state, false,
                OtherUsers(system.GetProfileManager()),
                [uid](const OpenPakAccount::NintendoAccountLink& link) {
                    OpenPakAccount::QueueAdoption(uid, link.nickname, link.image);
@@ -630,12 +624,11 @@ void IOAuthProcedureForNintendoAccountLinkage::ApplyResponseAsync(HLERequestCont
 void IOAuthProcedureForNintendoAccountLinkage::Suspend(HLERequestContext& ctx) {
     {
         std::lock_guard lock{state->mutex};
-        if (!state->code.empty() ||
-            (state->stage != Stage::Fresh && state->stage != Stage::Resumed)) {
+        if (!ProcedureRules::CanSuspend(state->Machine())) {
             PushError(ctx, ResultInvalidProcedureState);
             return;
         }
-        state->stage = Stage::Suspended;
+        state->stage = ProcedureRules::AfterSuspend(state->Machine());
     }
     ProcedureSessionId id;
     SuspendInto(*state, id);

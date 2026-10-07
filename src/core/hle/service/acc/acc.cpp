@@ -8,6 +8,7 @@
 #include <array>
 #include <cstring>
 #include <random>
+#include <thread>
 
 #include "common/common_types.h"
 #include "common/fs/file.h"
@@ -37,6 +38,7 @@
 #include "core/hle/service/server_manager.h"
 #include "core/loader/loader.h"
 #include "core/openpak/async_worker.h"
+#include "core/openpak/boot_connection.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
 
@@ -154,15 +156,7 @@ static Result NintendoAccountOf(const Common::UUID& user,
     return out->id != 0 ? ResultSuccess : ResultNintendoAccountIdUnavailable;
 }
 
-// nn::account::nas::NasUserBase on 22.5.0: 0x270 bytes. Offsets from the account module's cache
-// reader (0x085c44a0): 0x1a1 nickname[0x40], 0x1e1 birthday[0x10], 0x204 country[4], and
-// 0x251/0x252/0x253 targetMarketing/internalAnalysis/dataCollection (0b010 = userConfirmed).
-constexpr std::size_t NasUserBaseSize = 0x270;
-
-static void WriteField(std::array<u8, NasUserBaseSize>& target, std::size_t offset,
-                       std::size_t size, std::string_view value) {
-    std::memcpy(target.data() + offset, value.data(), std::min(value.size(), size - 1));
-}
+using NintendoAccountOAuth::NasUserBaseSize;
 
 // nn::account::baas::IManagerForSystemService (acc:su 102), and IAdministrator (acc:su 250),
 // which is the same manager plus the registration and Nintendo Account linkage commands.
@@ -319,11 +313,8 @@ private:
             return;
         }
 
-        std::array<u8, NasUserBaseSize> user{};
-        user[0x251] = user[0x252] = user[0x253] = 0b010;
-        WriteField(user, 0x1a1, 0x40, account->nickname);
-        WriteField(user, 0x1e1, 0x10, account->birthday);
-        WriteField(user, 0x204, 4, account->country);
+        const auto user =
+            NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday, account->country);
         ctx.WriteBufferC(user.data(), user.size(), 0);
 
         // The account's data stays out of the log: it ends up in crash reports.
@@ -421,17 +412,17 @@ private:
             return;
         }
 
-        const std::string url =
-            "https://accounts.nintendo.com/app/profile?id_token_hint=" + token;
-        const std::size_t capacity = std::min<std::size_t>(c[0].Size(), 0x1000);
-        if (url.size() + 1 > capacity) {
-            LOG_WARNING(Service_ACC, "acc: the profile page URL is {} bytes, the buffer {}",
-                        url.size() + 1, capacity);
+        const std::size_t capacity =
+            std::min<std::size_t>(c[0].Size(), NintendoAccountOAuth::UserResourceViewUrlSize);
+        const auto url = NintendoAccountOAuth::UserResourceViewUrl(token, capacity);
+        if (!url) {
+            LOG_WARNING(Service_ACC, "acc: the profile page URL does not fit the {}-byte buffer",
+                        capacity);
             PushResult(ctx, ResultInvalidBufferSize);
             return;
         }
         std::vector<u8> out(capacity);
-        std::memcpy(out.data(), url.data(), url.size());
+        std::memcpy(out.data(), url->data(), url->size());
         ctx.WriteBufferC(out.data(), out.size(), 0);
 
         LOG_INFO(Service_ACC, "acc: Nintendo Account profile page requested");
@@ -1970,6 +1961,18 @@ void LoopProcess(Core::System& system) {
 
     // The OpenPak session speaks for the user acc has open.
     OpenPakAccount::InstallProfileSource(system.GetProfileManager());
+
+    // Test runs only, until the frontends make the boot connection themselves: a file named
+    // acc-test-boot in <user>/openpak connects this process to OpenPak from that directory.
+    const auto user_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
+    if (std::error_code ec; std::filesystem::exists(user_dir / "openpak" / "acc-test-boot", ec)) {
+        std::thread([user_dir] {
+            const auto result = OpenPak::BootConnection::Run(user_dir);
+            LOG_INFO(Service_ACC, "acc test hook: OpenPak {} (profile {}, ceiling {})",
+                     result.enabled ? "on" : "off", result.profile_source,
+                     result.ceiling_source);
+        }).detach();
+    }
 
     server_manager->RegisterNamedService("acc:aa", std::make_shared<ACC_AA>(module, profile_manager, system));
     server_manager->RegisterNamedService("acc:su", std::make_shared<ACC_SU>(module, profile_manager, system));

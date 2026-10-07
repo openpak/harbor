@@ -3,6 +3,7 @@
 
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 
+#include <algorithm>
 #include <array>
 #include <map>
 
@@ -219,6 +220,28 @@ std::optional<User> ParseUsersMe(std::string_view body) {
     user.country = Text(parsed, "country");
     user.icon_uri = Text(parsed, "iconUri");
     return user;
+}
+
+std::array<std::uint8_t, NasUserBaseSize> NasUserBase(std::string_view nickname,
+                                                      std::string_view birthday,
+                                                      std::string_view country) {
+    std::array<std::uint8_t, NasUserBaseSize> out{};
+    const auto field = [&out](std::size_t offset, std::size_t size, std::string_view value) {
+        std::copy_n(value.begin(), std::min(value.size(), size - 1), out.begin() + offset);
+    };
+    field(0x1a1, 0x40, nickname);
+    field(0x1e1, 0x10, birthday);
+    field(0x204, 4, country);
+    out[0x251] = out[0x252] = out[0x253] = 0b010;
+    return out;
+}
+
+std::optional<std::string> UserResourceViewUrl(std::string_view id_token, std::size_t capacity) {
+    std::string url = fmt::format("https://{}/app/profile?id_token_hint={}", AccountsHost, id_token);
+    if (url.size() + 1 > std::min(capacity, UserResourceViewUrlSize)) {
+        return std::nullopt;
+    }
+    return url;
 }
 
 bool IsUsableBirthday(std::string_view birthday) {

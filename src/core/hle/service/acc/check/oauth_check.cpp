@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 // Self-check of the Nintendo Account OAuth helpers (nintendo_account_oauth.cpp): PKCE, the
-// authorize URL, the callback parse, the token request body and the two JSON readers. No
-// emulator, no network. Build and run from the source root:
+// authorize URL, the callback parse, the token request body and the two JSON readers; the
+// procedures' state machine and GetRequest's output layout (oauth_procedure_rules.h); and the
+// IManagerForSystemService 136 / IAdministrator 290 buffers. No emulator, no network. Build and run from the source root:
 //
 //   c++ -std=c++20 -Isrc -I<nlohmann_json>/include src/core/hle/service/acc/check/oauth_check.cpp
 //       src/core/hle/service/acc/nintendo_account_oauth.cpp -lfmt -lcrypto -o oauth_check
@@ -11,13 +12,17 @@
 //
 // Prints "oauth_check: all checks passed" and exits 0, or names the failed check and exits 1.
 
+#include <array>
+#include <cstdint>
 #include <cstdio>
 #include <set>
 #include <string>
 
 #include "core/hle/service/acc/nintendo_account_oauth.h"
+#include "core/hle/service/acc/oauth_procedure_rules.h"
 
 namespace oauth = Service::Account::NintendoAccountOAuth;
+namespace rules = Service::Account::ProcedureRules;
 
 namespace {
 
@@ -32,6 +37,101 @@ void Check(bool ok, const char* what) {
 
 bool Contains(const std::string& haystack, const std::string& needle) {
     return haystack.find(needle) != std::string::npos;
+}
+
+std::string At(const std::array<std::uint8_t, oauth::NasUserBaseSize>& base, std::size_t offset) {
+    return std::string(reinterpret_cast<const char*>(base.data() + offset));
+}
+
+void CheckStateMachine() {
+    using rules::Kind;
+    using rules::Stage;
+
+    // acc:su 211: GetRequest, Suspend, the Login applet, 212 Resume, ApplyResponseAsync, 110.
+    rules::Machine reg{.kind = Kind::Registration};
+    Check(rules::CanGetRequest(reg) && rules::PrepareSucceeds(reg) && rules::CanSuspend(reg) &&
+              rules::CanApply(reg),
+          "registration: a fresh procedure takes a request, a prepare, a suspend, a response");
+    Check(!rules::CanReadApplied(reg) && !rules::CanRegister(reg),
+          "registration: nothing to read or register before a response");
+    Check(rules::AfterSuspend(reg) == Stage::Fresh,
+          "registration: Suspend keeps stage 0 on the object");
+    reg.stage = rules::AfterResume(Kind::Registration);
+    Check(reg.stage == Stage::Fresh && rules::CanApply(reg),
+          "registration: a resumed procedure (212/214) takes the response");
+    reg.has_code = true;
+    Check(!rules::CanApply(reg) && !rules::CanGetRequest(reg),
+          "registration: once a callback is taken, no second response or request");
+    Check(rules::AfterApply(reg, false) == Stage::Fresh && !rules::CanApply(reg),
+          "registration: a failed response stays failed");
+    reg.stage = rules::AfterApply(reg, true);
+    Check(reg.stage == Stage::Applied && rules::CanReadApplied(reg) && rules::CanRegister(reg),
+          "registration: an applied response reads back and registers");
+    Check(!rules::CanSuspend(reg) && !rules::PrepareSucceeds(reg),
+          "registration: no suspend or prepare after the response");
+    reg.registered = true;
+    Check(!rules::CanRegister(reg), "registration: registers once");
+
+    // IAdministrator 251: GetRequest, Suspend, the Login applet, 252 Resume, ApplyResponseAsync.
+    rules::Machine link{.kind = Kind::Linkage};
+    Check(rules::CanGetRequest(link) && rules::CanSuspend(link) && rules::CanApply(link),
+          "linkage: a fresh procedure takes a request, a suspend, a response");
+    link.stage = rules::AfterSuspend(link);
+    Check(link.stage == Stage::Suspended && !rules::CanApply(link) && !rules::CanSuspend(link) &&
+              !rules::CanGetRequest(link),
+          "linkage: the suspended object takes nothing more");
+    link = {.kind = Kind::Linkage, .stage = rules::AfterResume(Kind::Linkage)};
+    Check(link.stage == Stage::Resumed && rules::CanApply(link) && rules::CanSuspend(link) &&
+              !rules::CanGetRequest(link),
+          "linkage: a resumed procedure takes a response or another suspend, not a request");
+    link.has_code = true;
+    Check(!rules::CanApply(link) && !rules::CanSuspend(link),
+          "linkage: no response or suspend once a callback is taken");
+    link.stage = rules::AfterApply(link, true);
+    Check(link.stage == Stage::Applied && !rules::CanRegister(link),
+          "linkage: applied, and a linkage never registers a user");
+}
+
+void CheckLayouts(const std::string& url) {
+    using rules::RequestLayout;
+    Check(rules::PlanRequest({0x1000, 0x100}) == RequestLayout::TwoEntries,
+          "GetRequest: two receive-list entries, one per output");
+    Check(rules::PlanRequest({0x1100}) == RequestLayout::OneEntry,
+          "GetRequest: one entry of 0x1100 takes both back to back");
+    Check(rules::PlanRequest({0x1000}) == RequestLayout::Refused &&
+              rules::PlanRequest({}) == RequestLayout::Refused &&
+              rules::PlanRequest({0x1000, 0}) == RequestLayout::Refused,
+          "GetRequest: too few or empty entries are refused");
+
+    const auto url_out = rules::FixedString(url, rules::RequestUrlSize, 0x1000);
+    Check(url_out.size() == 0x1000 &&
+              std::string(reinterpret_cast<const char*>(url_out.data())) == url,
+          "GetRequest: the URL is written whole and NUL terminated into 0x1000 bytes");
+    const auto callback = rules::FixedString(oauth::RedirectUri, rules::CallbackUriSize, 0x200);
+    Check(callback.size() == 0x100 &&
+              std::string(reinterpret_cast<const char*>(callback.data())) == oauth::RedirectUri,
+          "GetRequest: the callback is 0x100 bytes even in a bigger entry");
+    const auto cut = rules::FixedString(std::string(0x300, 'x'), rules::CallbackUriSize, 0x100);
+    Check(cut.size() == 0x100 && cut[0xFF] == 0 && cut[0xFE] == 'x',
+          "GetRequest: a long text is cut to leave its NUL");
+
+    const auto base = oauth::NasUserBase(std::string(0x50, 'n'), "1990-01-02", "GB");
+    Check(base.size() == 0x270, "136: NasUserBase is 0x270 bytes");
+    Check(At(base, 0x1a1) == std::string(0x3f, 'n') && base[0x1a1 + 0x3f] == 0,
+          "136: the nickname at 0x1a1, cut to 0x3f and NUL terminated");
+    Check(At(base, 0x1e1) == "1990-01-02" && At(base, 0x204) == "GB",
+          "136: the birthday at 0x1e1 and the country at 0x204");
+    Check(base[0x251] == 2 && base[0x252] == 2 && base[0x253] == 2 && base[0] == 0,
+          "136: the three consents read userConfirmed, the rest is zero");
+
+    const auto view = oauth::UserResourceViewUrl("hdr.payload.sig", 0x1000);
+    Check(view && *view == "https://accounts.nintendo.com/app/profile?id_token_hint=hdr.payload.sig",
+          "290: the 23.0.1 profile page with the token as the hint");
+    const std::string prefix = "https://accounts.nintendo.com/app/profile?id_token_hint=";
+    Check(oauth::UserResourceViewUrl(std::string(0x1000 - prefix.size() - 1, 't'), 0x1000) &&
+              !oauth::UserResourceViewUrl(std::string(0x1000 - prefix.size(), 't'), 0x1000),
+          "290: a URL fits only with room for its NUL");
+    Check(!oauth::UserResourceViewUrl("t", 0x20), "290: a small buffer is refused");
 }
 
 } // namespace
@@ -125,6 +225,9 @@ int main() {
     Check(oauth::IsUsableBirthday("0000-00-00"), "0000-00-00 has the usable shape");
     Check(!oauth::IsUsableBirthday("1990-1-2") && !oauth::IsUsableBirthday(""),
           "short birthdays are not usable");
+
+    CheckStateMachine();
+    CheckLayouts(url);
 
     if (failures != 0) {
         std::printf("oauth_check: %d check(s) failed\n", failures);
