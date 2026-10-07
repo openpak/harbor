@@ -79,6 +79,18 @@ private:
                                        OutArray<Common::UUID, BufferAttr_HipcMapAlias> out_users);
     Result ShouldSetGpuTimeSliceManually(Out<bool> out_should_set_gpu_time_slice_manually);
     Result GetLibraryAppletInfoEx(Out<LibraryAppletInfo> out_library_applet_info);
+    Result GetNextReturnDestinationAppletIdentityInfo(Out<AppletIdentityInfo> out_identity_info);
+    Result PopExtraStorage(Out<SharedPointer<IStorage>> out_storage);
+    Result GetPopExtraStorageEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result UnpopExtraStorage(SharedPointer<IStorage> storage);
+    Result GetIndirectLayerProducerHandle(Out<u64> out_handle);
+    Result RequestExitToSelf();
+    Result CreateApplicationAndPushAndRequestToLaunch(u64 application_id,
+                                                      SharedPointer<IStorage> storage);
+    Result CreateGameMovieTrimmer();
+    Result ReserveResourceForMovieOperation();
+    Result UnreserveResourceForMovieOperation();
+    Result GetGpuErrorDetectedSystemEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
 
     const std::shared_ptr<Applet> m_applet;
     const std::shared_ptr<AppletDataBroker> m_broker;

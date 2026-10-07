@@ -47,7 +47,7 @@ AppletMessage LifecycleManager::PopMessageInOrderOfPriority() {
 
     if (m_focus_state_changed_notification_enabled) {
         if (!m_uses_focus_state_changed) {
-            if (m_requested_focus_state != m_acknowledged_focus_state) {
+            if (this->HasFocusMessagePending()) {
                 m_acknowledged_focus_state = m_requested_focus_state;
                 switch (m_requested_focus_state) {
                 case FocusState::InFocus:
@@ -123,10 +123,17 @@ AppletMessage LifecycleManager::PopMessageInOrderOfPriority() {
     return AppletMessage::None;
 }
 
+bool LifecycleManager::HasFocusMessagePending() const {
+    if (m_requested_focus_state == m_acknowledged_focus_state) {
+        return false;
+    }
+    return !(m_foreground_message_held && m_requested_focus_state == FocusState::InFocus);
+}
+
 bool LifecycleManager::ShouldSignalSystemEvent() {
     if (m_focus_state_changed_notification_enabled) {
         if (!m_uses_focus_state_changed) {
-            if (m_requested_focus_state != m_acknowledged_focus_state) {
+            if (this->HasFocusMessagePending()) {
                 return true;
             }
         } else if (m_has_focus_state_changed) {

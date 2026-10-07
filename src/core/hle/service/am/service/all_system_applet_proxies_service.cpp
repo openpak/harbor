@@ -16,6 +16,42 @@
 
 namespace Service::AM {
 
+// 19.0.0+. switchbrew lists commands 1, 2, 10, 20, 30 and 40 without names; none are known, so
+// a guest call fails loudly instead of being stubbed.
+class IApplicationObserver final : public ServiceFramework<IApplicationObserver> {
+public:
+    explicit IApplicationObserver(Core::System& system_)
+        : ServiceFramework{system_, "IApplicationObserver"} {}
+};
+
+class ISystemProcessCommonFunctions final
+    : public ServiceFramework<ISystemProcessCommonFunctions> {
+public:
+    explicit ISystemProcessCommonFunctions(Core::System& system_)
+        : ServiceFramework{system_, "ISystemProcessCommonFunctions"} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {1, D<&ISystemProcessCommonFunctions::GetApplicationObserver>, "GetApplicationObserver"},
+        };
+        // clang-format on
+        RegisterHandlers(functions);
+    }
+
+private:
+    Result GetApplicationObserver(Out<SharedPointer<IApplicationObserver>> out_observer) {
+        LOG_DEBUG(Service_AM, "called");
+        *out_observer = std::make_shared<IApplicationObserver>(system);
+        R_SUCCEED();
+    }
+};
+
+// 20.0.0+. switchbrew lists commands 0, 1 and 2 without names; none are known.
+class IAppletAlternativeFunctions final : public ServiceFramework<IAppletAlternativeFunctions> {
+public:
+    explicit IAppletAlternativeFunctions(Core::System& system_)
+        : ServiceFramework{system_, "IAppletAlternativeFunctions"} {}
+};
+
 IAllSystemAppletProxiesService::IAllSystemAppletProxiesService(Core::System& system_,
                                                                WindowSystem& window_system)
     : ServiceFramework{system_, "appletAE"}, m_window_system{window_system} {
@@ -111,19 +147,17 @@ Result IAllSystemAppletProxiesService::OpenLibraryAppletProxyOld(
         this->OpenLibraryAppletProxy(out_library_applet_proxy, pid, process_handle, attribute));
 }
 
-Result IAllSystemAppletProxiesService::GetSystemProcessCommonFunctions() {
-    LOG_DEBUG(Service_AM, "(STUBBED) called.");
-
-    // TODO (jarrodnorwell)
-
+Result IAllSystemAppletProxiesService::GetSystemProcessCommonFunctions(
+    Out<SharedPointer<ISystemProcessCommonFunctions>> out_functions) {
+    LOG_DEBUG(Service_AM, "called");
+    *out_functions = std::make_shared<ISystemProcessCommonFunctions>(system);
     R_SUCCEED();
 }
 
-Result IAllSystemAppletProxiesService::GetAppletAlternativeFunctions() {
-    LOG_DEBUG(Service_AM, "(STUBBED) called.");
-
-    // TODO (maufeat)
-
+Result IAllSystemAppletProxiesService::GetAppletAlternativeFunctions(
+    Out<SharedPointer<IAppletAlternativeFunctions>> out_functions) {
+    LOG_DEBUG(Service_AM, "called");
+    *out_functions = std::make_shared<IAppletAlternativeFunctions>(system);
     R_SUCCEED();
 }
 

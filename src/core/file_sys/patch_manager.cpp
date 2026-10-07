@@ -1183,10 +1183,20 @@ PatchManager::Metadata PatchManager::ParseControlNCA(const NCA& nca) const {
 }
 
 [[nodiscard]] PatchManager::Metadata PatchManager::GetMetadataFromBaseOrUpdate(Core::System& system, u64 application_id) noexcept {
+    // The update's control data is the one that runs (name, icon and NACP of the installed
+    // version); a disabled update leaves the base title's.
+    const auto& disabled = Settings::values.disabled_addons[application_id];
+    if (std::find(disabled.begin(), disabled.end(), "Update") == disabled.end()) {
+        const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(application_id), system.GetFileSystemController(), system.GetContentProvider()};
+        auto metadata = pm_update.GetControlMetadata();
+        if (metadata.first != nullptr)
+            return metadata;
+    }
     const FileSys::PatchManager pm{application_id, system.GetFileSystemController(), system.GetContentProvider()};
     auto metadata = pm.GetControlMetadata();
     if (metadata.first != nullptr)
         return metadata;
+    // A title installed without its base control data (the update carries it) still has a name.
     const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(application_id), system.GetFileSystemController(), system.GetContentProvider()};
     return pm_update.GetControlMetadata();
 }

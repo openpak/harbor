@@ -80,6 +80,8 @@ public:
     Result AddUser(const ProfileInfo& user);
     Result CreateNewUser(Common::UUID uuid, const ProfileUsername& username);
     Result CreateNewUser(Common::UUID uuid, const std::string& username);
+    Result BeginUserRegistration(Common::UUID uuid);
+    bool CompleteUserRegistration(Common::UUID uuid);
     std::optional<Common::UUID> GetUser(std::size_t index) const;
     std::optional<std::size_t> GetUserIndex(const Common::UUID& uuid) const;
     std::optional<std::size_t> GetUserIndex(const ProfileInfo& user) const;

@@ -64,14 +64,14 @@ ILibraryAppletAccessor::ILibraryAppletAccessor(Core::System& system_,
         {20, D<&ILibraryAppletAccessor::RequestExit>, "RequestExit"},
         {25, D<&ILibraryAppletAccessor::Terminate>, "Terminate"},
         {30, D<&ILibraryAppletAccessor::GetResult>, "GetResult"},
-        {50, nullptr, "SetOutOfFocusApplicationSuspendingEnabled"},
+        {50, D<&ILibraryAppletAccessor::SetOutOfFocusApplicationSuspendingEnabled>, "SetOutOfFocusApplicationSuspendingEnabled"},
         {60, D<&ILibraryAppletAccessor::PresetLibraryAppletGpuTimeSliceZero>, "PresetLibraryAppletGpuTimeSliceZero"}, //10.0.0+
         {80, nullptr, "RequestForLibraryAppletToGetForeground"}, //19.0.0+
         {81, nullptr, "GetCurrentChildLibraryApplet"}, //19.0.0+
         {90, D<&ILibraryAppletAccessor::Unknown90>, "Unknown90"}, //20.0.0+
         {100, D<&ILibraryAppletAccessor::PushInData>, "PushInData"},
         {101, D<&ILibraryAppletAccessor::PopOutData>, "PopOutData"},
-        {102, nullptr, "PushExtraStorage"},
+        {102, D<&ILibraryAppletAccessor::PushExtraStorage>, "PushExtraStorage"},
         {103, D<&ILibraryAppletAccessor::PushInteractiveInData>, "PushInteractiveInData"},
         {104, D<&ILibraryAppletAccessor::PopInteractiveOutData>, "PopInteractiveOutData"},
         {105, D<&ILibraryAppletAccessor::GetPopOutDataEvent>, "GetPopOutDataEvent"},
@@ -85,9 +85,23 @@ ILibraryAppletAccessor::ILibraryAppletAccessor(Core::System& system_,
     // clang-format on
 
     RegisterHandlers(functions);
+
+    m_applet->accessor_count++;
 }
 
-ILibraryAppletAccessor::~ILibraryAppletAccessor() = default;
+ILibraryAppletAccessor::~ILibraryAppletAccessor() {
+    m_applet->accessor_count--;
+
+    // A completed applet's caller was waiting for this release to be told it is in front again.
+    bool completed;
+    {
+        std::scoped_lock lk{m_applet->lock};
+        completed = m_applet->is_completed;
+    }
+    if (completed) {
+        system.GetAppletManager().ReleaseForegroundHold(*m_applet);
+    }
+}
 
 Result ILibraryAppletAccessor::GetAppletStateChangedEvent(
     OutCopyHandle<Kernel::KReadableEvent> out_event) {
@@ -235,6 +249,19 @@ Result ILibraryAppletAccessor::GetLibraryAppletInfo(
 Result ILibraryAppletAccessor::Unknown170(OutCopyHandle<Kernel::KReadableEvent> out_event) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
     *out_event = m_applet->unknown_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result ILibraryAppletAccessor::SetOutOfFocusApplicationSuspendingEnabled(bool enabled) {
+    // switchbrew gives the shape only (an application caller).
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletAccessor 50 ({}); accepted, not applied",
+                enabled);
+    R_SUCCEED();
+}
+
+Result ILibraryAppletAccessor::PushExtraStorage(SharedPointer<IStorage> storage) {
+    LOG_DEBUG(Service_AM, "called");
+    m_broker->GetExtraStorage().Push(system.Kernel(), storage);
     R_SUCCEED();
 }
 

@@ -19,6 +19,8 @@ struct AppletAttribute;
 class IApplicationProxy;
 class ILibraryAppletProxy;
 class ISystemAppletProxy;
+class ISystemProcessCommonFunctions;
+class IAppletAlternativeFunctions;
 class WindowSystem;
 
 class IAllSystemAppletProxiesService final
@@ -43,8 +45,10 @@ private:
     Result OpenSystemApplicationProxy(
         Out<SharedPointer<IApplicationProxy>> out_system_application_proxy, ClientProcessId pid,
         InCopyHandle<Kernel::KProcess> process_handle);
-    Result GetSystemProcessCommonFunctions();
-    Result GetAppletAlternativeFunctions();
+    Result GetSystemProcessCommonFunctions(
+        Out<SharedPointer<ISystemProcessCommonFunctions>> out_functions);
+    Result GetAppletAlternativeFunctions(
+        Out<SharedPointer<IAppletAlternativeFunctions>> out_functions);
 
 private:
     std::shared_ptr<Applet> GetAppletFromProcessId(ProcessId pid);

@@ -14,6 +14,10 @@
 #include <thread>
 #include "hid_core/frontend/emulated_controller.h"
 
+namespace Core::Timing {
+struct EventType;
+}
+
 namespace Core {
 namespace HID {
 class EmulatedController;
@@ -33,6 +37,13 @@ public:
     void OnButtonStateChanged(WindowSystem& window_system);
 
 private:
+    std::chrono::milliseconds HomeLongPressTime(WindowSystem& window_system) const;
+
+    Core::System& m_system;
+    WindowSystem& m_window_system;
+    std::mutex m_mutex;
+    // Fires while HOME is still held, so the long press goes out at the threshold.
+    std::shared_ptr<Core::Timing::EventType> m_home_hold_event;
     std::optional<std::chrono::steady_clock::time_point> m_home_button_press_start{};
     std::optional<std::chrono::steady_clock::time_point> m_capture_button_press_start{};
     std::optional<std::chrono::steady_clock::time_point> m_power_button_press_start{};

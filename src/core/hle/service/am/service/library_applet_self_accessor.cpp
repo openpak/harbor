@@ -10,6 +10,7 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet_data_broker.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applets.h"
@@ -63,25 +64,25 @@ ILibraryAppletSelfAccessor::ILibraryAppletSelfAccessor(Core::System& system_,
         {15, D<&ILibraryAppletSelfAccessor::GetMainAppletApplicationControlProperty>, "GetMainAppletApplicationControlProperty"},
         {16, D<&ILibraryAppletSelfAccessor::GetMainAppletStorageId>, "GetMainAppletStorageId"},
         {17, D<&ILibraryAppletSelfAccessor::GetCallerAppletIdentityInfoStack>, "GetCallerAppletIdentityInfoStack"},
-        {18, nullptr, "GetNextReturnDestinationAppletIdentityInfo"},
+        {18, D<&ILibraryAppletSelfAccessor::GetNextReturnDestinationAppletIdentityInfo>, "GetNextReturnDestinationAppletIdentityInfo"},
         {19, D<&ILibraryAppletSelfAccessor::GetDesirableKeyboardLayout>, "GetDesirableKeyboardLayout"},
-        {20, nullptr, "PopExtraStorage"},
-        {25, nullptr, "GetPopExtraStorageEvent"},
+        {20, D<&ILibraryAppletSelfAccessor::PopExtraStorage>, "PopExtraStorage"},
+        {25, D<&ILibraryAppletSelfAccessor::GetPopExtraStorageEvent>, "GetPopExtraStorageEvent"},
         {30, D<&ILibraryAppletSelfAccessor::UnpopInData>, "UnpopInData"},
-        {31, nullptr, "UnpopExtraStorage"},
-        {40, nullptr, "GetIndirectLayerProducerHandle"},
+        {31, D<&ILibraryAppletSelfAccessor::UnpopExtraStorage>, "UnpopExtraStorage"},
+        {40, D<&ILibraryAppletSelfAccessor::GetIndirectLayerProducerHandle>, "GetIndirectLayerProducerHandle"},
         {50, D<&ILibraryAppletSelfAccessor::ReportVisibleError>, "ReportVisibleError"},
         {51, D<&ILibraryAppletSelfAccessor::ReportVisibleErrorWithErrorContext>, "ReportVisibleErrorWithErrorContext"},
         {60, D<&ILibraryAppletSelfAccessor::GetMainAppletApplicationDesiredLanguage>, "GetMainAppletApplicationDesiredLanguage"},
         {70, D<&ILibraryAppletSelfAccessor::GetCurrentApplicationId>, "GetCurrentApplicationId"},
-        {80, nullptr, "RequestExitToSelf"},
-        {90, nullptr, "CreateApplicationAndPushAndRequestToLaunch"},
-        {100, nullptr, "CreateGameMovieTrimmer"},
-        {101, nullptr, "ReserveResourceForMovieOperation"},
-        {102, nullptr, "UnreserveResourceForMovieOperation"},
+        {80, D<&ILibraryAppletSelfAccessor::RequestExitToSelf>, "RequestExitToSelf"},
+        {90, D<&ILibraryAppletSelfAccessor::CreateApplicationAndPushAndRequestToLaunch>, "CreateApplicationAndPushAndRequestToLaunch"},
+        {100, D<&ILibraryAppletSelfAccessor::CreateGameMovieTrimmer>, "CreateGameMovieTrimmer"},
+        {101, D<&ILibraryAppletSelfAccessor::ReserveResourceForMovieOperation>, "ReserveResourceForMovieOperation"},
+        {102, D<&ILibraryAppletSelfAccessor::UnreserveResourceForMovieOperation>, "UnreserveResourceForMovieOperation"},
         {110, D<&ILibraryAppletSelfAccessor::GetMainAppletAvailableUsers>, "GetMainAppletAvailableUsers"},
         {120, nullptr, "GetLaunchStorageInfoForDebug"},
-        {130, nullptr, "GetGpuErrorDetectedSystemEvent"},
+        {130, D<&ILibraryAppletSelfAccessor::GetGpuErrorDetectedSystemEvent>, "GetGpuErrorDetectedSystemEvent"},
         {140, nullptr, "SetApplicationMemoryReservation"},
         {150, D<&ILibraryAppletSelfAccessor::ShouldSetGpuTimeSliceManually>, "ShouldSetGpuTimeSliceManually"},
         {160, D<&ILibraryAppletSelfAccessor::GetLibraryAppletInfoEx>, "GetLibraryAppletInfoEx"},
@@ -327,6 +328,79 @@ Result ILibraryAppletSelfAccessor::GetLibraryAppletInfoEx(
         .applet_id = m_applet->applet_id,
         .library_applet_mode = m_applet->library_applet_mode,
     };
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::GetNextReturnDestinationAppletIdentityInfo(
+    Out<AppletIdentityInfo> out_identity_info) {
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletSelfAccessor 18 answered with the "
+                            "caller");
+    *out_identity_info = GetCallerIdentity(*m_applet);
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::PopExtraStorage(Out<SharedPointer<IStorage>> out_storage) {
+    LOG_DEBUG(Service_AM, "called");
+    R_RETURN(m_broker->GetExtraStorage().Pop(system.Kernel(), out_storage.Get()));
+}
+
+Result ILibraryAppletSelfAccessor::GetPopExtraStorageEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_AM, "called");
+    *out_event = m_broker->GetExtraStorage().GetEvent();
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::UnpopExtraStorage(SharedPointer<IStorage> storage) {
+    LOG_DEBUG(Service_AM, "called");
+    m_broker->GetExtraStorage().Unpop(system.Kernel(), storage);
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::GetIndirectLayerProducerHandle(Out<u64> out_handle) {
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletSelfAccessor 40 -> 0 (no indirect "
+                            "layer for applet processes)");
+    *out_handle = 0;
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::RequestExitToSelf() {
+    LOG_INFO(Service_AM, "called");
+    std::scoped_lock lk{m_applet->lock};
+    m_applet->lifecycle_manager.RequestExit(system.Kernel());
+    m_applet->UpdateSuspensionStateLocked(true);
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::CreateApplicationAndPushAndRequestToLaunch(
+    u64 application_id, SharedPointer<IStorage> storage) {
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletSelfAccessor 90 ({:016x}) -> "
+                            "NotImplemented",
+                application_id);
+    R_THROW(ResultNotImplemented);
+}
+
+Result ILibraryAppletSelfAccessor::CreateGameMovieTrimmer() {
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletSelfAccessor 100 -> NotImplemented "
+                            "(no grc)");
+    R_THROW(ResultNotImplemented);
+}
+
+Result ILibraryAppletSelfAccessor::ReserveResourceForMovieOperation() {
+    LOG_DEBUG(Service_AM, "called");
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::UnreserveResourceForMovieOperation() {
+    LOG_DEBUG(Service_AM, "called");
+    R_SUCCEED();
+}
+
+Result ILibraryAppletSelfAccessor::GetGpuErrorDetectedSystemEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_WARNING(Service_AM, "unknown contract: ILibraryAppletSelfAccessor 130, an event that "
+                            "never signals");
+    *out_event = m_applet->gpu_error_detected_event.GetHandle();
     R_SUCCEED();
 }
 

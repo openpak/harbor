@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "core/core.h"
+#include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/service/overlay_functions.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -15,23 +17,25 @@ namespace Service::AM {
         {0, D<&IOverlayFunctions::BeginToWatchShortHomeButtonMessage>, "BeginToWatchShortHomeButtonMessage"},
         {1, D<&IOverlayFunctions::EndToWatchShortHomeButtonMessage>, "EndToWatchShortHomeButtonMessage"},
         {2, D<&IOverlayFunctions::GetApplicationIdForLogo>, "GetApplicationIdForLogo"},
-        {3, nullptr, "SetGpuTimeSliceBoost"},
+        {3, D<&IOverlayFunctions::SetGpuTimeSliceBoost>, "SetGpuTimeSliceBoost"},
         {4, D<&IOverlayFunctions::SetAutoSleepTimeAndDimmingTimeEnabled>, "SetAutoSleepTimeAndDimmingTimeEnabled"},
-        {5, nullptr, "TerminateApplicationAndSetReason"},
-        {6, nullptr, "SetScreenShotPermissionGlobally"},
-        {10, nullptr, "StartShutdownSequenceForOverlay"},
-        {11, nullptr, "StartRebootSequenceForOverlay"},
+        {5, D<&IOverlayFunctions::TerminateApplicationAndSetReason>, "TerminateApplicationAndSetReason"},
+        {6, D<&IOverlayFunctions::SetScreenShotPermissionGlobally>, "SetScreenShotPermissionGlobally"},
+        {10, D<&IOverlayFunctions::StartShutdownSequenceForOverlay>, "StartShutdownSequenceForOverlay"},
+        {11, D<&IOverlayFunctions::StartRebootSequenceForOverlay>, "StartRebootSequenceForOverlay"},
         {20, D<&IOverlayFunctions::SetHandlingHomeButtonShortPressedEnabled>, "SetHandlingHomeButtonShortPressedEnabled"},
         {21, D<&IOverlayFunctions::SetHandlingTouchScreenInputEnabled>, "SetHandlingTouchScreenInputEnabled"},
-        {30, nullptr, "SetHealthWarningShowingState"},
+        {30, D<&IOverlayFunctions::SetHealthWarningShowingState>, "SetHealthWarningShowingState"},
         {31, D<&IOverlayFunctions::IsHealthWarningRequired>, "IsHealthWarningRequired"},
-        {40, nullptr, "GetApplicationNintendoLogo"},
-        {41, nullptr, "GetApplicationStartupMovie"},
-        {50, nullptr, "SetGpuTimeSliceBoostForApplication"},
-        {60, nullptr, "Unknown60"},
+        {40, D<&IOverlayFunctions::GetApplicationNintendoLogo>, "GetApplicationNintendoLogo"},
+        {41, D<&IOverlayFunctions::GetApplicationStartupMovie>, "GetApplicationStartupMovie"},
+        {50, D<&IOverlayFunctions::SetGpuTimeSliceBoostForApplication>, "SetGpuTimeSliceBoostForApplication"},
+        {60, D<&IOverlayFunctions::Unknown60>, "Unknown60"},
         {70, D<&IOverlayFunctions::Unknown70>, "Unknown70"},
-        {90, nullptr, "SetRequiresGpuResourceUse"},
-        {101, nullptr, "BeginToObserveHidInputForDevelop"},
+        {71, D<&IOverlayFunctions::Unknown71>, "Unknown71"},
+        {75, D<&IOverlayFunctions::Unknown75>, "Unknown75"},
+        {90, D<&IOverlayFunctions::SetRequiresGpuResourceUse>, "SetRequiresGpuResourceUse"},
+        {101, D<&IOverlayFunctions::BeginToObserveHidInputForDevelop>, "BeginToObserveHidInputForDevelop"},
     };
         // clang-format on
 
@@ -129,7 +133,103 @@ namespace Service::AM {
     Result IOverlayFunctions::SetHandlingHomeButtonShortPressedEnabled(bool enabled) {
         LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
         std::scoped_lock lk{m_applet->lock};
-        m_applet->home_button_short_pressed_blocked = !enabled;
+        if (system.GetAppletManager().IsHomeSession()) {
+            // While its quick settings watch HOME, the overlay keeps a short press from the HOME
+            // menu.
+            m_applet->overlay_handles_home_button_short_press = enabled;
+        } else {
+            m_applet->home_button_short_pressed_blocked = !enabled;
+        }
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::SetGpuTimeSliceBoost(u64 time_ns) {
+        LOG_DEBUG(Service_AM, "called, time_ns={} (no GPU time slicing here)", time_ns);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::TerminateApplicationAndSetReason(u32 reason) {
+        LOG_INFO(Service_AM, "called, reason={:#x}", reason);
+        if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+            if (const auto application = window_system->GetMainApplet()) {
+                LOG_INFO(Service_AM, "am: terminating pid {} (overlay, reason {:#x})",
+                         application->aruid.pid, reason);
+                application->process->Terminate();
+            }
+        }
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::SetScreenShotPermissionGlobally(bool enabled) {
+        LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::StartShutdownSequenceForOverlay() {
+        LOG_INFO(Service_AM, "called");
+        system.GetAppletManager().RequestPower(AppletManager::PowerRequest::Shutdown);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::StartRebootSequenceForOverlay() {
+        LOG_INFO(Service_AM, "called");
+        system.GetAppletManager().RequestPower(AppletManager::PowerRequest::Reboot);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::SetHealthWarningShowingState(bool showing) {
+        LOG_DEBUG(Service_AM, "called, showing={}", showing);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::GetApplicationNintendoLogo() {
+        // am answers 0x6880 when no application runs; the logo of a running title is not served.
+        if (auto* window_system = system.GetAppletManager().GetWindowSystem();
+            window_system && window_system->GetMainApplet()) {
+            LOG_WARNING(Service_AM, "unknown contract: IOverlayFunctions 40 while a title runs; "
+                                    "the logo is not served");
+        }
+        R_THROW(ResultNoApplicationLogo);
+    }
+
+    Result IOverlayFunctions::GetApplicationStartupMovie() {
+        if (auto* window_system = system.GetAppletManager().GetWindowSystem();
+            window_system && window_system->GetMainApplet()) {
+            LOG_WARNING(Service_AM, "unknown contract: IOverlayFunctions 41 while a title runs; "
+                                    "the movie is not served");
+        }
+        R_THROW(ResultNoApplicationLogo);
+    }
+
+    Result IOverlayFunctions::SetGpuTimeSliceBoostForApplication(u64 time_ns) {
+        LOG_DEBUG(Service_AM, "called, time_ns={}", time_ns);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::Unknown60(bool value) {
+        LOG_WARNING(Service_AM, "unknown contract: IOverlayFunctions 60 ({}) recorded only", value);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::Unknown71() {
+        LOG_WARNING(Service_AM, "unknown contract: IOverlayFunctions 71 has no effect here");
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::Unknown75() {
+        // am fails with 0xc80 when the value it returns is not positive.
+        LOG_WARNING(Service_AM, "unknown contract: IOverlayFunctions 75 answered with the "
+                                "firmware's own failure (0xc80)");
+        R_THROW(ResultUnknown75Unavailable);
+    }
+
+    Result IOverlayFunctions::SetRequiresGpuResourceUse(bool enabled) {
+        LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
+        R_SUCCEED();
+    }
+
+    Result IOverlayFunctions::BeginToObserveHidInputForDevelop() {
+        LOG_DEBUG(Service_AM, "called");
         R_SUCCEED();
     }
 

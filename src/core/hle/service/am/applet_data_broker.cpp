@@ -55,7 +55,8 @@ Kernel::KReadableEvent* AppletStorageChannel::GetEvent() {
 
 AppletDataBroker::AppletDataBroker(Core::System& system_)
     : system(system_), context(system_, "AppletDataBroker"), in_data(context),
-      interactive_in_data(context), out_data(context), interactive_out_data(context) {}
+      interactive_in_data(context), out_data(context), interactive_out_data(context),
+      extra_storage(context) {}
 
 AppletDataBroker::~AppletDataBroker() = default;
 

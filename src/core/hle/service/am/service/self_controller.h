@@ -67,8 +67,8 @@ private:
     Result SetAlbumImageTakenNotificationEnabled(bool enabled);
     Result SaveCurrentScreenshot(Capture::AlbumReportOption album_report_option);
     Result SetRecordVolumeMuted(bool muted);
-    Result Unknown230(u32 in_val, Out<u16> out_val);
-    Result Unknown240(u32 in_val);
+    Result Unknown230(u32 a, u32 b);
+    Result Unknown240(s32 value);
 
     Kernel::KProcess* const m_process;
     const std::shared_ptr<Applet> m_applet;

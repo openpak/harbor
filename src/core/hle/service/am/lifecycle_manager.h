@@ -64,6 +64,12 @@ public:
         m_uses_focus_state_changed = enabled;
     }
 
+    // While set, a pending ChangeIntoForeground stays queued (the focus state itself moves on).
+    void SetForegroundMessageHeld(Kernel::KernelCore& kernel, bool held) {
+        m_foreground_message_held = held;
+        this->SignalSystemEventIfNeeded(kernel);
+    }
+
     bool GetForcedSuspend() {
         return m_forced_suspend;
     }
@@ -166,6 +172,7 @@ private:
 private:
     AppletMessage PopMessageInOrderOfPriority();
     bool ShouldSignalSystemEvent();
+    bool HasFocusMessagePending() const;
 
 private:
     Event m_system_event;
@@ -176,6 +183,7 @@ private:
 
     bool m_is_application{};
     bool m_uses_focus_state_changed{};
+    bool m_foreground_message_held{};
     bool m_focus_state_changed_notification_enabled{true};
     bool m_operation_mode_changed_notification_enabled{true};
     bool m_hdcp_state_changed_notification_enabled{true};
