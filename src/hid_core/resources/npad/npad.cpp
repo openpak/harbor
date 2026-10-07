@@ -525,6 +525,16 @@ void NPad::OnUpdate(Kernel::KernelCore& kernel, const Core::Timing::CoreTiming& 
                 continue;
             }
 
+            // System applets ask for the SystemExt style with hid:sys 322; it lives in their
+            // own aruid's shared memory, so a game never sees it.
+            if (npad->style_tag.raw != Core::HID::NpadStyleSet::None) {
+                bool system_ext{};
+                npad_resource.GetNpadSystemExtState(system_ext, aruid);
+                if (bool(npad->style_tag.system_ext) != system_ext) {
+                    npad->style_tag.system_ext.Assign(system_ext);
+                }
+            }
+
             if (!data->flag.enable_pad_input) {
                 continue;
             }
