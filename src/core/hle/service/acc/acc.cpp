@@ -242,10 +242,11 @@ public:
 
 private:
     // The module reads su/baas/<uid>.dat (23.0.1 0x085BB4F0, research/acc-fw23 notes §1): no
-    // registration at BAAS is 2124-0200, which is what a user made a moment ago has. With OpenPak on,
-    // a user is registered once it has a device account (secret store, or signed in in this
-    // process); PlayerSelect's "Sign In and Link" registers and links a user that answers 0200.
-    // Offline: as stock Eden.
+    // registration at BAAS is 2124-0200, which is what a user made a moment ago has, and
+    // PlayerSelect's "Sign In and Link" only links a user that answers 0200. OpenPak's heartbeat
+    // signs every active user in with a device account of its own, which the firmware never made:
+    // once signed in this process, a user counts as registered when it is linked; before that, when
+    // it has a device account in the secret store. Offline: as stock Eden.
     void CheckAvailability(HLERequestContext& ctx) {
         const bool registered = IsRegisteredAtBaas();
         LOG_DEBUG(Service_ACC, "called, registered={}", registered);
@@ -286,8 +287,10 @@ private:
             return true;
         }
         const std::string uid = OpenPakAccount::UidString(account_id);
-        return OpenPak::Session::HasDeviceAccount(uid) ||
-               OpenPak::Session::NetworkServiceAccountId(uid) != 0;
+        if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
+            return OpenPak::Session::Linked(uid);
+        }
+        return OpenPak::Session::HasDeviceAccount(uid);
     }
 
     void GetAccountId(HLERequestContext& ctx) {
@@ -1547,17 +1550,24 @@ void Module::Interface::ResumeProcedureToRegisterUserWithNintendoAccount(HLERequ
     rb.PushIpcInterface<IOAuthProcedureForUserRegistration>(ctx, std::move(procedure));
 }
 
-/// acc:su 230. The firmware's user creation asks before offering to link a network account: the
-/// console authenticating with the account service, which here is the OpenPak sign-in of the open
-/// user. An unreachable OpenPak shows up later, at the link itself.
+/// acc:su 230. 23.0.1 (research/acc-fw23 notes §3, 0x0859B8E0): the module ensures a dauth device
+/// token for the BAAS client 8f849b5d34778d8e and nothing more (no BAAS login, no Nintendo Account
+/// call), so no device account is made here.
 void Module::Interface::AuthenticateServiceAsync(HLERequestContext& ctx) {
     LOG_DEBUG(Service_ACC, "called");
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
     rb.PushIpcInterface<OpenPakAsyncContext>(
         ctx, system, module->worker, [](std::stop_token, std::vector<u8>&) {
-            if (OpenPakAccount::Enabled()) {
-                OpenPakAccount::EnsureAndAdopt(OpenPak::Platform::ProfileId());
+            if (!OpenPakAccount::Enabled()) {
+                return ResultSuccess;
+            }
+            if (OpenPak::Session::DauthToken("8f849b5d34778d8e", {}).empty()) {
+                // The module maps dauth's failure to its own 2124-45xx results; which one is not
+                // traced.
+                LOG_UNKNOWN_CONTRACT(Service_ACC,
+                                     "acc:su 230 dauth failure answered as InternetRequestDenied");
+                return ResultInternetRequestDenied;
             }
             return ResultSuccess;
         });
