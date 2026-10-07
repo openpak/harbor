@@ -4,6 +4,10 @@
 #pragma once
 
 #include <array>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "common/bit_field.h"
@@ -17,6 +21,8 @@ enum class ResultStatus : u16;
 }
 
 namespace FileSys {
+
+class ContentProvider;
 
 enum class ProgramAddressSpaceType : u8 {
     Is32Bit = 0,
@@ -84,6 +90,28 @@ public:
     const std::array<u8, 0x10>& GetName() const {
         return npdm_header.application_name;
     }
+
+    struct ServiceAccessEntry {
+        std::string name;
+        bool is_host; ///< The program may register the name, rather than open it.
+    };
+
+    /// The ACI0 service access control. Each entry is one control byte (bit 7 = host, bits 0-2 =
+    /// name length - 1) followed by the name, which may end in '*'.
+    std::vector<ServiceAccessEntry> GetServiceAccessList() const;
+
+    /// Whether a service access list lets its program open (is_host false) or register
+    /// (is_host true) the service called name. Matches sm: an entry only counts for its own side,
+    /// and a trailing '*' matches any suffix.
+    static bool IsServiceAccessAllowed(std::span<const ServiceAccessEntry> list,
+                                       std::string_view name, bool is_host);
+
+    /// Whether the ACI0 file access header lists owner_id as a save data owner with write access.
+    bool CanWriteSaveDataOwnedBy(u64 owner_id) const;
+
+    /// The NPDM of an installed program (main.npdm of its base program NCA's ExeFS), if any.
+    static std::optional<ProgramMetadata> LoadInstalled(const ContentProvider& provider,
+                                                        u64 program_id);
 
     void Print() const;
 
@@ -184,6 +212,9 @@ private:
     FileAccessHeader aci_file_access{};
 
     KernelCapabilityDescriptors aci_kernel_capabilities{};
+
+    std::vector<u8> aci_service_access{};
+    std::vector<u8> aci_file_access_data{};
 };
 
 } // namespace FileSys
