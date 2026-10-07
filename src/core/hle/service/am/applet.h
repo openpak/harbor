@@ -30,8 +30,10 @@
 namespace Service::AM {
 
 struct Applet {
-    explicit Applet(Core::System& system, std::unique_ptr<Process> process_, bool is_application);
+    explicit Applet(Core::System& system_, std::unique_ptr<Process> process_, bool is_application);
     ~Applet();
+
+    Core::System& system;
 
     // Lock
     std::mutex lock{};

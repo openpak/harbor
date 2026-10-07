@@ -18,10 +18,25 @@
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/am/service/lock_accessor.h"
 #include "core/hle/service/am/window_system.h"
+#include "core/hle/service/psc/ovln/ovln_agent.h"
+#include "core/hle/service/psc/ovln/ovln_types.h"
 
 namespace Service::AM {
 
 namespace {
+// am's overlay notices (ovln source "overlay"), as the Ryujinx Harbor sends them.
+constexpr u32 AmOverlayNotificationHomeRefused = 2000;
+constexpr u32 AmOverlayNotificationRecordingUnavailable = 8101;
+
+void SendAmOverlayNotification(u32 tag) {
+    const auto notification = Service::PSC::MakeNotification(tag);
+    const std::span<const u8, sizeof(notification)> message{
+        reinterpret_cast<const u8*>(notification.data()), sizeof(notification)};
+    if (!Service::PSC::GetOvlnAgent().Send("overlay", 0x100, message)) {
+        LOG_WARNING(Service_AM, "am: overlay notice {} not queued", tag);
+    }
+}
+
 // How long a caller's ChangeIntoForeground waits for it to close a completed applet's accessor.
 constexpr std::chrono::nanoseconds ForegroundHoldTimeout = std::chrono::seconds{1};
 } // namespace
@@ -343,7 +358,8 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
         }
 
         if (foreground_application_blocks(false)) {
-            // TODO(ovln): the overlay's "HOME button cannot be used now" notice.
+            // The overlay's "HOME button cannot be used now" notice.
+            SendAmOverlayNotification(AmOverlayNotificationHomeRefused);
             LOG_INFO(Service_AM, "am: HOME short press blocked by the foreground application pid {}",
                      foreground->aruid.pid);
             return;
@@ -405,6 +421,10 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
         if (!sent) {
             LOG_INFO(Service_AM, "am: capture button {} press: no applet handles it",
                      is_long ? "long" : "short");
+            if (is_long) {
+                // No video recording here: the overlay says so.
+                SendAmOverlayNotification(AmOverlayNotificationRecordingUnavailable);
+            }
         }
         return;
     }

@@ -4,15 +4,16 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator
 // Project// SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "audio_core/audio_core.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/applet_manager.h"
 
 namespace Service::AM {
 
-Applet::Applet(Core::System& system, std::unique_ptr<Process> process_, bool is_application)
-    : context(system, "Applet"), lifecycle_manager(system, context, is_application),
-      process(std::move(process_)), hid_registration(system, *process), overlay_event(context),
+Applet::Applet(Core::System& system_, std::unique_ptr<Process> process_, bool is_application)
+    : system(system_), context(system_, "Applet"), lifecycle_manager(system_, context, is_application),
+      process(std::move(process_)), hid_registration(system_, *process), overlay_event(context),
       gpu_error_detected_event(context), friend_invitation_storage_channel_event(context),
       notification_storage_channel_event(context), health_warning_disappeared_system_event(context),
       unknown_event(context), acquired_sleep_lock_event(context), pop_from_general_channel_event(context),
@@ -43,6 +44,13 @@ void Applet::UpdateSuspensionStateLocked(bool force_message) {
         }
 
         is_activity_runnable = curr_activity_runnable;
+
+        // A paused title's audio renderers stop mixing too (else its last voices keep playing).
+        if (lifecycle_manager.IsApplication() && system.GetAppletManager().IsHomeSession()) {
+            system.AudioCore().SetSuspended(aruid.pid, !curr_activity_runnable);
+            LOG_INFO(Service_AM, "am: application pid {} {}", aruid.pid,
+                     curr_activity_runnable ? "resumed" : "suspended");
+        }
     }
 
     if (lifecycle_manager.GetForcedSuspend()) {
