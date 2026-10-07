@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <optional>
 #include <set>
 
 #include "common/common_types.h"
@@ -68,6 +69,10 @@ private:
     bool m_buffer_sharing_enabled{};
     bool m_blending_enabled{};
     bool m_visible{true};
+    // The window system's last z for this applet. A layer created afterwards (an applet that
+    // makes its layer after it was started, such as one launched by another library applet)
+    // starts at it instead of the default, or it would draw under its caller.
+    std::optional<s32> m_z_index{};
 };
 
 } // namespace Service::AM
