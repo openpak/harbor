@@ -60,6 +60,10 @@ class YuzuApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         application = this
+        // Harbor's restart helper runs in its own small process and needs none of the emulator.
+        if (Application.getProcessName().endsWith(":restart")) {
+            return
+        }
         documentsTree = DocumentsTree()
         DirectoryInitialization.start()
 

@@ -69,6 +69,7 @@ import org.yuzu.yuzu_emu.HomeNavigationDirections
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
+import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.databinding.DialogOverlayAdjustBinding
 import org.yuzu.yuzu_emu.databinding.FragmentEmulationBinding
 import org.yuzu.yuzu_emu.dialogs.QuickSettings
@@ -661,6 +662,22 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         )
     }
 
+    /** Stops the session the way the in-game menu's Exit does; the activity closes when it has stopped. */
+    fun requestExit() {
+        clearPausedFrame()
+        if (this::emulationState.isInitialized) {
+            emulationState.stop()
+        } else {
+            NativeLibrary.stopEmulation()
+        }
+        NativeConfig.reloadGlobalConfig()
+        emulationViewModel.setIsEmulationStopping(true)
+        _binding?.let {
+            it.drawerLayout.close()
+            it.inGameMenu.requestFocus()
+        }
+    }
+
     private fun finishOverlayGamelessEditMode() {
         binding.surfaceInputOverlay.setIsInEditMode(false)
         NativeConfig.saveGlobalConfig()
@@ -859,12 +876,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 }
 
                 R.id.menu_exit -> {
-                    clearPausedFrame()
-                    emulationState.stop()
-                    NativeConfig.reloadGlobalConfig()
-                    emulationViewModel.setIsEmulationStopping(true)
-                    binding.drawerLayout.close()
-                    binding.inGameMenu.requestFocus()
+                    requestExit()
                     true
                 }
 
@@ -910,6 +922,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             requireActivity(),
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
+                    if (HarborConsole.active) {
+                        // Harbor's console mode: Android back opens the Harbor menu, not Eden's drawer.
+                        (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it) }
+                        return
+                    }
                     if (!NativeLibrary.isRunning()) {
                         return
                     }

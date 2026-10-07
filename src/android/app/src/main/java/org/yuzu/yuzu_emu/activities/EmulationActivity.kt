@@ -54,6 +54,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
+import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.model.EmulationViewModel
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.network.NetPlayManager
@@ -396,6 +397,43 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
     }
 
+    // Harbor console mode: what runs once the session has stopped, instead of closing this screen.
+    private var harborAfterStop: (() -> Unit)? = null
+    private val harborHeldButtons = mutableSetOf<Int>()
+
+    /** Stops the console session, then runs `after` (set up again, or exit). */
+    fun harborStop(after: () -> Unit) {
+        if (!NativeLibrary.isRunning() && !NativeLibrary.isPaused()) {
+            after()
+            return
+        }
+        harborAfterStop = after
+        val navHost = supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
+        val fragment = navHost?.childFragmentManager?.fragments?.firstOrNull { it is EmulationFragment }
+        if (fragment is EmulationFragment) {
+            fragment.requestExit()
+        } else {
+            NativeLibrary.stopEmulation()
+        }
+    }
+
+    // Plus and Minus held together open the Harbor menu, as Android back does.
+    private fun harborMenuChord(event: KeyEvent) {
+        val code = event.keyCode
+        if (code != KeyEvent.KEYCODE_BUTTON_START && code != KeyEvent.KEYCODE_BUTTON_SELECT) {
+            return
+        }
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                harborHeldButtons.add(code)
+                if (event.repeatCount == 0 && harborHeldButtons.size == 2) {
+                    HarborConsole.showMenu(this)
+                }
+            }
+            KeyEvent.ACTION_UP -> harborHeldButtons.remove(code)
+        }
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
 
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
@@ -421,6 +459,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
         if (isControllerInput && event.action == KeyEvent.ACTION_DOWN) {
             notifyControllerInput()
+        }
+        if (isControllerInput && HarborConsole.active) {
+            harborMenuChord(event)
         }
 
         return InputHandler.dispatchKeyEvent(event)
@@ -796,7 +837,13 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             launchPendingRomSwap(force = false)
         } else if (status == 0 && emulationViewModel.programChanged.value == -1) {
             processSessionGame = null
-            finish()
+            val after = harborAfterStop
+            harborAfterStop = null
+            if (after != null) {
+                after()
+            } else {
+                finish()
+            }
         } else if (!isWaitingForRomSwapStop) {
             processSessionGame = null
         }
