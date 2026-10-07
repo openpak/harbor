@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -33,6 +36,7 @@
 #include "core/hle/service/friend/friends_session.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
+#include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
 #include "core/openpak/async_worker.h"
 #include "core/openpak/baas.h"
@@ -411,8 +415,8 @@ public:
             {30401, D<&FriendService::BlockUserWithApplicationInfo>, "BlockUserWithApplicationInfoV1"},
             {30402, D<&FriendService::UnblockUser>, "UnblockUser"},
             {30403, D<&FriendService::BlockUserWithApplicationInfoV2>, "BlockUserWithApplicationInfoV2"}, // 20.0.0+
-            {30500, D<&FriendService::GetProfileExtraFromFriendCode>, "GetProfileExtraFromFriendCodeV1"},
-            {30501, nullptr, "GetProfileExtraFromFriendCodeV2"}, // 19.0.0+
+            {30500, &FriendService::GetProfileExtraFromFriendCode, "GetProfileExtraFromFriendCodeV1"},
+            {30501, &FriendService::GetProfileExtraFromFriendCodeV2, "GetProfileExtraFromFriendCodeV2"}, // 19.0.0+
             {30700, D<&FriendService::DeletePlayHistory>, "DeletePlayHistory"},
             {30701, nullptr, "AddPlayHistoryWithApplication"}, // 19.0.0+
             {30810, D<&FriendService::ChangePresencePermission>, "ChangePresencePermission"},
@@ -994,6 +998,7 @@ private:
                 ++*out_unread;
             }
         }
+        LOG_DEBUG(Service_Friend, "called, unread={}, read={}", *out_unread, *out_read);
         R_SUCCEED();
     }
 
@@ -1028,6 +1033,13 @@ private:
             out_list[count++] = Fr::ToRequestImpl((*box)[index], user, list_type);
         }
 
+        LOG_DEBUG(Service_Friend,
+                  "called, offset={}, list_type={}, room={}, cached={}, served={}, first: "
+                  "channel={} state={} thumbnail={} route_app={}",
+                  offset, list_type, out_list.size(), box->size(), count,
+                  box->empty() ? 0 : (*box)[0].channel, box->empty() ? 0 : (*box)[0].state,
+                  box->empty() ? "-" : ((*box)[0].thumbnail_url.empty() ? "empty" : "set"),
+                  box->empty() ? 0 : (*box)[0].route.application_id != 0);
         *out_count = count;
         R_SUCCEED();
     }
@@ -1050,6 +1062,13 @@ private:
             out_list[count++] = Fr::ToRequestImplV2((*box)[index], user, list_type);
         }
 
+        LOG_DEBUG(Service_Friend,
+                  "called, offset={}, list_type={}, room={}, cached={}, served={}, first: "
+                  "channel={} state={} thumbnail={} route_app={}",
+                  offset, list_type, out_list.size(), box->size(), count,
+                  box->empty() ? 0 : (*box)[0].channel, box->empty() ? 0 : (*box)[0].state,
+                  box->empty() ? "-" : ((*box)[0].thumbnail_url.empty() ? "empty" : "set"),
+                  box->empty() ? 0 : (*box)[0].route.application_id != 0);
         *out_count = count;
         R_SUCCEED();
     }
@@ -1748,11 +1767,95 @@ private:
         R_SUCCEED();
     }
 
-    Result GetProfileExtraFromFriendCode(
-        OutLargeData<Fr::ProfileExtraImpl, BufferAttr_HipcPointer> out_profile) {
-        LOG_WARNING(Service_Friend, "(STUBBED) called");
-        *out_profile = {};
-        R_SUCCEED();
+    // 30500/30501 (friends contract 22.5.0 §B: in 0x30 = FriendCode at +0, Uid at +0x20; out a
+    // 0x1A pointer buffer of 0x400 / 0x4A8). The module answers with the user the server finds:
+    // GET users?filter.links.friendCode.id.$in=<code as typed>, none found is 2121-2221. That is
+    // a round trip, so the request is parked (deferred, no reply) while the friends worker asks,
+    // and answered when the server manager re-runs it after the answer arrived.
+
+    void GetProfileExtraFromFriendCode(HLERequestContext& ctx) {
+        ProfileFromFriendCode<Fr::ProfileExtraImpl>(ctx, &Fr::ToProfileExtraImpl);
+    }
+
+    void GetProfileExtraFromFriendCodeV2(HLERequestContext& ctx) {
+        ProfileFromFriendCode<Fr::ProfileExtraImplV2>(ctx, &Fr::ToProfileExtraImplV2);
+    }
+
+    /// One friend-code lookup on the friends worker, shared with the parked request.
+    struct CodeLookup {
+        std::atomic<bool> done{false};
+        int error = 0;
+        std::optional<Baas::User> user;
+    };
+
+    template <typename Profile>
+    void ProfileFromFriendCode(HLERequestContext& ctx, Profile (*convert)(const Baas::User&)) {
+        const u8* raw = RawData(ctx);
+        Fr::FriendCode code{};
+        Uid user{};
+        std::memcpy(&code, raw, sizeof(code));
+        std::memcpy(&user, raw + sizeof(code), sizeof(user));
+        const std::string text(code.code, ::strnlen(code.code, sizeof(code.code)));
+
+        Profile profile{};
+        const Result result = [&]() -> Result {
+            R_TRY(RequireManager());
+            R_UNLESS(!text.empty(), ResultInvalidArgument);
+            if (!AvailableFor(user)) {
+                LOG_DEBUG(Service_Friend, "(not served) called");
+                R_SUCCEED();
+            }
+
+            std::shared_ptr<CodeLookup> lookup;
+            bool start = false;
+            {
+                std::scoped_lock lock{code_lookups_mutex};
+                auto& slot = code_lookups[text];
+                if (!slot) {
+                    slot = std::make_shared<CodeLookup>();
+                    start = true;
+                }
+                lookup = slot;
+            }
+            if (start) {
+                LOG_DEBUG(Service_Friend, "friends: friend-code lookup parked");
+                Baas::RunInBackground([lookup, text] {
+                    auto [error, found] = Baas::UserByFriendCode(text);
+                    lookup->error = error;
+                    lookup->user = std::move(found);
+                    lookup->done.store(true, std::memory_order_release);
+                });
+            }
+            if (!lookup->done.load(std::memory_order_acquire)) {
+                // Parked: no reply now. The heartbeat re-runs this request until the answer is in.
+                ctx.SetIsDeferred(true);
+                if (auto manager = ctx.GetManager()) {
+                    manager->GetServerManager().EnableDeferralHeartbeat(
+                        std::chrono::milliseconds{5});
+                }
+                R_SUCCEED();
+            }
+            {
+                std::scoped_lock lock{code_lookups_mutex};
+                code_lookups.erase(text);
+            }
+            const int error = lookup->error != 0 ? lookup->error
+                                                 : (lookup->user.has_value() ? 0 : 2221);
+            LOG_INFO(Service_Friend, "friends: friend-code lookup answered ({})",
+                     error == 0 ? std::string{"found"} : fmt::format("2121-{:04}", error));
+            R_TRY(FromDescription(error));
+            profile = convert(*lookup->user);
+            R_SUCCEED();
+        }();
+
+        if (ctx.GetIsDeferred()) {
+            return;
+        }
+        if (result.IsSuccess()) {
+            ctx.WriteBuffer(profile);
+        }
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
     }
 
     Result DeletePlayHistory(Uid user) {
@@ -1982,6 +2085,10 @@ private:
     /// raises the event through the session's signalling thread, and finds it detached once the
     /// service has closed it.
     std::shared_ptr<::OpenPak::HostEvent> completion;
+
+    /// 30500/30501 lookups in flight, by the code as typed.
+    std::mutex code_lookups_mutex;
+    std::map<std::string, std::shared_ptr<CodeLookup>> code_lookups;
 };
 
 } // namespace

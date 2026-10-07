@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include "common/logging.h"
 #include "core/openpak/baas.h"
 
 namespace OpenPak::Baas {
@@ -439,8 +440,17 @@ std::optional<Request> ParseRequest(const Json& item, bool inbox) {
 
     std::uint64_t id = 0;
     std::uint64_t other_id = 0;
-    if (!Hex(item, "id", id) || !channel || !state || !Hex(item, (side + "Id").c_str(), other_id) ||
-        !nickname || nickname->size() >= 0x21 || !thumbnail || thumbnail->size() >= 0xA0) {
+    const char* missing = !Hex(item, "id", id)                             ? "id"
+                          : !channel                                       ? "channels[0]"
+                          : !state                                         ? "state"
+                          : !Hex(item, (side + "Id").c_str(), other_id)    ? "the other id"
+                          : !nickname || nickname->size() >= 0x21          ? "nickname"
+                          : !thumbnail || thumbnail->size() >= 0xA0        ? "thumbnailUrl"
+                                                                           : nullptr;
+    if (missing != nullptr) {
+        // Field names only: the values are a person's.
+        LOG_DEBUG(WebService, "[OpenPak] A friend request item was dropped: {} {} is missing or "
+                              "too long", side, missing);
         return std::nullopt;
     }
 
