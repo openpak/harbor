@@ -15,6 +15,8 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/baas_requests.cpp
     openpak/bcat.cpp
     openpak/bcat.h
+    openpak/boot_connection.cpp
+    openpak/boot_connection.h
     openpak/friend_structs.cpp
     openpak/friend_structs.h
     openpak/friends_cache.cpp
@@ -30,6 +32,8 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/push.h
     openpak/secret_store.cpp
     openpak/secret_store.h
+    openpak/service_hooks.cpp
+    openpak/service_hooks.h
     openpak/session.cpp
     openpak/session.h
     openpak/session_detail.h
