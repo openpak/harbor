@@ -35,21 +35,24 @@ EventObserver::EventObserver(Core::System& system, WindowSystem& window_system)
         Common::SetCurrentThreadName("am:EventObserver");
         while (!stop_token.stop_requested()) {
             auto* signaled_holder = this->WaitSignaled(stop_token);
-            if (!signaled_holder)
+            if (!signaled_holder || stop_token.stop_requested())
                 break;
             this->Process(signaled_holder);
         }
+        std::scoped_lock lk{m_exit_lock};
+        m_thread_exited = true;
+        m_exit_cv.notify_all();
     });
+
+    // This object lives on am's guest service thread, which never resumes once the cores are shut
+    // down, so the kernel stops the thread before it tears itself down; otherwise the processes
+    // the kernel terminates wake the thread into a dead kernel.
+    m_kernel_stop_id = m_system.Kernel().AddHostThreadStop([this] { this->Stop(); });
 }
 
 EventObserver::~EventObserver() {
-    // Signal thread and wait for processing to finish.
-    if (m_thread.joinable()) {
-        // Signal thread and wait for processing to finish.
-        m_thread.request_stop();
-        m_wakeup_event.Signal(m_system.Kernel());
-        m_thread.join();
-    }
+    m_system.Kernel().RemoveHostThreadStop(m_kernel_stop_id);
+    this->Stop();
 
     // Free remaining owned sessions.
     auto it = m_process_holder_list.begin();
@@ -62,6 +65,29 @@ EventObserver::~EventObserver() {
 
         // Free the holder.
         delete holder;
+    }
+}
+
+void EventObserver::Stop() {
+    if (!m_thread.joinable()) {
+        return;
+    }
+
+    // Signal thread and wait for processing to finish. A recalculation blocked on a lock that a
+    // suspended guest thread holds never finishes; the thread is then left behind, it stops at
+    // its next wakeup.
+    m_thread.request_stop();
+    m_wakeup_event.Signal(m_system.Kernel());
+    bool exited;
+    {
+        std::unique_lock lk{m_exit_lock};
+        exited = m_exit_cv.wait_for(lk, std::chrono::seconds{2}, [this] { return m_thread_exited; });
+    }
+    if (exited) {
+        m_thread.join();
+    } else {
+        LOG_WARNING(Service_AM, "am: event observer still busy at shutdown; detached");
+        m_thread.detach();
     }
 }
 

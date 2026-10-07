@@ -114,6 +114,13 @@ public:
     /// Close all active services in use by the kernel instance.
     void CloseServices();
 
+    /// Host threads that call into the kernel from outside the guest scheduler (am's event
+    /// observer) register how to stop them here. CloseServices runs every stop first, while the
+    /// kernel is still whole: such a thread's owner lives on a guest service thread that never
+    /// resumes after the cores shut down, so its destructor cannot be relied on.
+    u64 AddHostThreadStop(std::function<void()> stop);
+    void RemoveHostThreadStop(u64 id);
+
     /// Retrieves a shared pointer to the system resource limit instance.
     const KResourceLimit* GetSystemResourceLimit() const;
 
