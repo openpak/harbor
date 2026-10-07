@@ -7,6 +7,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -48,6 +49,13 @@ public:
                            SaveDataSize new_value) const;
 
     void SetAutoCreate(bool state);
+
+    /// The owner recorded when system save save_id was created here, if any. Kept under
+    /// /system/save/.harbor, outside every save.
+    std::optional<u64> ReadSystemSaveDataOwner(u64 save_id) const;
+    void WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const;
+    /// Removes system save save_id for every user, with its owner record.
+    Result DeleteSystemSaveData(u64 save_id) const;
 
 private:
     Core::System& system;

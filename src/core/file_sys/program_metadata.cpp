@@ -5,11 +5,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstddef>
+#include <cstring>
 #include <vector>
 
 #include "common/logging.h"
 #include "common/scope_exit.h"
+#include "core/file_sys/content_archive.h"
 #include "core/file_sys/program_metadata.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/loader/loader.h"
 
@@ -96,7 +99,105 @@ Loader::ResultStatus ProgramMetadata::Load(VirtualFile file) {
         return Loader::ResultStatus::ErrorBadKernelCapabilityDescriptors;
     }
 
+    // The service access control and the file access header as stored, both relative to ACI0.
+    // Nothing here is required to start a program, so a short read just leaves them empty.
+    const auto read_aci_block = [&](std::vector<u8>& out, u32 offset, u32 size) {
+        out.resize(size);
+        if (file->ReadBytes(out.data(), size, npdm_header.aci_offset + offset) != size) {
+            out.clear();
+        }
+    };
+    read_aci_block(aci_service_access, aci_header.sac_offset, aci_header.sac_size);
+    read_aci_block(aci_file_access_data, aci_header.fah_offset, aci_header.fah_size);
+
+    // The per-field read above takes fah_offset as a file offset, but it is relative to ACI0.
+    if (aci_file_access_data.size() >= 4 + sizeof(u64)) {
+        std::memcpy(&aci_file_access.permissions, aci_file_access_data.data() + 4, sizeof(u64));
+    }
+
     return Loader::ResultStatus::Success;
+}
+
+std::vector<ProgramMetadata::ServiceAccessEntry> ProgramMetadata::GetServiceAccessList() const {
+    std::vector<ServiceAccessEntry> list;
+    const auto& sac = aci_service_access;
+    for (std::size_t i = 0; i < sac.size();) {
+        const u8 control = sac[i++];
+        const std::size_t length = (control & 7) + 1;
+        if (i + length > sac.size()) {
+            break;
+        }
+        list.push_back({std::string(reinterpret_cast<const char*>(sac.data() + i), length),
+                        (control & 0x80) != 0});
+        i += length;
+    }
+    return list;
+}
+
+bool ProgramMetadata::IsServiceAccessAllowed(std::span<const ServiceAccessEntry> list,
+                                             std::string_view name, bool is_host) {
+    for (const auto& entry : list) {
+        if (entry.is_host != is_host) {
+            continue;
+        }
+        const std::string_view entry_name{entry.name};
+        if (entry_name.ends_with('*') ? name.starts_with(entry_name.substr(0, entry_name.size() - 1))
+                                      : name == entry_name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ProgramMetadata::CanWriteSaveDataOwnedBy(u64 owner_id) const {
+    // File access header: +0x14 offset and +0x18 size of the save data owner block, which holds a
+    // u32 count, count accessibility bytes (bit 1 = write) padded to 4, then count u64 owner ids.
+    const auto& fah = aci_file_access_data;
+    const auto read_u32 = [&](std::size_t at) {
+        u32 value{};
+        std::memcpy(&value, fah.data() + at, sizeof(value));
+        return value;
+    };
+    if (fah.size() < 0x1C) {
+        return false;
+    }
+
+    const std::size_t offset = read_u32(0x14);
+    const std::size_t size = read_u32(0x18);
+    if (size < 4 || offset + size > fah.size()) {
+        return false;
+    }
+
+    const std::size_t count = read_u32(offset);
+    const std::size_t ids = offset + 4 + ((count + 3) & ~std::size_t{3});
+    for (std::size_t i = 0; i < count && ids + (i + 1) * sizeof(u64) <= offset + size; i++) {
+        u64 id{};
+        std::memcpy(&id, fah.data() + ids + i * sizeof(u64), sizeof(id));
+        if (id == owner_id && (fah[offset + 4 + i] & 2) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<ProgramMetadata> ProgramMetadata::LoadInstalled(const ContentProvider& provider,
+                                                              u64 program_id) {
+    const auto nca = provider.GetEntry(program_id, ContentRecordType::Program);
+    if (nca == nullptr) {
+        return std::nullopt;
+    }
+
+    const auto exefs = nca->GetExeFS();
+    const auto npdm = exefs != nullptr ? exefs->GetFile("main.npdm") : nullptr;
+    if (npdm == nullptr) {
+        return std::nullopt;
+    }
+
+    ProgramMetadata metadata;
+    if (metadata.Load(npdm) != Loader::ResultStatus::Success) {
+        return std::nullopt;
+    }
+    return metadata;
 }
 
 Loader::ResultStatus ProgramMetadata::Reload(VirtualFile file) {

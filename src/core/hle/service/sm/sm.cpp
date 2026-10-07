@@ -11,6 +11,7 @@
 #include "core/hle/kernel/k_client_port.h"
 #include "core/hle/kernel/k_client_session.h"
 #include "core/hle/kernel/k_port.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scoped_resource_reservation.h"
 #include "core/hle/kernel/k_server_port.h"
 #include "core/hle/result.h"
@@ -26,6 +27,7 @@ constexpr Result ResultInvalidClient(ErrorModule::SM, 2);
 constexpr Result ResultAlreadyRegistered(ErrorModule::SM, 4);
 constexpr Result ResultInvalidServiceName(ErrorModule::SM, 6);
 constexpr Result ResultNotRegistered(ErrorModule::SM, 7);
+constexpr Result ResultNotAllowed(ErrorModule::SM, 8);
 
 ServiceManager::ServiceManager(Kernel::KernelCore& kernel_) : kernel{kernel_} {
     controller_interface = std::make_unique<Controller>(kernel.System());
@@ -112,6 +114,11 @@ Result ServiceManager::GetServicePort(Kernel::KClientPort** out_client_port,
     return ResultSuccess;
 }
 
+bool ServiceManager::HasService(const std::string& name) const {
+    std::scoped_lock lk{lock};
+    return registered_services.contains(name);
+}
+
 /**
  * SM::Initialize service function
  *  Inputs:
@@ -170,6 +177,62 @@ static std::string PopServiceName(IPC::RequestParser& rp) {
     return result;
 }
 
+// The firmware's own programs probe ports from the least privileged up ("friend:u" before
+// "friend:m") and rely on sm refusing the ones outside their NPDM service access list; granted the
+// first, they run with too few rights (MyPage then fails with 2121-0090). Only firmware programs
+// (0100000000000000-010000000000FFFF) are checked; games and homebrew keep an open sm.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+bool SM::IsAccessAllowed(HLERequestContext& ctx, std::string_view name, bool is_host) {
+    const auto* const process = ctx.GetThread().GetOwnerProcess();
+    if (process == nullptr || (process->GetProgramId() & ~u64{0xFFFF}) != 0x0100000000000000) {
+        return true;
+    }
+
+    const u64 program_id = process->GetProgramId();
+    std::scoped_lock lk{access_lock};
+    auto it = access_lists.find(program_id);
+    if (it == access_lists.end()) {
+        const auto metadata =
+            FileSys::ProgramMetadata::LoadInstalled(system.GetContentProvider(), program_id);
+        std::optional<std::vector<FileSys::ProgramMetadata::ServiceAccessEntry>> list;
+        if (metadata) {
+            list = metadata->GetServiceAccessList();
+        }
+
+        if (list && !list->empty()) {
+            std::string names;
+            std::string unserved;
+            for (const auto& entry : *list) {
+                names += fmt::format(" {}{}", entry.is_host ? "+" : "", entry.name);
+                if (!entry.is_host && !entry.name.ends_with('*') &&
+                    !service_manager.HasService(entry.name)) {
+                    unserved += " " + entry.name;
+                }
+            }
+            LOG_INFO(Service_SM, "program {:016X}: service access list (+ = host):{}", program_id,
+                     names);
+            if (!unserved.empty()) {
+                LOG_INFO(Service_SM, "program {:016X}: may open services nothing serves:{}",
+                         program_id, unserved);
+            }
+        } else {
+            list.reset();
+            LOG_WARNING(Service_SM, "program {:016X}: no NPDM service access list, not checked",
+                        program_id);
+        }
+        it = access_lists.emplace(program_id, std::move(list)).first;
+    }
+
+    if (!it->second ||
+        FileSys::ProgramMetadata::IsServiceAccessAllowed(*it->second, name, is_host)) {
+        return true;
+    }
+
+    LOG_INFO(Service_SM, "program {:016X}: {} '{}' refused, not in its service access list",
+             program_id, is_host ? "RegisterService" : "GetService", name);
+    return false;
+}
+
 Result SM::GetServiceImpl(Kernel::KClientSession** out_client_session, HLERequestContext& ctx) {
     if (!ctx.GetManager()->GetIsInitializedForSm()) {
         return Service::SM::ResultInvalidClient;
@@ -184,6 +247,10 @@ Result SM::GetServiceImpl(Kernel::KClientSession** out_client_session, HLEReques
     if (port_result == Service::SM::ResultInvalidServiceName) {
         LOG_ERROR(Service_SM, "Invalid service name '{}'", name);
         return Service::SM::ResultInvalidServiceName;
+    }
+
+    if (!IsAccessAllowed(ctx, name, false)) {
+        return Service::SM::ResultNotAllowed;
     }
 
     if (port_result != ResultSuccess) {
@@ -227,6 +294,12 @@ void SM::RegisterServiceImpl(HLERequestContext& ctx, std::string name, u32 max_s
                              bool is_light) {
     LOG_DEBUG(Service_SM, "called with name={}, max_session_count={}, is_light={}", name,
               max_session_count, is_light);
+
+    if (!IsAccessAllowed(ctx, name, true)) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(Service::SM::ResultNotAllowed);
+        return;
+    }
 
     Kernel::KServerPort* server_port{};
     if (const auto result = service_manager.RegisterService(std::addressof(server_port), name, max_session_count, nullptr);

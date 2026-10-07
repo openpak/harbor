@@ -24,6 +24,7 @@
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/program_metadata.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/file_sys/savedata_factory.h"
@@ -47,6 +48,14 @@
 
 namespace Service::FileSystem {
 
+namespace {
+
+// fs access control bits that manage other programs' saves (SaveDataManagement,
+// SystemSaveDataManagement, FullPermission).
+constexpr u64 SaveDataManagementPermissions = (1ULL << 6) | (1ULL << 14) | (1ULL << 63);
+
+} // namespace
+
 FSP_SRV::FSP_SRV(Core::System& system_)
     : ServiceFramework{system_, "fsp-srv"}, fsc{system.GetFileSystemController()},
       content_provider{system.GetContentProvider()}, reporter{system.GetReporter()} {
@@ -64,7 +73,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {17, nullptr, "OpenHostFileSystem"},
         {18, D<&FSP_SRV::OpenSdCardFileSystem>, "OpenSdCardFileSystem"},
         {19, nullptr, "FormatSdCardFileSystem"},
-        {21, nullptr, "DeleteSaveDataFileSystem"},
+        {21, D<&FSP_SRV::DeleteSaveDataFileSystem>, "DeleteSaveDataFileSystem"},
         {22, D<&FSP_SRV::CreateSaveDataFileSystem>, "CreateSaveDataFileSystem"},
         {23, D<&FSP_SRV::CreateSaveDataFileSystemBySystemSaveDataId>, "CreateSaveDataFileSystemBySystemSaveDataId"},
         {24, nullptr, "RegisterSaveDataFileSystemAtomicDeletion"},
@@ -118,7 +127,12 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {204, nullptr, "OpenDataFileSystemByProgramIndex"},
         {205, D<&FSP_SRV::OpenDataStorageWithProgramIndex>, "OpenDataStorageWithProgramIndex"},
         {206, nullptr, "OpenDataStorageByPath"},
-        {210, D<&FSP_SRV::SetCurrentProcess>, "SetCurrentProcess"},
+        // 23.0.0+: the fs client sends 210-213 with the arguments of 200/201/205/206 and gets
+        // back a storage (overlayDisp 23.0.1 +0x13adf0: no input, one out object). The applets
+        // mount their RomFs through 210. Behaviour follows the Ryujinx Harbor (MIT-licensed
+        // Ryujinx base).
+        {210, D<&FSP_SRV::OpenDataStorageByCurrentProcess2>, "OpenDataStorageByCurrentProcess2"},
+        {212, D<&FSP_SRV::OpenDataStorageWithProgramIndex>, "OpenDataStorageWithProgramIndex2"},
         {400, nullptr, "OpenDeviceOperator"},
         {500, nullptr, "OpenSdCardDetectionEventNotifier"},
         {501, nullptr, "OpenGameCardDetectionEventNotifier"},
@@ -248,15 +262,60 @@ Result FSP_SRV::CreateSaveDataFileSystemBySystemSaveDataId(
     LOG_DEBUG(Service_FS, "called save_struct = {}", save_struct.DebugInfo());
 
     FileSys::VirtualDir save_data_dir{};
-    R_RETURN(save_data_controller->CreateSaveData(&save_data_dir, FileSys::SaveDataSpaceId::System,
-                                                  save_struct));
+    R_TRY(save_data_controller->CreateSaveData(&save_data_dir, FileSys::SaveDataSpaceId::System,
+                                               save_struct));
+    RecordSystemSaveDataOwner(save_struct, save_create_struct.owner_id);
+    R_SUCCEED();
 }
 
 Result FSP_SRV::CreateSaveDataFileSystemWithCreationInfo2(
     FileSys::SaveDataCreationInfo2 save_data_creation_info) {
     FileSys::VirtualDir save_data_dir{};
-    R_RETURN(save_data_controller->CreateSaveData(&save_data_dir, save_data_creation_info.space_id,
-                                                  save_data_creation_info.attribute));
+    R_TRY(save_data_controller->CreateSaveData(&save_data_dir, save_data_creation_info.space_id,
+                                               save_data_creation_info.attribute));
+    if (save_data_creation_info.space_id == FileSys::SaveDataSpaceId::System) {
+        RecordSystemSaveDataOwner(save_data_creation_info.attribute,
+                                  save_data_creation_info.owner_id);
+    }
+    R_SUCCEED();
+}
+
+void FSP_SRV::RecordSystemSaveDataOwner(const FileSys::SaveDataAttribute& attribute,
+                                        u64 owner_id) {
+    if (attribute.type != FileSys::SaveDataType::System ||
+        attribute.system_save_data_id == FileSys::InvalidSystemSaveDataId) {
+        return;
+    }
+    save_data_controller->WriteSystemSaveDataOwner(attribute.system_save_data_id,
+                                                   owner_id != 0 ? owner_id : program_id);
+}
+
+Result FSP_SRV::DeleteSaveDataFileSystem(u64 save_data_id) {
+    // The form without a space names the system save space. A console lets a program delete a
+    // system save it owns, or one whose owner its FAC lists with write access; the web applets
+    // hold no management right and clear their browser storage (0x8000000000001093) at start.
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+
+    const auto owner_id = save_data_controller->ReadSystemSaveDataOwner(save_data_id);
+    const auto metadata = FileSys::ProgramMetadata::LoadInstalled(content_provider, program_id);
+
+    const bool is_owner = owner_id && *owner_id == program_id;
+    const bool lists_owner = owner_id && metadata && metadata->CanWriteSaveDataOwnedBy(*owner_id);
+    const bool manages = metadata &&
+                         (metadata->GetFilesystemPermissions() & SaveDataManagementPermissions) != 0;
+
+    if (!is_owner && !lists_owner && !manages) {
+        LOG_WARNING(Service_FS,
+                    "program {:016X} may not delete system save {:016X} (owner {})", program_id,
+                    save_data_id, owner_id ? fmt::format("{:016X}", *owner_id) : "unknown");
+        R_THROW(FileSys::ResultPermissionDenied);
+    }
+
+    const Result result = save_data_controller->DeleteSystemSaveData(save_data_id);
+    LOG_INFO(Service_FS, "program {:016X} deleted system save {:016X}: {:#x}", program_id,
+             save_data_id, result.raw);
+    R_RETURN(result);
 }
 
 Result FSP_SRV::IsExFatSupported(Out<bool> out_is_supported) {
@@ -492,6 +551,11 @@ Result FSP_SRV::OpenDataFileSystemByCurrentProcess(OutInterface<IFileSystem> out
 Result FSP_SRV::OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_interface) {
     LOG_DEBUG(Service_FS, "called");
 
+    if (romfs_controller == nullptr) {
+        LOG_ERROR(Service_FS, "No process set on this session (SetCurrentProcess not called)");
+        R_RETURN(ResultUnknown);
+    }
+
     if (!romfs) {
         auto current_romfs = romfs_controller->OpenRomFSCurrentProcess();
         if (!current_romfs) {
@@ -506,6 +570,11 @@ Result FSP_SRV::OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_inter
     *out_interface = std::make_shared<IStorage>(system, romfs);
 
     R_SUCCEED();
+}
+
+Result FSP_SRV::OpenDataStorageByCurrentProcess2(OutInterface<IStorage> out_interface) {
+    LOG_DEBUG(Service_FS, "called (23.0.0+ command 210), program_id={:016X}", program_id);
+    R_RETURN(OpenDataStorageByCurrentProcess(out_interface));
 }
 
 Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
