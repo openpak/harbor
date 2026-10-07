@@ -8,7 +8,6 @@
 #include <array>
 #include <cstring>
 #include <random>
-#include <thread>
 
 #include "common/common_types.h"
 #include "common/fs/file.h"
@@ -38,7 +37,6 @@
 #include "core/hle/service/server_manager.h"
 #include "core/loader/loader.h"
 #include "core/openpak/async_worker.h"
-#include "core/openpak/boot_connection.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
 
@@ -1975,18 +1973,6 @@ void LoopProcess(Core::System& system) {
 
     // The OpenPak session speaks for the user acc has open.
     OpenPakAccount::InstallProfileSource(system.GetProfileManager());
-
-    // Test runs only, until the frontends make the boot connection themselves: a file named
-    // acc-test-boot in <user>/openpak connects this process to OpenPak from that directory.
-    const auto user_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
-    if (std::error_code ec; std::filesystem::exists(user_dir / "openpak" / "acc-test-boot", ec)) {
-        std::thread([user_dir] {
-            const auto result = OpenPak::BootConnection::Run(user_dir);
-            LOG_INFO(Service_ACC, "acc test hook: OpenPak {} (profile {}, ceiling {})",
-                     result.enabled ? "on" : "off", result.profile_source,
-                     result.ceiling_source);
-        }).detach();
-    }
 
     server_manager->RegisterNamedService("acc:aa", std::make_shared<ACC_AA>(module, profile_manager, system));
     server_manager->RegisterNamedService("acc:su", std::make_shared<ACC_SU>(module, profile_manager, system));
