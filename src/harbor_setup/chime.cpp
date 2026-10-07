@@ -19,7 +19,7 @@ struct Chime::Impl {
 
 std::vector<std::int16_t> Chime::Samples(int note) {
     std::vector<std::int16_t> samples(SampleRate * DurationMs / 1000);
-    const double frequency = 196.0 * std::pow(2.0, std::clamp(note, 0, 8) / 12.0);
+    const double frequency = 196.0 * std::pow(2.0, std::clamp(note, 0, 9) / 12.0);
     const double count = static_cast<double>(samples.size());
     for (size_t i = 0; i < samples.size(); i++) {
         const double time = static_cast<double>(i) / SampleRate;
