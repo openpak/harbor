@@ -157,8 +157,9 @@ struct State {
     /// costs one fetch, never one each.
     std::map<std::string, bool> queued;
 
-    /// The consumer of every delivery, and the registration id it may ask for. Guarded by mutex.
-    Hook hook;
+    /// The consumers of every delivery, by name, and the registration id they may ask for.
+    /// Guarded by mutex.
+    std::map<std::string, Hook, std::less<>> hooks;
     std::string penne_id;
 
     ~State() {
@@ -273,21 +274,22 @@ void Refresh(const std::string& kind, std::function<void()> work) {
     });
 }
 
-/// The consumer's hook, outside every lock; one that throws is logged and the stream goes on.
+/// The consumers' hooks, outside every lock; one that throws is logged and the stream goes on.
 void RaiseHook(const std::string& kind, const std::string& body) {
-    Hook hook;
+    std::vector<Hook> hooks;
     {
         State& state = Get();
         std::lock_guard lock{state.mutex};
-        hook = state.hook;
+        for (const auto& [name, hook] : state.hooks) {
+            hooks.push_back(hook);
+        }
     }
-    if (!hook) {
-        return;
-    }
-    try {
-        hook(kind, body);
-    } catch (const std::exception& e) {
-        LOG_WARNING(WebService, "[OpenPak] Push hook failed: {}", e.what());
+    for (const auto& hook : hooks) {
+        try {
+            hook(kind, body);
+        } catch (const std::exception& e) {
+            LOG_WARNING(WebService, "[OpenPak] Push hook failed: {}", e.what());
+        }
     }
 }
 
@@ -553,9 +555,17 @@ void ForgetProfile(const std::string& uid) {
 }
 
 void SetHook(Hook hook) {
+    SetHook({}, std::move(hook));
+}
+
+void SetHook(std::string_view consumer, Hook hook) {
     State& state = Get();
     std::lock_guard lock{state.mutex};
-    state.hook = std::move(hook);
+    if (hook) {
+        state.hooks.insert_or_assign(std::string{consumer}, std::move(hook));
+    } else if (const auto it = state.hooks.find(consumer); it != state.hooks.end()) {
+        state.hooks.erase(it);
+    }
 }
 
 std::string PenneId() {

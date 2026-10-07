@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace OpenPak::Push {
 
@@ -81,6 +82,9 @@ void ForgetProfile(const std::string& uid);
 /// AsyncWorker; it never signals from this thread. Must not throw.
 using Hook = std::function<void(const std::string& kind, const std::string& body)>;
 void SetHook(Hook hook);
+/// The same, one hook per consumer ("pctl", "friends"...): setting one again replaces it, an empty
+/// hook removes it, and every consumer's hook sees every delivery.
+void SetHook(std::string_view consumer, Hook hook);
 
 /// The active user's Penne registration id (pctl's notificationToken), or empty when it has none
 /// yet.
