@@ -42,7 +42,7 @@ mkdir -p "$TMPDIR"
 # run at once and other projects still wait for one slot only. A build also waits for 6 GiB of free RAM.
 # The emulator check runs again inside the slot, because waiting can take a long time.
 # ponytail: two slots and a fixed RAM floor; tune MIN_FREE_KB/slots if the machine changes.
-MIN_FREE_KB=$((6 * 1024 * 1024))
+MIN_FREE_KB=$((8 * 1024 * 1024))
 locked() {
     local slot rc
     while :; do
