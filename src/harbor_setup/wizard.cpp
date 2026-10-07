@@ -8,9 +8,15 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
+#include <thread>
 
+#include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "core/openpak/account.h"
+#include "core/openpak/boot_connection.h"
 #include "frontend_common/firmware_manager.h"
+#include "frontend_common/secret_store.h"
 #include "harbor_setup/keys.h"
 #include "harbor_setup/wizard.h"
 
@@ -131,6 +137,7 @@ Wizard::Wizard(Host& host_, std::filesystem::path record_path_, const Readiness&
 }
 
 Wizard::~Wizard() {
+    StopPolling();
     *alive = false;
     cancel_requested = true;
     if (worker.joinable()) {
@@ -157,6 +164,9 @@ Step Wizard::FirstIncomplete(const Readiness& readiness, const Record& record, b
     if (has_driver_page && !record.gpu_driver) {
         return Step::Driver;
     }
+    if (!record.openpak_account) {
+        return Step::Account;
+    }
     return Step::Ready;
 }
 
@@ -178,6 +188,8 @@ std::string Wizard::Title() const {
         return "Updates";
     case Step::Driver:
         return "Graphics driver";
+    case Step::Account:
+        return "OpenPak account";
     case Step::Ready:
         return "Ready";
     }
@@ -210,6 +222,23 @@ std::string Wizard::Lead() const {
     case Step::Driver:
         return "Use the phone's Vulkan driver, download an Adreno driver from GitHub, or install a "
                "driver .zip. Set up again from the console's menu (Android back) to change it later.";
+    case Step::Account:
+        switch (account_state) {
+        case AccountState::Waiting:
+            return "Check your email to verify your account. Open the link in the mail from OpenPak; "
+                   "this page notices by itself once it is done.";
+        case AccountState::SignedIn:
+            return "The console's first user is linked to this account when the console sets it up, "
+                   "with its nickname and picture.";
+        case AccountState::Form:
+            break;
+        }
+        return account_mode == AccountMode::SignIn
+                   ? "Sign in to OpenPak to play online, with friends, invitations and news. The "
+                     "console's first user is linked to this account. Choose Later to play offline "
+                     "or link a user in the console's settings."
+                   : "Create an OpenPak account. A mail is sent to verify the address; the console's "
+                     "first user is then linked to it.";
     case Step::Ready:
         return "Everything is in place. When Harbor starts, the console boots for the first time and "
                "runs its own setup: language, region, the first user and the network.";
@@ -231,6 +260,12 @@ bool Wizard::CanGoNext() const {
         return !firmware_pending.empty() || !firmware_installed.empty();
     case Step::Games:
         return !games.empty();
+    case Step::Account:
+        // Every field filled in; Next then says what is wrong with them, if anything.
+        return account_state == AccountState::SignedIn ||
+               (account_state == AccountState::Form && !account_email.empty() && !account_password.empty() &&
+                (account_mode == AccountMode::SignIn ||
+                 (!account_nickname.empty() && !account_birthday.empty() && !account_country.empty())));
     default:
         return true;
     }
@@ -248,6 +283,14 @@ std::string Wizard::NextLabel() const {
         return updates.empty() ? "Skip" : "Next";
     case Step::Ready:
         return "Start Harbor";
+    case Step::Account:
+        if (account_state == AccountState::Waiting) {
+            return "Waiting";
+        }
+        if (account_state == AccountState::SignedIn) {
+            return "Next";
+        }
+        return account_mode == AccountMode::SignIn ? "Sign in" : "Create account";
     default:
         return "Next";
     }
@@ -330,6 +373,9 @@ void Wizard::Enter() {
         } else if (!firmware_problem.empty()) {
             ShowStatus(firmware_problem, Tone::Bad);
         }
+        break;
+    case Step::Account:
+        EnterAccount();
         break;
     case Step::Driver:
         if (AdrenoModel(device) / 100 == 6) {
@@ -852,6 +898,342 @@ void Wizard::Download(size_t index) {
     });
 }
 
+namespace {
+
+using AccountStatus = OpenPak::Account::Status;
+
+std::string AccountMessage(AccountStatus status, bool creating) {
+    switch (status) {
+    case AccountStatus::Ok:
+        return {};
+    case AccountStatus::InvalidCredentials:
+        return creating ? "An account with this address may already exist with another password. "
+                          "Sign in instead, or check your email."
+                        : "The email address or the password is not right.";
+    case AccountStatus::TwoFactorRequired:
+        return "This account uses two-step verification, which this page cannot do. Choose Later "
+               "and sign in on the console's own page when it asks.";
+    case AccountStatus::RateLimited:
+        return "Too many tries. Wait a minute and try again.";
+    case AccountStatus::Suspended:
+        return "This OpenPak account is suspended.";
+    case AccountStatus::RegistrationsClosed:
+        return "OpenPak is not taking new accounts right now. Choose Later to play offline.";
+    case AccountStatus::SignedOut:
+        return "The sign-in has expired. Sign in again.";
+    case AccountStatus::Offline:
+        return "OpenPak could not be reached. Check the connection and try again, or choose Later.";
+    case AccountStatus::Failed:
+        break;
+    }
+    return "Something went wrong. Try again, or choose Later.";
+}
+
+std::size_t Utf8Length(const std::string& text) {
+    return static_cast<std::size_t>(std::count_if(
+        text.begin(), text.end(), [](char c) { return (static_cast<unsigned char>(c) & 0xC0) != 0x80; }));
+}
+
+std::string Trim(std::string text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    std::size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) {
+        start++;
+    }
+    return text.substr(start);
+}
+
+bool ValidBirthday(const std::string& text) {
+    int year = 0, month = 0, day = 0;
+    char extra = 0;
+    if (text.size() != 10 || std::sscanf(text.c_str(), "%4d-%2d-%2d%c", &year, &month, &day, &extra) != 3) {
+        return false;
+    }
+    static constexpr int days[] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1 || month > 12 || day < 1 || day > days[month - 1]) {
+        return false;
+    }
+    const std::time_t now = std::time(nullptr);
+    const std::tm* today = std::gmtime(&now);
+    const int this_year = today ? today->tm_year + 1900 : 2100;
+    return year >= 1900 && (year < this_year ||
+                            (year == this_year && today &&
+                             (month < today->tm_mon + 1 || (month == today->tm_mon + 1 && day <= today->tm_mday))));
+}
+
+/// The setup reaches OpenPak's website through the same boot connection the console uses (the site
+/// from server.json, or openpak.org on a first run). Blocking.
+void Connect() {
+    OpenPak::BootConnection::Run(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir));
+}
+
+} // namespace
+
+void Wizard::SetAccountMode(AccountMode mode) {
+    if (busy || account_state != AccountState::Form || mode == account_mode) {
+        return;
+    }
+    account_mode = mode;
+    ShowStatus({}, Tone::None);
+    Notify();
+}
+
+std::string Wizard::AccountValue(AccountField field) const {
+    switch (field) {
+    case AccountField::Email:
+        return account_email;
+    case AccountField::Password: {
+        std::string dots;
+        for (std::size_t i = 0; i < std::min<std::size_t>(Utf8Length(account_password), 12); i++) {
+            dots += "\u2022";
+        }
+        return dots;
+    }
+    case AccountField::Nickname:
+        return account_nickname;
+    case AccountField::Birthday:
+        return account_birthday;
+    case AccountField::Country:
+        return account_country;
+    }
+    return {};
+}
+
+std::string Wizard::AccountEditValue(AccountField field) const {
+    return field == AccountField::Password ? std::string{} : AccountValue(field);
+}
+
+void Wizard::SetAccountField(AccountField field, std::string value) {
+    if (busy || account_state != AccountState::Form) {
+        return;
+    }
+    switch (field) {
+    case AccountField::Email:
+        account_email = Trim(std::move(value));
+        break;
+    case AccountField::Password:
+        account_password = std::move(value);
+        break;
+    case AccountField::Nickname:
+        account_nickname = Trim(std::move(value));
+        break;
+    case AccountField::Birthday:
+        account_birthday = Trim(std::move(value));
+        break;
+    case AccountField::Country:
+        account_country = Trim(std::move(value));
+        std::transform(account_country.begin(), account_country.end(), account_country.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+        break;
+    }
+    ShowStatus({}, Tone::None);
+    Notify();
+}
+
+std::string Wizard::AccountProblem() const {
+    const auto at = account_email.find('@');
+    if (at == std::string::npos || at == 0 || at + 1 == account_email.size() || account_email.size() > 254) {
+        return account_email.empty() ? "Enter your email address." : "Enter a whole email address.";
+    }
+    if (account_password.size() < 8 || account_password.size() > 128) {
+        return account_password.empty() ? "Enter your password."
+                                        : "A password has 8 to 128 characters.";
+    }
+    if (account_mode == AccountMode::SignIn) {
+        return {};
+    }
+    const std::size_t nickname = Utf8Length(account_nickname);
+    if (nickname < 3 || nickname > 32 || account_nickname.find_first_of("\r\n") != std::string::npos) {
+        return "Choose a nickname of 3 to 32 characters.";
+    }
+    if (!ValidBirthday(account_birthday)) {
+        return "Enter your birthday as year-month-day, for example 1990-05-21.";
+    }
+    if (account_country.size() != 2 || !std::isalpha(static_cast<unsigned char>(account_country[0])) ||
+        !std::isalpha(static_cast<unsigned char>(account_country[1]))) {
+        return "Enter your country as two letters, for example GB or BR.";
+    }
+    return {};
+}
+
+void Wizard::EnterAccount() {
+    // On the UI thread: on Android the Keystore store is found through the app's class loader.
+    FrontendCommon::InstallSecretStore();
+    if (account_state == AccountState::Waiting) {
+        StartPolling();
+        return;
+    }
+    if (account_state == AccountState::SignedIn || busy || !OpenPak::Account::HasAccount()) {
+        return;
+    }
+    auto flag = alive;
+    StartWork("Checking your OpenPak account", false, [this, flag] {
+        Connect();
+        AccountStatus outcome = AccountStatus::Failed;
+        const auto me = OpenPak::Account::Me(&outcome);
+        post([this, flag, outcome, me] {
+            if (!*flag) {
+                return;
+            }
+            EndWork();
+            if (me && me->email_verified) {
+                AccountSignedIn(me->display_name);
+            } else if (me) {
+                account_state = AccountState::Waiting;
+                StartPolling();
+            } else if (outcome != AccountStatus::SignedOut) {
+                ShowStatus(AccountMessage(outcome, false), Tone::Warn);
+            }
+            Notify();
+        });
+    });
+}
+
+void Wizard::SubmitAccount() {
+    if (const std::string problem = AccountProblem(); !problem.empty()) {
+        ShowStatus(problem, Tone::Bad);
+        Notify();
+        return;
+    }
+    const bool creating = account_mode == AccountMode::Create;
+    auto flag = alive;
+    StartWork(creating ? "Creating your OpenPak account" : "Signing in to OpenPak", false,
+              [this, flag, creating, email = account_email, password = account_password,
+               nickname = account_nickname, birthday = account_birthday, country = account_country] {
+                  Connect();
+                  AccountStatus outcome = AccountStatus::Ok;
+                  if (creating) {
+                      outcome = OpenPak::Account::Register(email, password, nickname, country, birthday);
+                  }
+                  if (outcome == AccountStatus::Ok) {
+                      outcome = OpenPak::Account::SignIn(email, password);
+                  }
+                  std::optional<OpenPak::Account::Profile> me;
+                  if (outcome == AccountStatus::Ok) {
+                      me = OpenPak::Account::Me(&outcome);
+                  }
+                  post([this, flag, creating, outcome, me] {
+                      if (!*flag) {
+                          return;
+                      }
+                      EndWork();
+                      // The password is not kept once it was used.
+                      account_password.clear();
+                      if (outcome != AccountStatus::Ok || !me) {
+                          ShowStatus(AccountMessage(outcome, creating), Tone::Bad);
+                      } else if (me->email_verified) {
+                          AccountSignedIn(me->display_name);
+                      } else {
+                          account_state = AccountState::Waiting;
+                          ShowStatus(creating ? "A mail is on its way to " + account_email + "."
+                                              : "This account's address is not verified yet. Open "
+                                                "the link in the mail from OpenPak, or send it again.",
+                                     Tone::Warn);
+                          StartPolling();
+                      }
+                      Notify();
+                  });
+              });
+}
+
+void Wizard::StartPolling() {
+    StopPolling();
+    poll_token = std::make_shared<std::atomic_bool>(true);
+    // Every 5 s until the address is verified; never waited for (a call can take seconds).
+    std::thread([token = poll_token, flag = alive, post_ = post, this] {
+        while (*token) {
+            for (int i = 0; i < 50 && *token; i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (!*token) {
+                return;
+            }
+            AccountStatus outcome = AccountStatus::Failed;
+            const auto me = OpenPak::Account::Me(&outcome);
+            if ((me && me->email_verified) || outcome == AccountStatus::SignedOut) {
+                post_([this, token, flag, me, outcome] {
+                    if (!*flag || !*token || account_state != AccountState::Waiting) {
+                        return;
+                    }
+                    if (me) {
+                        AccountSignedIn(me->display_name);
+                    } else {
+                        account_state = AccountState::Form;
+                        ShowStatus(AccountMessage(outcome, false), Tone::Bad);
+                    }
+                    Notify();
+                });
+                return;
+            }
+        }
+    }).detach();
+}
+
+void Wizard::StopPolling() {
+    if (poll_token) {
+        *poll_token = false;
+        poll_token.reset();
+    }
+}
+
+void Wizard::AccountSignedIn(std::string name) {
+    StopPolling();
+    account_state = AccountState::SignedIn;
+    account_name = std::move(name);
+    setup.openpak_account = "signed-in";
+    if (Save()) {
+        ShowStatus(account_name.empty() ? "Signed in to OpenPak." : "Signed in as " + account_name + ".",
+                   Tone::Ok);
+    }
+    LOG_INFO(Frontend, "harbor: signed in to an OpenPak account");
+}
+
+void Wizard::ResendVerification() {
+    if (busy || account_state != AccountState::Waiting) {
+        return;
+    }
+    auto flag = alive;
+    StartWork("Sending the mail again", false, [this, flag] {
+        const AccountStatus outcome = OpenPak::Account::ResendVerification();
+        post([this, flag, outcome] {
+            if (!*flag) {
+                return;
+            }
+            EndWork();
+            if (outcome == AccountStatus::Ok) {
+                ShowStatus("The mail was sent again. It can take a few minutes; OpenPak sends at most "
+                           "one every 10 minutes.",
+                           Tone::Ok);
+            } else {
+                ShowStatus(AccountMessage(outcome, false), Tone::Bad);
+            }
+            Notify();
+        });
+    });
+}
+
+void Wizard::UseAnotherAccount() {
+    if (busy) {
+        return;
+    }
+    StopPolling();
+    account_state = AccountState::Form;
+    account_password.clear();
+    account_name.clear();
+    auto flag = alive;
+    StartWork("Signing out", false, [this, flag] {
+        OpenPak::Account::SignOut();
+        post([this, flag] {
+            if (*flag) {
+                EndWork();
+                Notify();
+            }
+        });
+    });
+}
+
 std::vector<SummaryRow> Wizard::Summary() const {
     std::vector<SummaryRow> rows{
         {"Keys", setup.keys_present ? "Installed" : "Missing"},
@@ -869,6 +1251,9 @@ std::vector<SummaryRow> Wizard::Summary() const {
         }
         rows.push_back({"Graphics driver", name});
     }
+    rows.push_back({"OpenPak", setup.openpak_account == "signed-in"
+                                   ? (account_name.empty() ? std::string{"Signed in"} : account_name)
+                                   : std::string{"Later"}});
     return rows;
 }
 
@@ -877,6 +1262,15 @@ void Wizard::Next() {
         return;
     }
     const Step page = current;
+
+    // The account form: Next signs in or creates the account first.
+    if (page == Step::Account && account_state == AccountState::Form) {
+        SubmitAccount();
+        return;
+    }
+    if (page == Step::Account) {
+        setup.openpak_account = "signed-in";
+    }
 
     // Firmware waiting to be installed: Next installs it first.
     if (page == Step::Firmware && !firmware_pending.empty()) {
@@ -983,13 +1377,47 @@ void Wizard::Next() {
 }
 
 void Wizard::Back() {
-    if (CanGoBack()) {
-        GoTo(Neighbour(current, -1));
+    if (!CanGoBack()) {
+        return;
     }
+    // Waiting for a verification: back to the form, to fix the address or use another account.
+    if (current == Step::Account && account_state == AccountState::Waiting) {
+        UseAnotherAccount();
+        return;
+    }
+    StopPolling();
+    GoTo(Neighbour(current, -1));
 }
 
 void Wizard::Skip() {
     if (!CanSkip()) {
+        return;
+    }
+    if (current == Step::Account) {
+        // Later: nothing is kept, so no user is linked behind the person's back.
+        StopPolling();
+        account_password.clear();
+        const bool had_account = OpenPak::Account::HasAccount();
+        setup.openpak_account = "later";
+        if (!Save()) {
+            Notify();
+            return;
+        }
+        if (had_account) {
+            auto flag = alive;
+            StartWork("Signing out", false, [this, flag] {
+                OpenPak::Account::SignOut();
+                post([this, flag] {
+                    if (*flag) {
+                        EndWork();
+                        account_state = AccountState::Form;
+                        GoTo(Neighbour(Step::Account, 1));
+                    }
+                });
+            });
+            return;
+        }
+        GoTo(Neighbour(Step::Account, 1));
         return;
     }
     selected_driver.clear();

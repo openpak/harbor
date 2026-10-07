@@ -395,6 +395,15 @@ add_library(core STATIC
     hle/service/acc/async_context.cpp
     hle/service/acc/async_context.h
     hle/service/acc/errors.h
+    hle/service/acc/nintendo_account_oauth.cpp
+    hle/service/acc/nintendo_account_oauth.h
+    hle/service/acc/oauth_procedure.cpp
+    hle/service/acc/oauth_procedure.h
+    hle/service/acc/oauth_procedure_rules.h
+    hle/service/acc/openpak_account.cpp
+    hle/service/acc/openpak_account.h
+    hle/service/acc/openpak_async.cpp
+    hle/service/acc/openpak_async.h
     hle/service/acc/profile_manager.cpp
     hle/service/acc/profile_manager.h
     hle/service/am/am.cpp
@@ -671,6 +680,14 @@ add_library(core STATIC
     hle/service/friend/friend.h
     hle/service/friend/friend_interface.cpp
     hle/service/friend/friend_interface.h
+    hle/service/friend/friend_pictures.cpp
+    hle/service/friend/friend_pictures.h
+    hle/service/friend/friend_service.cpp
+    hle/service/friend/friend_service.h
+    hle/service/friend/friend_viewer.h
+    hle/service/friend/friends_overlay_payloads.h
+    hle/service/friend/friends_session.cpp
+    hle/service/friend/friends_session.h
     hle/service/glue/arp.cpp
     hle/service/glue/arp.h
     hle/service/glue/bgtc.cpp
@@ -960,13 +977,20 @@ add_library(core STATIC
     hle/service/os/process.h
     hle/service/pcie/pcie.cpp
     hle/service/pcie/pcie.h
+    hle/service/pctl/moon.cpp
+    hle/service/pctl/moon.h
     hle/service/pctl/parental_control_service_factory.cpp
     hle/service/pctl/parental_control_service_factory.h
     hle/service/pctl/parental_control_service.cpp
     hle/service/pctl/parental_control_service.h
     hle/service/pctl/pctl.cpp
+    hle/service/pctl/pctl_async.h
+    hle/service/pctl/pctl_pairing.cpp
+    hle/service/pctl/pctl_pairing.h
     hle/service/pctl/pctl.h
     hle/service/pctl/pctl_results.h
+    hle/service/pctl/pctl_setting.cpp
+    hle/service/pctl/pctl_setting.h
     hle/service/pctl/pctl_types.h
     hle/service/pcv/pcv.cpp
     hle/service/pcv/pcv.h

@@ -8,13 +8,15 @@
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/pctl/parental_control_service.h"
 #include "core/hle/service/pctl/parental_control_service_factory.h"
+#include "core/openpak/async_worker.h"
 
 namespace Service::PCTL {
 
 IParentalControlServiceFactory::IParentalControlServiceFactory(Core::System& system_,
                                                                const char* name_,
-                                                               Capability capability_)
-    : ServiceFramework{system_, name_}, capability{capability_} {
+                                                               Capability capability_,
+                                                               std::shared_ptr<OpenPak::AsyncWorker> worker_)
+    : ServiceFramework{system_, name_}, capability{capability_}, worker{std::move(worker_)} {
     static const FunctionInfo functions[] = {
         {0, D<&IParentalControlServiceFactory::CreateService>, "CreateService"},
         {1, D<&IParentalControlServiceFactory::CreateServiceWithoutInitialize>,
@@ -29,7 +31,7 @@ Result IParentalControlServiceFactory::CreateService(
     Out<SharedPointer<IParentalControlService>> out_service, ClientProcessId process_id) {
     LOG_DEBUG(Service_PCTL, "called, process_id={}", process_id.pid);
     *out_service = std::make_shared<IParentalControlService>(
-        system, capability, system.ResolveCallerProgramId(*process_id));
+        system, capability, system.ResolveCallerProgramId(*process_id), worker);
     R_SUCCEED();
 }
 
@@ -37,7 +39,7 @@ Result IParentalControlServiceFactory::CreateServiceWithoutInitialize(
     Out<SharedPointer<IParentalControlService>> out_service, ClientProcessId process_id) {
     LOG_DEBUG(Service_PCTL, "called, process_id={}", process_id.pid);
     *out_service = std::make_shared<IParentalControlService>(
-        system, capability, system.ResolveCallerProgramId(*process_id));
+        system, capability, system.ResolveCallerProgramId(*process_id), worker);
     R_SUCCEED();
 }
 

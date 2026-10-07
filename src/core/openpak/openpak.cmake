@@ -6,6 +6,8 @@
 # Everything here but the async worker is free of kernel and service code, so the self-check
 # below can build it without linking core.
 set(HARBOR_OPENPAK_SOURCES
+    openpak/account.cpp
+    openpak/account.h
     openpak/baas.cpp
     openpak/baas.h
     openpak/baas_blocks.cpp

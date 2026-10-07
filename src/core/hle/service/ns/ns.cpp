@@ -116,6 +116,7 @@ void LoopProcess(Core::System& system) {
     server_manager->RegisterNamedService("ns:rt", std::make_shared<IServiceGetterInterface>(system, "ns:rt"), 5);
     server_manager->RegisterNamedService("ns:web", std::make_shared<IServiceGetterInterface>(system, "ns:web"), 5);
     server_manager->RegisterNamedService("ns:ro", std::make_shared<IServiceGetterInterface>(system, "ns:ro"), 5);
+    server_manager->RegisterNamedService("ns:sweb", std::make_shared<IServiceGetterInterface>(system, "ns:sweb"), 5); // 15.0.0+, systemWeb
 
     server_manager->RegisterNamedService("ns:dev", std::make_shared<IDevelopInterface>(system), 5);
     server_manager->RegisterNamedService("ns:su", std::make_shared<ISystemUpdateInterface>(system), 5);

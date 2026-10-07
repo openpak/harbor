@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
 #include <random>
 
 #include "common/literals.h"
@@ -12,6 +13,7 @@
 
 #include "core/hle/kernel/board/nintendo/nx/k_system_control.h"
 #include "core/hle/kernel/board/nintendo/nx/secure_monitor.h"
+#include "core/hle/kernel/k_memory_layout.h"
 #include "core/hle/kernel/k_memory_manager.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_trace.h"
@@ -215,10 +217,31 @@ size_t KSystemControl::CalculateRequiredSecureMemorySize(size_t size, u32 pool) 
     }
 }
 
+namespace {
+// Applet secure memory: one fixed region (SecureAppletMemorySize) the kernel hands to the one
+// applet whose NPDM asks for a system resource (on firmware 23 the web programs 0x1042 and
+// 0x1043 ask for exactly 4 MiB), as the console's kernel does.
+std::mutex g_secure_applet_lock;
+bool g_secure_applet_memory_used = false;
+
+KPhysicalAddress GetSecureAppletMemoryAddress(KernelCore& kernel) {
+    return const_cast<KMemoryLayout&>(kernel.MemoryLayout())
+        .GetKernelSecureAppletMemoryRegionPhysicalExtents()
+        .GetAddress();
+}
+} // namespace
+
 Result KSystemControl::AllocateSecureMemory(KernelCore& kernel, KVirtualAddress* out, size_t size,
                                             u32 pool) {
     // Applet secure memory is handled separately.
-    UNIMPLEMENTED_IF(pool == static_cast<u32>(KMemoryManager::Pool::Applet));
+    if (pool == static_cast<u32>(KMemoryManager::Pool::Applet)) {
+        R_UNLESS(size <= SecureAppletMemorySize, ResultOutOfMemory);
+        std::scoped_lock lk{g_secure_applet_lock};
+        R_UNLESS(!g_secure_applet_memory_used, ResultOutOfMemory);
+        g_secure_applet_memory_used = true;
+        *out = KPageTable::GetHeapVirtualAddress(kernel, GetSecureAppletMemoryAddress(kernel));
+        R_SUCCEED();
+    }
 
     // Ensure the size is aligned.
     const size_t alignment =
@@ -246,7 +269,15 @@ Result KSystemControl::AllocateSecureMemory(KernelCore& kernel, KVirtualAddress*
 void KSystemControl::FreeSecureMemory(KernelCore& kernel, KVirtualAddress address, size_t size,
                                       u32 pool) {
     // Applet secure memory is handled separately.
-    UNIMPLEMENTED_IF(pool == static_cast<u32>(KMemoryManager::Pool::Applet));
+    if (pool == static_cast<u32>(KMemoryManager::Pool::Applet)) {
+        ASSERT(KPageTable::GetHeapPhysicalAddress(kernel, address) ==
+               GetSecureAppletMemoryAddress(kernel));
+        ASSERT(size <= SecureAppletMemorySize);
+        std::scoped_lock lk{g_secure_applet_lock};
+        ASSERT(g_secure_applet_memory_used);
+        g_secure_applet_memory_used = false;
+        return;
+    }
 
     // Ensure the size is aligned.
     const size_t alignment =

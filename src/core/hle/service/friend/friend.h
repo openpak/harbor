@@ -11,8 +11,13 @@ class System;
 
 namespace Service::Friend {
 
+class FriendsSession;
+
 class Module final {
 public:
+    /// [OpenPak] This emulation session's friends state, shared by every port.
+    std::shared_ptr<FriendsSession> session;
+
     class Interface : public ServiceFramework<Interface> {
     public:
         explicit Interface(std::shared_ptr<Module> module_, Core::System& system_,
@@ -21,6 +26,7 @@ public:
 
         void CreateFriendService(HLERequestContext& ctx);
         void CreateNotificationService(HLERequestContext& ctx);
+        void CreateDaemonSuspendSessionService(HLERequestContext& ctx);
 
     protected:
         std::shared_ptr<Module> module;

@@ -64,6 +64,9 @@ private:
                      std::function<void()> action);
     brls::View* StatusStrip();
     brls::View* ProgressPanel();
+    /// A text field: the on-screen keyboard on Android, typing on desktop.
+    void EditText(const std::string& title, const std::string& hint, const std::string& initial, int max_length,
+                  std::function<void(std::string)> done);
 
     Wizard& model;
     std::unique_ptr<Chime> chime;
