@@ -12,6 +12,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include <ranges>
 #include "common/stb.h"
 #include "common/string_util.h"
@@ -54,6 +55,17 @@ static void SanitizeJPEGImageSize(std::vector<u8>& image) {
     const auto plain_image =
         stbi_load_from_memory(image.data(), static_cast<int>(image.size()), &original_width,
                               &original_height, &color_channels, STBI_rgb);
+    if (plain_image == nullptr) {
+        // Not decodable here (the firmware's own encoder output can be): hand the stored bytes
+        // back as they are rather than resizing nothing.
+        LOG_WARNING(Service_ACC, "Could not decode the profile image ({}), returning it as stored",
+                    stbi_failure_reason());
+        image.resize((std::min)(image.size(), max_jpeg_image_size));
+        return;
+    }
+    SCOPE_EXIT {
+        stbi_image_free(plain_image);
+    };
 
     // Resize image to match 256*256
     if (original_width != profile_dimensions || original_height != profile_dimensions) {
