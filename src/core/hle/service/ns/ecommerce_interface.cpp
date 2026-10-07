@@ -73,15 +73,64 @@ private:
     std::shared_ptr<OpenPak::AsyncTask> task;
 };
 
+// [Harbor] An IAsyncResult for a request that had nothing to do: its event is signalled before the
+// reply and Get answers success. It owns its event, so it may outlive the IECommerceInterface.
+class ICompletedAsyncResult final : public ServiceFramework<ICompletedAsyncResult> {
+public:
+    explicit ICompletedAsyncResult(Core::System& system_)
+        : ServiceFramework{system_, "nn::ns::detail::IAsyncResult"},
+          service_context{system_, "ns:ec:IAsyncResult"} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, D<&ICompletedAsyncResult::Get>, "Get"},
+            {1, D<&ICompletedAsyncResult::Cancel>, "Cancel"},
+            {2, D<&ICompletedAsyncResult::GetErrorContext>, "GetErrorContext"},
+        };
+        // clang-format on
+        RegisterHandlers(functions);
+
+        event = service_context.CreateEvent("ns:ec:IAsyncResult:Completed");
+        event->Signal(system.Kernel());
+    }
+
+    ~ICompletedAsyncResult() override {
+        service_context.CloseEvent(event);
+    }
+
+    Kernel::KReadableEvent* Readable() {
+        return &event->GetReadableEvent();
+    }
+
+private:
+    Result Get() {
+        R_SUCCEED();
+    }
+
+    Result Cancel() {
+        R_SUCCEED();
+    }
+
+    Result GetErrorContext(
+        OutLargeData<std::array<u8, 0x200>, BufferAttr_HipcMapAlias> out_error_context) {
+        *out_error_context = {};
+        R_SUCCEED();
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* event{};
+};
+
 IECommerceInterface::IECommerceInterface(Core::System& system_)
     : ServiceFramework{system_, "IECommerceInterface"},
       worker{std::make_shared<OpenPak::AsyncWorker>(system_, "ns:ec:OpenPak")} {
     // clang-format off
     static const FunctionInfo functions[] = {
-        {0, nullptr, "RequestLinkDevice"},
-        {1, nullptr, "RequestCleanupAllPreInstalledApplications"},
-        {2, nullptr, "RequestCleanupPreInstalledApplication"},
-        {3, nullptr, "RequestSyncRights"},
+        {0, D<&IECommerceInterface::RequestLinkDevice>, "RequestLinkDevice"},
+        {1, D<&IECommerceInterface::RequestCleanupAllPreInstalledApplications>,
+            "RequestCleanupAllPreInstalledApplications"},
+        {2, D<&IECommerceInterface::RequestCleanupPreInstalledApplication>,
+            "RequestCleanupPreInstalledApplication"},
+        {3, D<&IECommerceInterface::RequestSyncRights>, "RequestSyncRights"},
         {4, nullptr, "RequestUnlinkDevice"},
         {5, nullptr, "RequestRevokeAllELicense"},
         {6, nullptr, "RequestSyncRightsBasedOnAssignedELicenses"},
@@ -96,6 +145,59 @@ IECommerceInterface::IECommerceInterface(Core::System& system_)
 }
 
 IECommerceInterface::~IECommerceInterface() = default;
+
+// [Harbor] 3 behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base); 0-2 are answered
+// the same way. Shapes are qlaunch's and systemWeb's encoders (0 and 4 take a Uid, 2 an
+// ApplicationId, 1 and 3 nothing; each answers an event and an IAsyncResult). systemWeb sends 1-4
+// only when a page asks; qlaunch sends 0 and 4.
+
+Result IECommerceInterface::RequestLinkDevice(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                              OutInterface<ICompletedAsyncResult> out_result,
+                                              Common::UUID /*user_id*/) {
+    // Inferred from the name: a console makes itself the user's primary eShop console here. OpenPak
+    // keeps no device link, so the request completes like 3.
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "ns:ec 0 RequestLinkDevice: no OpenPak device link, completes");
+    Completed(out_event, out_result);
+    R_SUCCEED();
+}
+
+Result IECommerceInterface::RequestCleanupAllPreInstalledApplications(
+    OutCopyHandle<Kernel::KReadableEvent> out_event,
+    OutInterface<ICompletedAsyncResult> out_result) {
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "ns:ec 1 RequestCleanupAllPreInstalledApplications: nothing "
+                         "pre-installed, completes");
+    Completed(out_event, out_result);
+    R_SUCCEED();
+}
+
+Result IECommerceInterface::RequestCleanupPreInstalledApplication(
+    OutCopyHandle<Kernel::KReadableEvent> out_event, OutInterface<ICompletedAsyncResult> out_result,
+    u64 application_id) {
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "ns:ec 2 RequestCleanupPreInstalledApplication {:016X}: nothing "
+                         "pre-installed, completes",
+                         application_id);
+    Completed(out_event, out_result);
+    R_SUCCEED();
+}
+
+Result IECommerceInterface::RequestSyncRights(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                              OutInterface<ICompletedAsyncResult> out_result) {
+    // OpenPak sells no eShop licences, so there are no rights on the server to bring down: the
+    // request completes as a sync that changed nothing.
+    LOG_INFO(Service_NS, "ns:ec RequestSyncRights: no OpenPak rights to sync; completes unchanged");
+    Completed(out_event, out_result);
+    R_SUCCEED();
+}
+
+void IECommerceInterface::Completed(OutCopyHandle<Kernel::KReadableEvent>& out_event,
+                                    OutInterface<ICompletedAsyncResult>& out_result) {
+    auto result = std::make_shared<ICompletedAsyncResult>(system);
+    *out_event = result->Readable();
+    *out_result = std::move(result);
+}
 
 // [Harbor] Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base). HOME sends 8/10 from
 // its StPrefetchNaIdToken state; systemWeb sends them for window.nx.shop.requestNaIdToken, reads

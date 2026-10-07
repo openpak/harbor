@@ -19,6 +19,7 @@ class AsyncWorker;
 
 namespace Service::NS {
 
+class ICompletedAsyncResult;
 class IPrefetchAsyncResult;
 
 class IECommerceInterface final : public ServiceFramework<IECommerceInterface> {
@@ -27,6 +28,22 @@ public:
     ~IECommerceInterface() override;
 
 private:
+    // [Harbor] 0-3: requests a console sends to the eShop's licence server through nim. OpenPak
+    // runs no licence service, so each completes at once and changes nothing.
+    Result RequestLinkDevice(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                             OutInterface<ICompletedAsyncResult> out_result, Common::UUID user_id);
+    Result RequestCleanupAllPreInstalledApplications(
+        OutCopyHandle<Kernel::KReadableEvent> out_event,
+        OutInterface<ICompletedAsyncResult> out_result);
+    Result RequestCleanupPreInstalledApplication(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                 OutInterface<ICompletedAsyncResult> out_result,
+                                                 u64 application_id);
+    Result RequestSyncRights(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                             OutInterface<ICompletedAsyncResult> out_result);
+
+    void Completed(OutCopyHandle<Kernel::KReadableEvent>& out_event,
+                   OutInterface<ICompletedAsyncResult>& out_result);
+
     // [Harbor] 8/10 prefetch the user's Nintendo Account token for the Lhub and shop pages, 9/11
     // read it back. No public names.
     Result PrefetchForLhub(OutCopyHandle<Kernel::KReadableEvent> out_event,
