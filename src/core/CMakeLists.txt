@@ -395,6 +395,14 @@ add_library(core STATIC
     hle/service/acc/async_context.cpp
     hle/service/acc/async_context.h
     hle/service/acc/errors.h
+    hle/service/acc/nintendo_account_oauth.cpp
+    hle/service/acc/nintendo_account_oauth.h
+    hle/service/acc/oauth_procedure.cpp
+    hle/service/acc/oauth_procedure.h
+    hle/service/acc/openpak_account.cpp
+    hle/service/acc/openpak_account.h
+    hle/service/acc/openpak_async.cpp
+    hle/service/acc/openpak_async.h
     hle/service/acc/profile_manager.cpp
     hle/service/acc/profile_manager.h
     hle/service/am/am.cpp

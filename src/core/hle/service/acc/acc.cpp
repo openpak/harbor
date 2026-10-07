@@ -6,11 +6,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
+#include <random>
 
 #include "common/common_types.h"
 #include "common/fs/file.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/redact.h"
+#include "common/settings.h"
 #include <ranges>
 #include "common/stb.h"
 #include "common/string_util.h"
@@ -23,11 +27,18 @@
 #include "core/hle/service/acc/acc.h"
 #include "core/hle/service/acc/async_context.h"
 #include "core/hle/service/acc/errors.h"
+#include "core/hle/service/acc/nintendo_account_oauth.h"
+#include "core/hle/service/acc/oauth_procedure.h"
+#include "core/hle/service/acc/openpak_account.h"
+#include "core/hle/service/acc/openpak_async.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/server_manager.h"
 #include "core/loader/loader.h"
+#include "core/openpak/async_worker.h"
+#include "core/openpak/platform.h"
+#include "core/openpak/session.h"
 
 namespace Service::Account {
 
@@ -35,8 +46,7 @@ namespace Service::Account {
 constexpr std::size_t THUMBNAIL_SIZE = 0x24000;
 
 static std::filesystem::path GetImagePath(const Common::UUID& uuid) {
-    return Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) /
-           fmt::format("system/save/8000000000000010/su/avators/{}.jpg", uuid.FormattedString());
+    return OpenPakAccount::ProfileImagePath(uuid);
 }
 
 static void JPGToMemory(void* context, void* data, int len) {
@@ -71,79 +81,369 @@ static void SanitizeJPEGImageSize(std::vector<u8>& image) {
     image.resize((std::min)(image.size(), max_jpeg_image_size));
 }
 
+// [Harbor] The BAAS managers answer from the OpenPak session for the user they were made for.
+// IAdministrator 250 and the Nintendo Account data of 120/136 follow one rule: the active user,
+// linked. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+
+static void PushResult(HLERequestContext& ctx, Result result) {
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(result);
+}
+
+static bool IsActiveLinked(const Common::UUID& user) {
+    return OpenPakAccount::IsActiveLinked(user);
+}
+
+/// The BAAS user id OpenPak issued the user, or the offline placeholder stock Eden answers.
+static u64 NetworkServiceAccountIdOf(const Common::UUID& user) {
+    const u64 id = OpenPakAccount::Enabled()
+                       ? OpenPak::Session::NetworkServiceAccountId(OpenPakAccount::UidString(user))
+                       : 0;
+    return id != 0 ? id : user.Hash();
+}
+
+/// LoadIdTokenCache (3 and 4): the user's OpenPak id_token, size checked against the buffer.
+static void LoadIdTokenCacheFor(HLERequestContext& ctx, const Common::UUID& user) {
+    std::string token;
+    if (OpenPakAccount::Enabled()) {
+        token = OpenPak::Session::IdToken(OpenPakAccount::UidString(user));
+    }
+
+    if (token.empty()) {
+        // Offline: what stock Eden has always answered.
+        std::vector<u8> zeros(0x100);
+        if (ctx.CanWriteBuffer()) {
+            ctx.WriteBuffer(zeros.data(), std::min(zeros.size(), ctx.GetWriteBufferSize()));
+        }
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(static_cast<u32>(zeros.size()));
+        return;
+    }
+
+    // A real token is several times the size of the old stub's, so the buffer the guest offered
+    // is checked before anything is written into it.
+    if (!ctx.CanWriteBuffer() || token.size() > ctx.GetWriteBufferSize()) {
+        LOG_WARNING(Service_ACC, "acc: id_token is {} bytes, guest buffer is {}", token.size(),
+                    ctx.CanWriteBuffer() ? ctx.GetWriteBufferSize() : 0);
+        PushResult(ctx, ResultInvalidIdTokenCacheBufferSize);
+        return;
+    }
+
+    ctx.WriteBuffer(token.data(), token.size());
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(static_cast<u32>(token.size()));
+}
+
+/// The Nintendo Account behind the user, under IAdministrator 250's rule. Otherwise the module's
+/// answer for a user with no network service account (2124-0200); firmware has no "registered,
+/// not linked" state, so an unlinked device account maps there too.
+static Result NintendoAccountOf(const Common::UUID& user,
+                                std::optional<OpenPakAccount::NintendoAccountInfo>& out) {
+    out.reset();
+    if (!IsActiveLinked(user)) {
+        return ResultNetworkServiceAccountUnavailable;
+    }
+    out = OpenPakAccount::NintendoAccount(OpenPakAccount::UidString(user));
+    if (!out) {
+        return ResultNetworkServiceAccountUnavailable;
+    }
+    // A login reply with no links.nintendoAccount.id: firmware's answer for a linked
+    // registration holding id 0.
+    return out->id != 0 ? ResultSuccess : ResultNintendoAccountIdUnavailable;
+}
+
+// nn::account::nas::NasUserBase on 22.5.0: 0x270 bytes. Offsets from the account module's cache
+// reader (0x085c44a0): 0x1a1 nickname[0x40], 0x1e1 birthday[0x10], 0x204 country[4], and
+// 0x251/0x252/0x253 targetMarketing/internalAnalysis/dataCollection (0b010 = userConfirmed).
+constexpr std::size_t NasUserBaseSize = 0x270;
+
+static void WriteField(std::array<u8, NasUserBaseSize>& target, std::size_t offset,
+                       std::size_t size, std::string_view value) {
+    std::memcpy(target.data() + offset, value.data(), std::min(value.size(), size - 1));
+}
+
+// nn::account::baas::IManagerForSystemService (acc:su 102), and IAdministrator (acc:su 250),
+// which is the same manager plus the registration and Nintendo Account linkage commands.
 class IManagerForSystemService final : public ServiceFramework<IManagerForSystemService> {
 public:
-    explicit IManagerForSystemService(Core::System& system_, Common::UUID uuid)
-        : ServiceFramework{system_, "IManagerForSystemService"}, account_id{uuid} {
+    explicit IManagerForSystemService(Core::System& system_, Common::UUID uuid,
+                                      std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                                      bool administrator)
+        : ServiceFramework{system_, administrator ? "IAdministrator" : "IManagerForSystemService"},
+          account_id{uuid}, worker{std::move(worker_)} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, D<&IManagerForSystemService::CheckAvailability>, "CheckAvailability"},
-            {1, D<&IManagerForSystemService::GetAccountId>, "GetAccountId"},
-            {2, nullptr, "EnsureIdTokenCacheAsync"},
-            {3, D<&IManagerForSystemService::LoadIdTokenCacheDeprecated>, "LoadIdTokenCacheDeprecated"}, // 19.0.0+
-            {4, D<&IManagerForSystemService::LoadIdTokenCache>, "LoadIdTokenCache"}, // 19.0.0+
+            {0, &IManagerForSystemService::CheckAvailability, "CheckAvailability"},
+            {1, &IManagerForSystemService::GetAccountId, "GetAccountId"},
+            {2, &IManagerForSystemService::EnsureIdTokenCacheAsync, "EnsureIdTokenCacheAsync"},
+            {3, &IManagerForSystemService::LoadIdTokenCache, "LoadIdTokenCacheDeprecated"},
+            {4, &IManagerForSystemService::LoadIdTokenCache, "LoadIdTokenCache"}, // 19.0.0+
             {100, nullptr, "SetSystemProgramIdentification"},
             {101, nullptr, "RefreshNotificationTokenAsync"}, // 7.0.0+
             {110, nullptr, "GetServiceEntryRequirementCache"}, // 4.0.0+
             {111, nullptr, "InvalidateServiceEntryRequirementCache"}, // 4.0.0+
             {112, nullptr, "InvalidateTokenCache"}, // 4.0.0 - 6.2.0
             {113, nullptr, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
-            {120, nullptr, "GetNintendoAccountId"},
+            {120, &IManagerForSystemService::GetNintendoAccountId, "GetNintendoAccountId"},
             {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
-            {130, nullptr, "GetNintendoAccountUserResourceCache"},
             {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
             {132, nullptr, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
             {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {134, nullptr, "RefreshNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {135, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsyncIfSecondsElapsed"}, // 9.0.0+
-            {136, nullptr, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
+            // No input data (qlaunch 0x0881b3b0, systemWeb 0x08567650). 130 is a different
+            // contract on 22.5.0 and stays absent.
+            {136, &IManagerForSystemService::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
             {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
             {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
             {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
-            {143, D<&IManagerForSystemService::GetNetworkServiceLicenseCacheEx>, "GetNetworkServiceLicenseCacheEx"}, // 15.0.0+
+            {143, &IManagerForSystemService::GetNetworkServiceLicenseCacheEx, "GetNetworkServiceLicenseCacheEx"}, // 15.0.0+
             {150, nullptr, "CreateAuthorizationRequest"},
             {160, nullptr, "RequiresUpdateNetworkServiceAccountIdTokenCache"},
             {161, nullptr, "RequireReauthenticationOfNetworkServiceAccount"},
             {170, nullptr, "CreateDeviceHistoryRequest"}, // 17.0.0+
             {180, nullptr, "GetRequestForNintendoAccountReauthentication"} // 18.0.0+
         };
+        static const FunctionInfo administrator_functions[] = {
+            {200, nullptr, "IsRegistered"},
+            {201, nullptr, "RegisterAsync"},
+            {202, nullptr, "UnregisterAsync"},
+            {203, nullptr, "DeleteRegistrationInfoLocally"},
+            {220, nullptr, "SynchronizeProfileAsync"},
+            {221, nullptr, "UploadProfileAsync"},
+            {222, nullptr, "SynchronizaProfileAsyncIfSecondsElapsed"},
+            {250, &IManagerForSystemService::IsLinkedWithNintendoAccount, "IsLinkedWithNintendoAccount"},
+            {251, &IManagerForSystemService::CreateProcedureToLinkWithNintendoAccount, "CreateProcedureToLinkWithNintendoAccount"},
+            {252, &IManagerForSystemService::ResumeProcedureToLinkWithNintendoAccount, "ResumeProcedureToLinkWithNintendoAccount"},
+            {255, nullptr, "CreateProcedureToUpdateLinkageStateOfNintendoAccount"},
+            {256, nullptr, "ResumeProcedureToUpdateLinkageStateOfNintendoAccount"},
+            {260, nullptr, "CreateProcedureToLinkNnidWithNintendoAccount"}, // 3.0.0+
+            {261, nullptr, "ResumeProcedureToLinkNnidWithNintendoAccount"}, // 3.0.0+
+            {280, nullptr, "ProxyProcedureToAcquireApplicationAuthorizationForNintendoAccount"},
+            {290, &IManagerForSystemService::GetRequestForNintendoAccountUserResourceView, "GetRequestForNintendoAccountUserResourceView"}, // 8.0.0+
+            {300, nullptr, "TryRecoverNintendoAccountUserStateAsync"}, // 6.0.0+
+            {400, nullptr, "IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay"}, // 6.1.0+
+            {401, nullptr, "RefreshServiceEntryRequirementCacheForOnlinePlayAsync"}, // 6.1.0+
+            {900, nullptr, "GetAuthenticationInfoForWin"}, // 9.0.0+
+            {901, nullptr, "ImportAsyncForWin"}, // 9.0.0+
+            {997, nullptr, "DebugUnlinkNintendoAccountAsync"},
+            {998, nullptr, "DebugSetAvailabilityErrorDetail"},
+        };
         // clang-format on
 
         RegisterHandlers(functions);
+        if (administrator) {
+            RegisterHandlers(administrator_functions);
+        }
     }
 
 private:
-    Result CheckAvailability() {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-        R_SUCCEED();
+    void CheckAvailability(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        PushResult(ctx, ResultSuccess);
     }
 
-    Result GetAccountId(Out<u64> out_account_id) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-        *out_account_id = account_id.Hash();
-        R_SUCCEED();
+    void GetAccountId(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push(NetworkServiceAccountIdOf(account_id));
     }
 
-    Result LoadIdTokenCacheDeprecated() {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-        R_SUCCEED();
+    void EnsureIdTokenCacheAsync(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        // The call the guest makes before reading the cache, which makes it the one place a slow
+        // network round trip belongs. LoadIdTokenCache is synchronous.
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(
+            ctx, system, worker,
+            [uid = OpenPakAccount::UidString(account_id)](std::stop_token, std::vector<u8>&) {
+                if (OpenPakAccount::Enabled()) {
+                    OpenPakAccount::EnsureAndAdopt(uid);
+                }
+                return ResultSuccess;
+            });
     }
 
-    Result LoadIdTokenCache() {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-        R_SUCCEED();
+    void LoadIdTokenCache(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        LoadIdTokenCacheFor(ctx, account_id);
     }
 
-    Result GetNetworkServiceLicenseCacheEx(Out<u32> out_license, Out<s64> out_expiration) {
-        LOG_DEBUG(Service_ACC, "(STUBBED) called.");
+    void GetNintendoAccountId(HLERequestContext& ctx) {
+        std::optional<OpenPakAccount::NintendoAccountInfo> account;
+        const Result result = NintendoAccountOf(account_id, account);
+        LOG_DEBUG(Service_ACC, "called, linked={}", result.IsSuccess());
+        if (result.IsError()) {
+            PushResult(ctx, result);
+            return;
+        }
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push(account->id);
+    }
 
-        *out_license = 0;
-        *out_expiration = 0;
+    // 136: the Nintendo Account id plus the module's users/me cache as a NasUserBase in the 0x1A
+    // buffer. The type-6 buffer is the module's own work memory (it refuses one under 0x800);
+    // neither qlaunch nor systemWeb reads it back. Filled as the module's reader would fill it
+    // from a users/me holding what the OpenPak login reply carries.
+    void GetNintendoAccountUserResourceCache(HLERequestContext& ctx) {
+        const auto& b = ctx.BufferDescriptorB();
+        const auto& c = ctx.BufferDescriptorC();
+        if (b.empty() || b[0].Size() < 0x800 || c.empty() || c[0].Size() < NasUserBaseSize) {
+            LOG_WARNING(Service_ACC,
+                        "acc: GetNintendoAccountUserResourceCache buffers not as expected (map {}, "
+                        "pointer {})",
+                        b.size(), c.size());
+            PushResult(ctx, ResultInvalidBufferSize);
+            return;
+        }
 
-        R_SUCCEED();
+        std::optional<OpenPakAccount::NintendoAccountInfo> account;
+        if (const Result result = NintendoAccountOf(account_id, account); result.IsError()) {
+            LOG_DEBUG(Service_ACC, "called, not linked");
+            PushResult(ctx, result);
+            return;
+        }
+
+        // systemWeb splits the birthday at fixed offsets and asserts on a shorter one
+        // (0x08d2f21c); without one the honest state is the module's "no users/me cache".
+        if (!NintendoAccountOAuth::IsUsableBirthday(account->birthday)) {
+            LOG_WARNING(Service_ACC,
+                        "acc: the login reply has no usable birthday; Nintendo Account cache "
+                        "reported missing");
+            PushResult(ctx, ResultNintendoAccountUserResourceCacheNotFound);
+            return;
+        }
+
+        std::array<u8, NasUserBaseSize> user{};
+        user[0x251] = user[0x252] = user[0x253] = 0b010;
+        WriteField(user, 0x1a1, 0x40, account->nickname);
+        WriteField(user, 0x1e1, 0x10, account->birthday);
+        WriteField(user, 0x204, 4, account->country);
+        ctx.WriteBufferC(user.data(), user.size(), 0);
+
+        // The account's data stays out of the log: it ends up in crash reports.
+        LOG_DEBUG(Service_ACC, "called, linked account data written");
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push(account->id);
+    }
+
+    // 143: (u32 NetworkServiceLicenseKind, u32, u64 expiration). qlaunch 22.5.0 (+0x3173c0)
+    // reads two u32 outputs and asserts each is below 2 before the 8-byte value. OpenPak has no
+    // membership expiry and no paid tier.
+    void GetNetworkServiceLicenseCacheEx(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        IPC::ResponseBuilder rb{ctx, 6};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(1); // Subscribed
+        rb.Push<u32>(0);
+        rb.Push<u64>(0);
+    }
+
+    void IsLinkedWithNintendoAccount(HLERequestContext& ctx) {
+        ApplyPendingAdoptions();
+        const bool linked = IsActiveLinked(account_id);
+
+        // Link state comes from the server at each boot: the active user's first sign-in of this
+        // process is started here when nothing has asked for one yet.
+        if (!linked && OpenPakAccount::Enabled() &&
+            OpenPakAccount::UidString(account_id) == OpenPak::Platform::ProfileId()) {
+            OpenPakAccount::EnsureAndAdoptInBackground(OpenPakAccount::UidString(account_id));
+        }
+
+        LOG_DEBUG(Service_ACC, "called, linked={}", linked);
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(linked);
+    }
+
+    /// HOME's user settings link an existing user (0x085a4d50): a user already linked is
+    /// refused, under the rule 250 answers by. The module also wants the user registered at BAAS;
+    /// a device account is made for it during the response when there is none.
+    void CreateProcedureToLinkWithNintendoAccount(HLERequestContext& ctx) {
+        Linkage(ctx, std::nullopt);
+    }
+
+    void ResumeProcedureToLinkWithNintendoAccount(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto id = rp.PopRaw<ProcedureSessionId>();
+        if (id.IsZero()) {
+            PushResult(ctx, ResultSfInvalidArgument);
+            return;
+        }
+        Linkage(ctx, id);
+    }
+
+    void Linkage(HLERequestContext& ctx, std::optional<ProcedureSessionId> resume) {
+        if (IsActiveLinked(account_id)) {
+            PushResult(ctx, ResultNintendoAccountAlreadyLinked);
+            return;
+        }
+        auto procedure =
+            std::make_shared<IOAuthProcedureForNintendoAccountLinkage>(system, worker, account_id);
+        if (resume) {
+            if (const Result result = procedure->Resume(*resume); result.IsError()) {
+                PushResult(ctx, result);
+                return;
+            }
+        }
+        LOG_INFO(Service_ACC, "acc: Nintendo Account linkage procedure {}",
+                 resume ? "resumed" : "created");
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<IOAuthProcedureForNintendoAccountLinkage>(ctx, std::move(procedure));
+    }
+
+    // 290: the page qlaunch's Settings -> Users -> Nintendo Account opens in the Login applet.
+    // 23.0.1 (scratch/harbor-eden/research/acc-fw23/notes.md, impl 0x085A6C00): no raw data, one
+    // 0x1A buffer of 0x1000; the BAAS registration and the Nintendo Account id are checked
+    // (2124-0200, 2124-0220), then "https://accounts.nintendo.com/app/profile?id_token_hint=" and
+    // the cached NA id token are written, NUL terminated (2124-0031 when they do not fit). No
+    // network call, no object. The hint here is the user's BAAS id_token, which OpenPak's pages
+    // accept for a linked user; the module's own NA id token cache is not kept.
+    void GetRequestForNintendoAccountUserResourceView(HLERequestContext& ctx) {
+        const auto& c = ctx.BufferDescriptorC();
+        if (c.empty() || c[0].Size() == 0) {
+            PushResult(ctx, ResultInvalidBufferSize);
+            return;
+        }
+
+        std::string token;
+        if (const Result result = OpenPakAccount::LinkedIdToken(account_id, token);
+            result.IsError()) {
+            LOG_DEBUG(Service_ACC, "called, not linked");
+            PushResult(ctx, result);
+            return;
+        }
+
+        const std::string url =
+            "https://accounts.nintendo.com/app/profile?id_token_hint=" + token;
+        const std::size_t capacity = std::min<std::size_t>(c[0].Size(), 0x1000);
+        if (url.size() + 1 > capacity) {
+            LOG_WARNING(Service_ACC, "acc: the profile page URL is {} bytes, the buffer {}",
+                        url.size() + 1, capacity);
+            PushResult(ctx, ResultInvalidBufferSize);
+            return;
+        }
+        std::vector<u8> out(capacity);
+        std::memcpy(out.data(), url.data(), url.size());
+        ctx.WriteBufferC(out.data(), out.size(), 0);
+
+        LOG_INFO(Service_ACC, "acc: Nintendo Account profile page requested");
+        PushResult(ctx, ResultSuccess);
+    }
+
+    void ApplyPendingAdoptions() {
+        OpenPakAccount::ApplyPendingAdoptions(system.GetProfileManager());
     }
 
     Common::UUID account_id;
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
 // 3.0.0+
@@ -166,95 +466,6 @@ public:
             {103, nullptr, "RegisterNetworkServiceAccountWithUidAsync"}, // 4.0.0+
             {110, nullptr, "SetSystemProgramIdentification"},
             {111, nullptr, "EnsureIdTokenCacheAsync"},
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-    }
-};
-
-class IAdministrator final : public ServiceFramework<IAdministrator> {
-public:
-    explicit IAdministrator(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "IAdministrator"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "CheckAvailability"},
-            {1, nullptr, "GetAccountId"},
-            {2, nullptr, "EnsureIdTokenCacheAsync"},
-            {3, nullptr, "LoadIdTokenCache"},
-            {100, nullptr, "SetSystemProgramIdentification"},
-            {101, nullptr, "RefreshNotificationTokenAsync"}, // 7.0.0+
-            {110, nullptr, "GetServiceEntryRequirementCache"}, // 4.0.0+
-            {111, nullptr, "InvalidateServiceEntryRequirementCache"}, // 4.0.0+
-            {112, nullptr, "InvalidateTokenCache"}, // 4.0.0 - 6.2.0
-            {113, nullptr, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
-            {120, nullptr, "GetNintendoAccountId"},
-            {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
-            {130, nullptr, "GetNintendoAccountUserResourceCache"},
-            {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
-            {132, nullptr, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
-            {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
-            {134, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsync"}, // 9.0.0+
-            {135, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsyncIfSecondsElapsed"}, // 9.0.0+
-            {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
-            {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
-            {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
-            {143, nullptr, "GetNetworkServiceLicenseCacheEx"},
-            {150, nullptr, "CreateAuthorizationRequest"},
-            {160, nullptr, "RequiresUpdateNetworkServiceAccountIdTokenCache"},
-            {161, nullptr, "RequireReauthenticationOfNetworkServiceAccount"},
-            {170, nullptr, "CreateDeviceHistoryRequest"}, // 17.0.0+
-            {180, nullptr, "GetRequestForNintendoAccountReauthentication"}, // 18.0.0+
-            {200, nullptr, "IsRegistered"},
-            {201, nullptr, "RegisterAsync"},
-            {202, nullptr, "UnregisterAsync"},
-            {203, nullptr, "DeleteRegistrationInfoLocally"},
-            {220, nullptr, "SynchronizeProfileAsync"},
-            {221, nullptr, "UploadProfileAsync"},
-            {222, nullptr, "SynchronizaProfileAsyncIfSecondsElapsed"},
-            {250, &IAdministrator::IsLinkedWithNintendoAccount, "IsLinkedWithNintendoAccount"},
-            {251, nullptr, "CreateProcedureToLinkWithNintendoAccount"},
-            {252, nullptr, "ResumeProcedureToLinkWithNintendoAccount"},
-            {255, nullptr, "CreateProcedureToUpdateLinkageStateOfNintendoAccount"},
-            {256, nullptr, "ResumeProcedureToUpdateLinkageStateOfNintendoAccount"},
-            {260, nullptr, "CreateProcedureToLinkNnidWithNintendoAccount"}, // 3.0.0+
-            {261, nullptr, "ResumeProcedureToLinkNnidWithNintendoAccount"}, // 3.0.0+
-            {280, nullptr, "ProxyProcedureToAcquireApplicationAuthorizationForNintendoAccount"},
-            {290, nullptr, "GetRequestForNintendoAccountUserResourceView"}, // 8.0.0+
-            {300, nullptr, "TryRecoverNintendoAccountUserStateAsync"}, // 6.0.0+
-            {400, nullptr, "IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay"}, // 6.1.0+
-            {401, nullptr, "RefreshServiceEntryRequirementCacheForOnlinePlayAsync"}, // 6.1.0+
-            {900, nullptr, "GetAuthenticationInfoForWin"}, // 9.0.0+
-            {901, nullptr, "ImportAsyncForWin"}, // 9.0.0+
-            {997, nullptr, "DebugUnlinkNintendoAccountAsync"},
-            {998, nullptr, "DebugSetAvailabilityErrorDetail"},
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-    }
-
-private:
-    void IsLinkedWithNintendoAccount(HLERequestContext& ctx) {
-        IPC::ResponseBuilder rb{ctx, 3};
-        rb.Push(ResultSuccess);
-        rb.Push(false);
-    }
-};
-
-class IAuthorizationRequest final : public ServiceFramework<IAuthorizationRequest> {
-public:
-    explicit IAuthorizationRequest(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "IAuthorizationRequest"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "GetSessionId"},
-            {10, nullptr, "InvokeWithoutInteractionAsync"},
-            {19, nullptr, "IsAuthorized"},
-            {20, nullptr, "GetAuthorizationCode"},
-            {21, nullptr, "GetIdToken"},
-            {22, nullptr, "GetState"},
         };
         // clang-format on
 
@@ -297,33 +508,6 @@ public:
             {102, nullptr, "GetNickname"},
             {103, nullptr, "GetProfileImage"},
             {104, nullptr, "GetProfileLargeImage"} // 18.0.0+
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-    }
-};
-
-class IOAuthProcedureForNintendoAccountLinkage final
-    : public ServiceFramework<IOAuthProcedureForNintendoAccountLinkage> {
-public:
-    explicit IOAuthProcedureForNintendoAccountLinkage(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "IOAuthProcedureForNintendoAccountLinkage"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "PrepareAsync"},
-            {1, nullptr, "GetRequest"},
-            {2, nullptr, "ApplyResponse"},
-            {3, nullptr, "ApplyResponseAsync"},
-            {10, nullptr, "Suspend"},
-            {100, nullptr, "GetRequestWithTheme"},
-            {101, nullptr, "IsNetworkServiceAccountReplaced"},
-            {199, nullptr, "GetUrlForIntroductionOfExtraMembership"}, // 2.0.0 - 5.1.0
-            {200, nullptr, "ApplyAsyncWithAuthorizedToken"},
-            {210, nullptr, "IsProfileAvailable"}, // 17.0.0+
-            {220, nullptr, "RegisterUserAsyncWithoutProfile"}, // 17.0.0+
-            {221, nullptr, "RegisterUserWithProfileAsync"}, // 17.0.0+
-            {230, nullptr, "RegisterUserWithLargeImageProfileAsync"}, // 18.0.0+
         };
         // clang-format on
 
@@ -418,7 +602,8 @@ protected:
     }
 
     void Get(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+        LOG_DEBUG(Service_ACC, "called");
+        OpenPakAccount::ApplyPendingAdoptions(profile_manager);
         ProfileBase profile_base{};
         UserData data{};
         if (profile_manager.GetProfileBaseAndData(user_id, profile_base, data)) {
@@ -427,22 +612,22 @@ protected:
             rb.Push(ResultSuccess);
             rb.PushRaw(profile_base);
         } else {
-            LOG_ERROR(Service_ACC, "Failed to get profile base and data for user=0x{}",
-                      user_id.RawString());
+            LOG_ERROR(Service_ACC, "Failed to get profile base and data for a user");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ResultUnknown); // TODO(ogniK): Get actual error code
         }
     }
 
     void GetBase(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+        LOG_DEBUG(Service_ACC, "called");
+        OpenPakAccount::ApplyPendingAdoptions(profile_manager);
         ProfileBase profile_base{};
         if (profile_manager.GetProfileBase(user_id, profile_base)) {
             IPC::ResponseBuilder rb{ctx, 16};
             rb.Push(ResultSuccess);
             rb.PushRaw(profile_base);
         } else {
-            LOG_ERROR(Service_ACC, "Failed to get profile base for user=0x{}", user_id.RawString());
+            LOG_ERROR(Service_ACC, "Failed to get profile base for a user");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(ResultUnknown); // TODO(ogniK): Get actual error code
         }
@@ -450,6 +635,7 @@ protected:
 
     void LoadImage(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
+        OpenPakAccount::ApplyPendingAdoptions(profile_manager);
 
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
@@ -478,6 +664,7 @@ protected:
 
     void GetImageSize(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
+        OpenPakAccount::ApplyPendingAdoptions(profile_manager);
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
 
@@ -536,10 +723,7 @@ protected:
 
         const auto user_data = ctx.ReadBuffer();
 
-        LOG_DEBUG(Service_ACC, "called, username='{}', timestamp={:016X}, uuid=0x{}",
-                  Common::StringFromFixedZeroTerminatedBuffer(
-                      reinterpret_cast<const char*>(base.username.data()), base.username.size()),
-                  base.timestamp, base.user_uuid.RawString());
+        LOG_DEBUG(Service_ACC, "called");
 
         if (user_data.size() < sizeof(UserData)) {
             LOG_ERROR(Service_ACC, "UserData buffer too small!");
@@ -569,10 +753,7 @@ protected:
         const auto image_data = ctx.ReadBufferA(0);
         const auto user_data = ctx.ReadBufferX(0);
 
-        LOG_INFO(Service_ACC, "called, username='{}', timestamp={:016X}, uuid=0x{}",
-                 Common::StringFromFixedZeroTerminatedBuffer(
-                     reinterpret_cast<const char*>(base.username.data()), base.username.size()),
-                 base.timestamp, base.user_uuid.RawString());
+        LOG_INFO(Service_ACC, "called");
 
         if (user_data.size() < sizeof(UserData)) {
             LOG_ERROR(Service_ACC, "UserData buffer too small!");
@@ -653,52 +834,112 @@ public:
     }
 };
 
-class EnsureTokenIdCacheAsyncInterface final : public IAsyncContext {
+// [Harbor] nn::account::nas::IAuthorizationRequest: the title-driven half of the console
+// authorization flow. A title that talks to a third-party network (Battle.net for Diablo II:
+// Resurrected) asks the account system to authorize it against the signed-in user, then collects
+// the proof, an authorization code or the id_token, to hand to that network. The user is already
+// signed in, so there is nothing to interact over: the request completes, reports authorized, and
+// both proofs are the user's OpenPak id_token, the credential OpenPak's check_token resolves.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+class IAuthorizationRequest final : public ServiceFramework<IAuthorizationRequest> {
 public:
-    explicit EnsureTokenIdCacheAsyncInterface(Core::System& system_) : IAsyncContext{system_} {
-        MarkComplete();
+    explicit IAuthorizationRequest(Core::System& system_, Common::UUID user_,
+                                   std::shared_ptr<OpenPak::AsyncWorker> worker_)
+        : ServiceFramework{system_, "IAuthorizationRequest"}, user{user_},
+          worker{std::move(worker_)},
+          session_id{std::random_device{}() | (u64{std::random_device{}()} << 32)} {
+        // clang-format off
+        static const FunctionInfo functions[] = {
+            {0, &IAuthorizationRequest::GetSessionId, "GetSessionId"},
+            {10, &IAuthorizationRequest::InvokeWithoutInteractionAsync, "InvokeWithoutInteractionAsync"},
+            {19, &IAuthorizationRequest::IsAuthorized, "IsAuthorized"},
+            {20, &IAuthorizationRequest::GetSessionToken, "GetAuthorizationCode"},
+            {21, &IAuthorizationRequest::GetSessionToken, "GetIdToken"},
+            {22, &IAuthorizationRequest::GetState, "GetState"},
+        };
+        // clang-format on
+
+        RegisterHandlers(functions);
     }
-    ~EnsureTokenIdCacheAsyncInterface() = default;
 
-    void LoadIdTokenCache(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
+private:
+    void GetSessionId(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push(session_id);
+    }
 
+    void InvokeWithoutInteractionAsync(HLERequestContext& ctx) {
+        // The title polls the async shape; the work is a fresh token for the user.
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(
+            ctx, system, worker,
+            [uid = OpenPakAccount::UidString(user)](std::stop_token, std::vector<u8>&) {
+                if (OpenPakAccount::Enabled()) {
+                    OpenPak::Session::Ensure(uid);
+                }
+                return ResultSuccess;
+            });
+    }
+
+    void IsAuthorized(HLERequestContext& ctx) {
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
-        rb.Push(0);
+        rb.Push<u8>(1);
     }
 
-protected:
-    bool IsComplete() const override {
-        return true;
+    // Nothing here fails the call for want of a token: a title that only wants the size asks
+    // with no buffer.
+    void GetSessionToken(HLERequestContext& ctx) {
+        const std::string token = OpenPakAccount::Enabled()
+                                      ? OpenPak::Session::IdToken(OpenPakAccount::UidString(user))
+                                      : std::string{};
+        if (ctx.CanWriteBuffer() && ctx.GetWriteBufferSize() > 0 && !token.empty()) {
+            if (token.size() > ctx.GetWriteBufferSize()) {
+                LOG_WARNING(Service_ACC, "acc: id_token is {} bytes, guest buffer is {}",
+                            token.size(), ctx.GetWriteBufferSize());
+                PushResult(ctx, ResultInvalidBufferSize);
+                return;
+            }
+            ctx.WriteBuffer(token.data(), token.size());
+        }
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(static_cast<u32>(token.size()));
     }
 
-    void Cancel() override {}
-
-    Result GetResult() const override {
-        return ResultSuccess;
+    void GetState(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(3); // nn::account::nas::AuthorizationRequestState: Done
     }
+
+    Common::UUID user;
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+    u64 session_id;
 };
 
 class IManagerForApplication final : public ServiceFramework<IManagerForApplication> {
 public:
-    explicit IManagerForApplication(Core::System& system_,
-                                    const std::shared_ptr<ProfileManager>& profile_manager_)
-        : ServiceFramework{system_, "IManagerForApplication"},
-          ensure_token_id{std::make_shared<EnsureTokenIdCacheAsyncInterface>(system)},
-          profile_manager{profile_manager_} {
+    explicit IManagerForApplication(Core::System& system_, Common::UUID user_id_,
+                                    std::shared_ptr<OpenPak::AsyncWorker> worker_)
+        : ServiceFramework{system_, "IManagerForApplication"}, user_id{user_id_},
+          worker{std::move(worker_)} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IManagerForApplication::CheckAvailability, "CheckAvailability"},
             {1, &IManagerForApplication::GetAccountId, "GetAccountId"},
             {2, &IManagerForApplication::EnsureIdTokenCacheAsync, "EnsureIdTokenCacheAsync"},
-            {3, &IManagerForApplication::LoadIdTokenCacheDeprecated, "LoadIdTokenCacheDeprecated"},
+            // Titles built against older SDKs (Crash Team Racing Nitro-Fueled) fetch their
+            // id_token through 3: the same token as 4, or Demonware gets an empty login token.
+            {3, &IManagerForApplication::LoadIdTokenCache, "LoadIdTokenCacheDeprecated"},
             {4, &IManagerForApplication::LoadIdTokenCache, "LoadIdTokenCache"},
             {130, &IManagerForApplication::GetNintendoAccountUserResourceCacheForApplication, "GetNintendoAccountUserResourceCacheForApplication"},
             {136, &IManagerForApplication::GetNintendoAccountUserResourceCacheForApplication, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
-            {150, nullptr, "CreateAuthorizationRequest"},
+            {150, &IManagerForApplication::CreateAuthorizationRequest, "CreateAuthorizationRequest"},
             {160, &IManagerForApplication::StoreOpenContext, "StoreOpenContext"},
-            {170, nullptr, "LoadNetworkServiceLicenseKindAsync"},
+            {170, &IManagerForApplication::LoadNetworkServiceLicenseKindAsync, "LoadNetworkServiceLicenseKindAsync"},
         };
         // clang-format on
 
@@ -708,49 +949,36 @@ public:
 private:
     void CheckAvailability(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "(STUBBED) called");
-        IPC::ResponseBuilder rb{ctx, 2};
-        rb.Push(ResultSuccess);
+        PushResult(ctx, ResultSuccess);
     }
 
     void GetAccountId(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
-
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(profile_manager->GetLastOpenedUser().Hash());
+        rb.Push(NetworkServiceAccountIdOf(user_id));
     }
 
     void EnsureIdTokenCacheAsync(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-
+        LOG_DEBUG(Service_ACC, "called");
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
-        rb.PushIpcInterface(ctx, ensure_token_id);
-    }
-
-    void LoadIdTokenCacheDeprecated(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-
-        ensure_token_id->LoadIdTokenCache(ctx);
+        rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker, EnsureWork());
     }
 
     void LoadIdTokenCache(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-
-        std::vector<u8> token_data(0x100);
-        std::fill(token_data.begin(), token_data.end(), u8(0));
-
-        ctx.WriteBuffer(token_data);
-
-        IPC::ResponseBuilder rb{ctx, 3};
-        rb.Push(ResultSuccess);
-        rb.Push(static_cast<u32>(token_data.size()));
+        LOG_DEBUG(Service_ACC, "called");
+        LoadIdTokenCacheFor(ctx, user_id);
     }
 
     void GetNintendoAccountUserResourceCacheForApplication(HLERequestContext& ctx) {
         LOG_WARNING(Service_ACC, "(STUBBED) called");
 
+        // The same account id GetAccountId answers, in the reply and at the head of the buffer.
+        const u64 account_id = NetworkServiceAccountIdOf(user_id);
+
         std::vector<u8> nas_user_base_for_application(0x68);
+        std::memcpy(nas_user_base_for_application.data(), &account_id, sizeof(account_id));
         ctx.WriteBuffer(nas_user_base_for_application);
 
         if (ctx.CanWriteBuffer(1)) {
@@ -760,73 +988,43 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(profile_manager->GetLastOpenedUser().Hash());
+        rb.PushRaw<u64>(account_id);
+    }
+
+    void CreateAuthorizationRequest(HLERequestContext& ctx) {
+        // The request input carries the title's authorization configuration; nothing in it
+        // changes OpenPak's answer.
+        LOG_DEBUG(Service_ACC, "called");
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<IAuthorizationRequest>(ctx, system, user_id, worker);
     }
 
     void StoreOpenContext(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
+        system.GetProfileManager().StoreOpenedUsers();
+        PushResult(ctx, ResultSuccess);
+    }
 
-        profile_manager->StoreOpenedUsers();
-
-        IPC::ResponseBuilder rb{ctx, 2};
+    void LoadNetworkServiceLicenseKindAsync(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        // An extension of the data the id token cache holds: Subscribed once it is there.
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker, EnsureWork(), true);
     }
 
-    std::shared_ptr<EnsureTokenIdCacheAsyncInterface> ensure_token_id{};
-    std::shared_ptr<ProfileManager> profile_manager;
-};
-
-// 6.0.0+
-class IAsyncNetworkServiceLicenseKindContext final
-    : public ServiceFramework<IAsyncNetworkServiceLicenseKindContext> {
-public:
-    explicit IAsyncNetworkServiceLicenseKindContext(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "IAsyncNetworkServiceLicenseKindContext"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "GetSystemEvent"},
-            {1, nullptr, "Cancel"},
-            {2, nullptr, "HasDone"},
-            {3, nullptr, "GetResult"},
-            {4, nullptr, "GetNetworkServiceLicenseKind"},
+    OpenPak::AsyncWorker::Work EnsureWork() const {
+        return [uid = OpenPakAccount::UidString(user_id)](std::stop_token, std::vector<u8>&) {
+            if (OpenPakAccount::Enabled()) {
+                OpenPakAccount::EnsureAndAdopt(uid);
+            }
+            return ResultSuccess;
         };
-        // clang-format on
-
-        RegisterHandlers(functions);
     }
-};
 
-// 8.0.0+
-class IOAuthProcedureForUserRegistration final
-    : public ServiceFramework<IOAuthProcedureForUserRegistration> {
-public:
-    explicit IOAuthProcedureForUserRegistration(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "IOAuthProcedureForUserRegistration"} {
-        // clang-format off
-        static const FunctionInfo functions[] = {
-            {0, nullptr, "PrepareAsync"},
-            {1, nullptr, "GetRequest"},
-            {2, nullptr, "ApplyResponse"},
-            {3, nullptr, "ApplyResponseAsync"},
-            {10, nullptr, "Suspend"},
-            {100, nullptr, "GetAccountId"},
-            {101, nullptr, "GetLinkedNintendoAccountId"},
-            {102, nullptr, "GetNickname"},
-            {103, nullptr, "GetProfileImage"},
-            {104, nullptr, "GetProfileLargeImage"}, // 18.0.0+
-            {110, nullptr, "RegisterUserAsync"},
-            {111, nullptr, "GetUid"},
-            {200, nullptr, "ApplyResponseForUserCreationAsync"}, // 17.0.0+
-            {205, nullptr, "SuspendAfterApplyResponse"}, // 17.0.0+
-            {210, nullptr, "IsProfileAvailable"}, // 17.0.0+
-            {220, nullptr, "RegisterUserAsyncWithoutProfile"}, // 17.0.0+
-            {221, nullptr, "RegisterUserWithProfileAsync"}, // 17.0.0+
-            {230, nullptr, "RegisterUserWithLargeImageProfileAsync"} // 18.0.0+
-        };
-        // clang-format on
-
-        RegisterHandlers(functions);
-    }
+    Common::UUID user_id; ///< The user the title asked about.
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
 class DAUTH_O final : public ServiceFramework<DAUTH_O> {
@@ -882,7 +1080,7 @@ void Module::Interface::GetUserCount(HLERequestContext& ctx) {
 void Module::Interface::GetUserExistence(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
-    LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+    LOG_DEBUG(Service_ACC, "called");
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
@@ -913,7 +1111,8 @@ void Module::Interface::GetLastOpenedUser(HLERequestContext& ctx) {
 void Module::Interface::GetProfile(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
-    LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+    LOG_DEBUG(Service_ACC, "called");
+    OpenPakAccount::ApplyPendingAdoptions(*profile_manager);
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
@@ -986,10 +1185,21 @@ Result Module::Interface::InitializeApplicationInfoBase() {
 }
 
 void Module::Interface::GetBaasAccountManagerForApplication(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    auto user_id = rp.PopRaw<Common::UUID>();
+    if (user_id.IsInvalid()) {
+        user_id = profile_manager->GetLastOpenedUser();
+    }
     LOG_DEBUG(Service_ACC, "called");
+
+    // The title's sign-in is bound to it, as a console's is.
+    if (OpenPakAccount::Enabled()) {
+        OpenPakAccount::BindRunningApplication(system);
+    }
+
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<IManagerForApplication>(ctx, system, profile_manager);
+    rb.PushIpcInterface<IManagerForApplication>(ctx, system, user_id, module->worker);
 }
 
 void Module::Interface::IsUserAccountSwitchLocked(HLERequestContext& ctx) {
@@ -1052,13 +1262,16 @@ void Module::Interface::CompleteUserRegistration(HLERequestContext& ctx) {
 void Module::Interface::DeleteUser(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
-    LOG_INFO(Service_ACC, "called, uuid={}", user_id.FormattedString());
+    LOG_INFO(Service_ACC, "called");
     if (!profile_manager->RemoveUser(user_id)) {
-        LOG_ERROR(Service_ACC, "Failed to delete user with uuid={}", user_id.RawString());
+        LOG_ERROR(Service_ACC, "Failed to delete a user");
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(1U);
         return;
     }
+    // Its device account and push registration go with it: no sign-in outlives the user.
+    OpenPak::Session::ForgetProfile(OpenPakAccount::UidString(user_id));
+
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
@@ -1069,7 +1282,7 @@ void Module::Interface::SetUserPosition(HLERequestContext& ctx) {
     u64 position = rp.Pop<u64>();
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
 
-    LOG_DEBUG(Service_ACC, "called, position={} user_id={}", position, user_id.FormattedString());
+    LOG_DEBUG(Service_ACC, "called, position={}", position);
 
     profile_manager->SetUserPosition(position, user_id);
 
@@ -1092,11 +1305,11 @@ void Module::Interface::GetBaasAccountAdministrator(HLERequestContext &ctx) {
     IPC::RequestParser rp{ctx};
     const auto uuid = rp.PopRaw<Common::UUID>();
 
-    LOG_INFO(Service_ACC, "called, uuid=0x{}", uuid.RawString());
+    LOG_DEBUG(Service_ACC, "called");
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<IAdministrator>(ctx, system, uuid);
+    rb.PushIpcInterface<IManagerForSystemService>(ctx, system, uuid, module->worker, true);
 }
 
 void Module::Interface::ListQualifiedUsers(HLERequestContext& ctx) {
@@ -1122,7 +1335,7 @@ void Module::Interface::StoreSaveDataThumbnailApplication(HLERequestContext& ctx
     IPC::RequestParser rp{ctx};
     const auto uuid = rp.PopRaw<Common::UUID>();
 
-    LOG_WARNING(Service_ACC, "(STUBBED) called, uuid=0x{}", uuid.RawString());
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
 
     // TODO(ogniK): Check if application ID is zero on acc initialize. As we don't have a reliable
     // way of confirming things like the TID, we're going to assume a non zero value for the time
@@ -1135,11 +1348,11 @@ void Module::Interface::GetBaasAccountManagerForSystemService(HLERequestContext&
     IPC::RequestParser rp{ctx};
     const auto uuid = rp.PopRaw<Common::UUID>();
 
-    LOG_INFO(Service_ACC, "called, uuid=0x{}", uuid.RawString());
+    LOG_DEBUG(Service_ACC, "called");
 
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<IManagerForSystemService>(ctx, system, uuid);
+    rb.PushIpcInterface<IManagerForSystemService>(ctx, system, uuid, module->worker, false);
 }
 
 void Module::Interface::StoreSaveDataThumbnailSystem(HLERequestContext& ctx) {
@@ -1147,7 +1360,7 @@ void Module::Interface::StoreSaveDataThumbnailSystem(HLERequestContext& ctx) {
     const auto uuid = rp.PopRaw<Common::UUID>();
     const auto tid = rp.Pop<u64_le>();
 
-    LOG_WARNING(Service_ACC, "(STUBBED) called, uuid=0x{}, tid={:016X}", uuid.RawString(), tid);
+    LOG_WARNING(Service_ACC, "(STUBBED) called, tid={:016X}", tid);
     StoreSaveDataThumbnail(ctx, uuid, tid);
 }
 
@@ -1232,6 +1445,115 @@ void Module::Interface::TrySelectUserWithoutInteraction(HLERequestContext& ctx) 
     rb.PushRaw(profile_manager->GetUser(0)->uuid);
 }
 
+/// acc:su 211/213 and 212/214 (22.5.0 serves 213/214 with the very code of 211/212). The
+/// module needs 0x22000 bytes of the caller's transfer memory as the procedure's work area
+/// (0x085a15c0); the procedure here lives in host memory, so the size is only checked.
+void Module::Interface::CreateProcedureToRegisterUserWithNintendoAccount(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto size = rp.Pop<u32>();
+    if (size < 0x22000) {
+        PushResult(ctx, ResultInvalidBufferSize);
+        return;
+    }
+    LOG_INFO(Service_ACC, "acc: user registration procedure created");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IOAuthProcedureForUserRegistration>(ctx, system, module->worker);
+}
+
+void Module::Interface::ResumeProcedureToRegisterUserWithNintendoAccount(HLERequestContext& ctx) {
+    // (Uuid, u32 size, handle<copy>): the session id comes first.
+    IPC::RequestParser rp{ctx};
+    const auto id = rp.PopRaw<ProcedureSessionId>();
+    const auto size = rp.Pop<u32>();
+    if (id.IsZero()) {
+        PushResult(ctx, ResultSfInvalidArgument);
+        return;
+    }
+    if (size < 0x22000) {
+        PushResult(ctx, ResultInvalidBufferSize);
+        return;
+    }
+    auto procedure = std::make_shared<IOAuthProcedureForUserRegistration>(system, module->worker);
+    if (const Result result = procedure->Resume(id); result.IsError()) {
+        PushResult(ctx, result);
+        return;
+    }
+    LOG_INFO(Service_ACC, "acc: user registration procedure resumed");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IOAuthProcedureForUserRegistration>(ctx, std::move(procedure));
+}
+
+/// acc:su 230. The firmware's user creation asks before offering to link a network account: the
+/// console authenticating with the account service, which here is the OpenPak sign-in of the open
+/// user. An unreachable OpenPak shows up later, at the link itself.
+void Module::Interface::AuthenticateServiceAsync(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<OpenPakAsyncContext>(
+        ctx, system, module->worker, [](std::stop_token, std::vector<u8>&) {
+            if (OpenPakAccount::Enabled()) {
+                OpenPakAccount::EnsureAndAdopt(OpenPak::Platform::ProfileId());
+            }
+            return ResultSuccess;
+        });
+}
+
+void Module::Interface::GetProfileDigest(HLERequestContext& ctx) {
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
+    if (ctx.CanWriteBuffer()) {
+        const std::array<u8, 0x20> digest{};
+        ctx.WriteBuffer(digest);
+    }
+    PushResult(ctx, ResultSuccess);
+}
+
+void Module::Interface::DebugActivateOpenContextRetention(HLERequestContext& ctx) {
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<ISessionObject>(ctx, system, Common::UUID{});
+}
+
+/// acc:u0 102 AuthenticateApplicationAsync and 103 CheckNetworkServiceAvailabilityAsync: the open
+/// user's OpenPak sign-in, which is what makes the network service available.
+void Module::Interface::AuthenticateApplicationAsync(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<OpenPakAsyncContext>(
+        ctx, system, module->worker, [](std::stop_token, std::vector<u8>&) {
+            if (OpenPakAccount::Enabled()) {
+                OpenPak::Session::Ensure(OpenPak::Platform::ProfileId());
+            }
+            return ResultSuccess;
+        });
+}
+
+void Module::Interface::ClearSaveDataThumbnail(HLERequestContext& ctx) {
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
+    PushResult(ctx, ResultSuccess);
+}
+
+void Module::Interface::CreateGuestLoginRequest(HLERequestContext& ctx) {
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IGuestLoginRequest>(ctx, system, Common::UUID{});
+}
+
+void Module::Interface::LoadOpenContext(HLERequestContext& ctx) {
+    LOG_WARNING(Service_ACC, "(STUBBED) called");
+    PushResult(ctx, ResultSuccess);
+}
+
+Module::Module(Core::System& system)
+    : worker{std::make_shared<OpenPak::AsyncWorker>(system, "acc:OpenPak")} {}
+
+Module::~Module() = default;
+
 Module::Interface::Interface(std::shared_ptr<Module> module_,
                              std::shared_ptr<ProfileManager> profile_manager_,
                              Core::System& system_, const char* name)
@@ -1303,9 +1625,12 @@ public:
             {205, &ACC_SU::GetProfileEditor, "GetProfileEditor"},
             {206, nullptr, "CompleteUserRegistrationForcibly"},
             {210, nullptr, "CreateFloatingRegistrationRequest"},
-            {211, nullptr, "CreateProcedureToRegisterUserWithNintendoAccount"},
-            {212, nullptr, "ResumeProcedureToRegisterUserWithNintendoAccount"},
-            {230, nullptr, "AuthenticateServiceAsync"},
+            {211, &ACC_SU::CreateProcedureToRegisterUserWithNintendoAccount, "CreateProcedureToRegisterUserWithNintendoAccount"}, // 8.0.0+
+            {212, &ACC_SU::ResumeProcedureToRegisterUserWithNintendoAccount, "ResumeProcedureToRegisterUserWithNintendoAccount"}, // 8.0.0+
+            {213, &ACC_SU::CreateProcedureToRegisterUserWithNintendoAccount, "CreateProcedureToCreateUserWithNintendoAccount"}, // 17.0.0+
+            {214, &ACC_SU::ResumeProcedureToRegisterUserWithNintendoAccount, "ResumeProcedureToCreateUserWithNintendoAccount"}, // 17.0.0+
+            {215, nullptr, "ResumeProcedureToCreateUserWithNintendoAccountAfterApplyResponse"}, // 17.0.0+
+            {230, &ACC_SU::AuthenticateServiceAsync, "AuthenticateServiceAsync"},
             {250, &ACC_SU::GetBaasAccountAdministrator, "GetBaasAccountAdministrator"},
             {290, nullptr, "ProxyProcedureForGuestLoginWithNintendoAccount"},
             {291, nullptr, "ProxyProcedureForFloatingRegistrationWithNintendoAccount"},
@@ -1346,20 +1671,20 @@ public:
             {3, &ACC_U0::ListOpenUsers, "ListOpenUsers"},
             {4, &ACC_U0::GetLastOpenedUser, "GetLastOpenedUser"},
             {5, &ACC_U0::GetProfile, "GetProfile"},
-            {6, nullptr, "GetProfileDigest"}, // 3.0.0+
+            {6, &ACC_U0::GetProfileDigest, "GetProfileDigest"}, // 3.0.0+
             {50, &ACC_U0::IsUserRegistrationRequestPermitted, "IsUserRegistrationRequestPermitted"},
             {51, &ACC_U0::TrySelectUserWithoutInteractionDeprecated, "TrySelectUserWithoutInteractionDeprecated"},
             {52, &ACC_U0::TrySelectUserWithoutInteraction, "TrySelectUserWithoutInteraction"},
             {60, &ACC_U0::ListOpenContextStoredUsers, "ListOpenContextStoredUsers"}, // 5.0.0 - 5.1.0
-            {99, nullptr, "DebugActivateOpenContextRetention"}, // 6.0.0+
+            {99, &ACC_U0::DebugActivateOpenContextRetention, "DebugActivateOpenContextRetention"}, // 6.0.0+
             {100, &ACC_U0::InitializeApplicationInfo, "InitializeApplicationInfo"},
             {101, &ACC_U0::GetBaasAccountManagerForApplication, "GetBaasAccountManagerForApplication"},
-            {102, nullptr, "AuthenticateApplicationAsync"},
-            {103, nullptr, "CheckNetworkServiceAvailabilityAsync"}, // 4.0.0+
+            {102, &ACC_U0::AuthenticateApplicationAsync, "AuthenticateApplicationAsync"},
+            {103, &ACC_U0::AuthenticateApplicationAsync, "CheckNetworkServiceAvailabilityAsync"}, // 4.0.0+
             {110, &ACC_U0::StoreSaveDataThumbnailApplication, "StoreSaveDataThumbnail"},
-            {111, nullptr, "ClearSaveDataThumbnail"},
-            {120, nullptr, "CreateGuestLoginRequest"},
-            {130, nullptr, "LoadOpenContext"}, // 5.0.0+
+            {111, &ACC_U0::ClearSaveDataThumbnail, "ClearSaveDataThumbnail"},
+            {120, &ACC_U0::CreateGuestLoginRequest, "CreateGuestLoginRequest"},
+            {130, &ACC_U0::LoadOpenContext, "LoadOpenContext"}, // 5.0.0+
             {131, &ACC_U0::ListOpenContextStoredUsers, "ListOpenContextStoredUsers"}, // 6.0.0+
             {140, &ACC_U0::InitializeApplicationInfoRestricted, "InitializeApplicationInfoRestricted"}, // 6.0.0+
             {141, &ACC_U0::ListQualifiedUsers, "ListQualifiedUsers"}, // 6.0.0+
@@ -1637,11 +1962,14 @@ public:
 };
 
 void LoopProcess(Core::System& system) {
-    auto module = std::make_shared<Module>();
+    auto module = std::make_shared<Module>(system);
     // The system's ProfileManager, shared with the frontend (not owned here).
     auto profile_manager =
         std::shared_ptr<ProfileManager>(std::shared_ptr<void>{}, &system.GetProfileManager());
     auto server_manager = std::make_unique<ServerManager>(system);
+
+    // The OpenPak session speaks for the user acc has open.
+    OpenPakAccount::InstallProfileSource(system.GetProfileManager());
 
     server_manager->RegisterNamedService("acc:aa", std::make_shared<ACC_AA>(module, profile_manager, system));
     server_manager->RegisterNamedService("acc:su", std::make_shared<ACC_SU>(module, profile_manager, system));

@@ -10,12 +10,22 @@
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/service.h"
 
+namespace OpenPak {
+class AsyncWorker;
+}
+
 namespace Service::Account {
 
 class ProfileManager;
 
 class Module final {
 public:
+    explicit Module(Core::System& system);
+    ~Module();
+
+    /// The network work behind acc's async objects (OpenPak sign-in, Nintendo Account linking).
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+
     class Interface : public ServiceFramework<Interface> {
     public:
         explicit Interface(std::shared_ptr<Module> module_,
@@ -49,6 +59,15 @@ public:
         void GetBaasAccountManagerForSystemService(HLERequestContext& ctx);
         void StoreSaveDataThumbnailSystem(HLERequestContext& ctx);
         void GetPinCodeLength(HLERequestContext& ctx);
+        void CreateProcedureToRegisterUserWithNintendoAccount(HLERequestContext& ctx);
+        void ResumeProcedureToRegisterUserWithNintendoAccount(HLERequestContext& ctx);
+        void AuthenticateServiceAsync(HLERequestContext& ctx);
+        void GetProfileDigest(HLERequestContext& ctx);
+        void DebugActivateOpenContextRetention(HLERequestContext& ctx);
+        void AuthenticateApplicationAsync(HLERequestContext& ctx);
+        void ClearSaveDataThumbnail(HLERequestContext& ctx);
+        void CreateGuestLoginRequest(HLERequestContext& ctx);
+        void LoadOpenContext(HLERequestContext& ctx);
 
     private:
         Result InitializeApplicationInfoBase();
