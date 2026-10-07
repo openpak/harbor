@@ -57,6 +57,23 @@ class YuzuApplication : Application() {
         notificationManager.createNotificationChannel(foregroundService)
     }
 
+    /**
+     * Harbor: a Java/Kotlin exception that would end the process goes to eden_log.txt first (critical
+     * lines are flushed at once), then to Android's own handler as before.
+     */
+    private fun logUncaughtExceptions() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                Log.critical(
+                    "[Harbor] uncaught exception on ${thread.name}: " +
+                        android.util.Log.getStackTraceString(throwable)
+                )
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         application = this
@@ -66,6 +83,7 @@ class YuzuApplication : Application() {
         }
         documentsTree = DocumentsTree()
         DirectoryInitialization.start()
+        logUncaughtExceptions()
 
         // Initialize Freedreno config BEFORE loading native library
         // This ensures GPU driver environment variables are set before adrenotools initializes
