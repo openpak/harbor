@@ -430,6 +430,13 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_logGuestThrea
     EmulationSession::GetInstance().System().LogGuestThreads();
 }
 
+/// Loads the console's Vulkan driver and checks it is the one the setup chose: "" when it is, else
+/// why the console must not boot (EmulationSession::CheckGpuDriver). Not on the UI thread.
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkGpuDriver(JNIEnv* env,
+                                                                                    jobject) {
+    return Common::Android::ToJString(env, EmulationSession::GetInstance().CheckGpuDriver());
+}
+
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {
     return FrontendCommon::JoyconsDetached(EmulationSession::GetInstance().System().HIDCore()) ? JNI_TRUE
                                                                                              : JNI_FALSE;

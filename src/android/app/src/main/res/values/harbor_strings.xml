@@ -20,5 +20,7 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_menu_log_threads">Log threads</string>
     <string name="harbor_frame_gen_restart">Harbor restarts the console to change Lossless.dll.</string>
     <string name="harbor_close">Close</string>
+    <string name="harbor_driver_failed_title">Graphics driver not loaded</string>
+    <string name="harbor_driver_failed_hint">The console did not start. Choose the driver again in the setup.</string>
     <string name="harbor_connecting">Connecting to OpenPak…</string>
 </resources>
