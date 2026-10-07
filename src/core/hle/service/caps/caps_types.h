@@ -123,6 +123,18 @@ struct AlbumFileId {
 };
 static_assert(sizeof(AlbumFileId) == 0x18, "AlbumFileId is an invalid size");
 
+// One content type's share of an album storage, as caps:a 6/15 report them: file count, bytes and
+// which content type it describes. The layout is libnx's CapsAlbumUsage; what the first u8 means
+// is not established.
+struct AlbumUsage {
+    u64 file_count{};
+    u64 size{};
+    u8 flags{};
+    ContentType content{};
+    INSERT_PADDING_BYTES(6);
+};
+static_assert(sizeof(AlbumUsage) == 0x18, "AlbumUsage has incorrect size.");
+
 // This is nn::capsrv::AlbumEntry
 struct AlbumEntry {
     u64 entry_size{};

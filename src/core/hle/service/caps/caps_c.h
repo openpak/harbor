@@ -21,6 +21,8 @@ public:
     ~IAlbumControlService() override;
 
 private:
+    Result RequestTakingScreenShot();
+
     Result SetShimLibraryVersion(ShimLibraryVersion library_version,
                                  ClientAppletResourceUserId aruid);
 

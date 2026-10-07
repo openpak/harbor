@@ -7,6 +7,7 @@
 #include "common/logging.h"
 #include "core/hle/service/caps/caps_c.h"
 #include "core/hle/service/caps/caps_manager.h"
+#include "core/hle/service/caps/caps_overlay_screenshot.h"
 #include "core/hle/service/caps/caps_result.h"
 #include "core/hle/service/caps/caps_types.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -22,7 +23,7 @@ IAlbumControlService::IAlbumControlService(Core::System& system_,
         {1, nullptr, "CaptureRawImage"},
         {2, nullptr, "CaptureRawImageWithTimeout"},
         {33, C<&IAlbumControlService::SetShimLibraryVersion>, "SetShimLibraryVersion"},
-        {1001, nullptr, "RequestTakingScreenShot"},
+        {1001, C<&IAlbumControlService::RequestTakingScreenShot>, "RequestTakingScreenShot"},
         {1002, nullptr, "RequestTakingScreenShotWithTimeout"},
         {1011, nullptr, "NotifyTakingScreenShotRefused"},
         {2001, nullptr, "NotifyAlbumStorageIsAvailable"},
@@ -45,6 +46,14 @@ IAlbumControlService::IAlbumControlService(Core::System& system_,
 }
 
 IAlbumControlService::~IAlbumControlService() = default;
+
+Result IAlbumControlService::RequestTakingScreenShot() {
+    // unknown contract: the request's inputs are not established (no firmware program of a HOME
+    // session opens caps:c); it takes the same screenshot as the capture button and returns.
+    LOG_WARNING(Service_Capture, "unknown contract: caps:c 1001 RequestTakingScreenShot");
+    TakeOverlayScreenShot(system);
+    R_SUCCEED();
+}
 
 Result IAlbumControlService::SetShimLibraryVersion(ShimLibraryVersion library_version,
                                                    ClientAppletResourceUserId aruid) {
