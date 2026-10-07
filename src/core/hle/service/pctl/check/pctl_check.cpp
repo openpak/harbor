@@ -379,6 +379,45 @@ void Slots() {
 
 } // namespace
 
+// The console's own setting: what is kept and read back after a restart, and the free-communication
+// list the setters edit.
+void LocalState() {
+    pctl::Setting setting;
+    setting.safety_level = 1;
+    setting.age_restricted = true;
+    setting.custom_rating_age = 12;
+    setting.custom_sns_post_restricted = true;
+    setting.rating_organization = 3;
+    setting.stereo_vision_restricted = true;
+    setting.free_communication_applications = {{0x0100000000010000ull, false},
+                                               {0x0100abcd00000000ull, true}};
+    setting.exempt_applications = {0x0100000000002000ull};
+    setting.play_timer[0] = 1;
+    setting.play_timer[5] = 0x2a;
+    pctl::Setting back;
+    Check(pctl::LoadState(pctl::SerializeState(setting), back) && back == setting,
+          "a setting is read back from its saved state");
+    pctl::Setting untouched;
+    untouched.safety_level = 4;
+    Check(!pctl::LoadState("{}", untouched) && untouched.safety_level == 4,
+          "a state with keys missing is refused and changes nothing");
+    Check(!pctl::LoadState("not json", untouched), "a state that is not JSON is refused");
+    std::string bad = pctl::SerializeState(setting);
+    bad.replace(bad.find("\"safetyLevel\":1"), 15, "\"safetyLevel\":9");
+    Check(!pctl::LoadState(bad, untouched), "a safety level past 4 is refused");
+
+    std::vector<std::pair<std::uint64_t, bool>> list;
+    Check(pctl::UpsertFreeCommunication(list, 7, false) && list.size() == 1, "a title is listed");
+    Check(pctl::UpsertFreeCommunication(list, 7, true) && list.size() == 1 && list[0].second,
+          "a title listed twice changes its flag");
+    for (std::uint64_t id = 100; list.size() < pctl::FreeCommunicationCapacity; ++id) {
+        pctl::UpsertFreeCommunication(list, id, false);
+    }
+    Check(!pctl::UpsertFreeCommunication(list, 1, false) &&
+              pctl::UpsertFreeCommunication(list, 7, false),
+          "a full list refuses a new title but still changes a listed one");
+}
+
 int main() {
     Structs();
     Search();
@@ -390,6 +429,7 @@ int main() {
     Misc();
     Mask();
     Slots();
+    LocalState();
     if (failures != 0) {
         std::printf("pctl_check: %d check(s) failed\n", failures);
         return 1;

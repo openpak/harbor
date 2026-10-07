@@ -48,6 +48,7 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
 | `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
+| `menu <name>` | opens a Harbor menu entry (console mode): `frame-gen`; while its dialog (or any modal host dialog) is open, `key` and `type` go to it |
 | `threads` | guest thread dump to the log |
 | `quit` | closes the main window (clean shutdown, about 10 s) |
 

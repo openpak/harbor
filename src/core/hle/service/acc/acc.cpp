@@ -288,6 +288,9 @@ private:
             return true;
         }
         const std::string uid = OpenPakAccount::UidString(account_id);
+        // PlayerSelect's "Sign In and Link" asks this right after creating the user, while the
+        // setup's account is still being linked to it (OnFirmwareUserRegistered).
+        OpenPak::WaitForFirmwareUserLink(uid);
         if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
             return OpenPak::Session::Linked(uid);
         }

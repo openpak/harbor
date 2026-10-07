@@ -41,6 +41,9 @@
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
 #include "harbor_control.h"
+#ifdef HAS_LSFG
+#include "harbor_frame_gen.h"
+#endif
 #include "harbor_system_keys.h"
 #include "loading_screen.h"
 #include "qt_common/util/vk.h"
@@ -437,6 +440,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (const auto harbor = HarborSetup::LoadRecord(HarborSetup::RecordPath());
         harbor.completed && HarborSetup::DesktopConsoleAllowed()) {
         harbor_console = true;
+        HarborAddMenu();
         HarborSetup::ApplyConsolePreset();
         HarborSetup::ApplyRecordFolders(harbor);
         UISettings::values.game_dirs.clear();
@@ -568,9 +572,19 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             .quit = [this] { close(); },
             .threads = [] { QtCommon::system->LogGuestThreads(); },
             .keyboard_dialog = [this]() -> QWidget* {
-                return software_keyboard && software_keyboard->isVisible() ? software_keyboard
-                                                                           : nullptr;
+                if (software_keyboard && software_keyboard->isVisible()) {
+                    return software_keyboard;
+                }
+                return QApplication::activeModalWidget();
             },
+            .menu =
+                [this](const std::string& name) {
+                    if (name == "frame-gen" && harbor_frame_gen_action) {
+                        harbor_frame_gen_action->trigger();
+                    } else {
+                        LOG_WARNING(Frontend, "harbor-control: no menu entry \"{}\"", name);
+                    }
+                },
             .joycons =
                 [](bool detached) {
                     FrontendCommon::SetJoyconsDetached(QtCommon::system->HIDCore(), detached);
@@ -639,6 +653,30 @@ void MainWindow::HarborRestartConsole() {
         game_list, &GameList::PopulatingCompleted, this,
         [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
     game_list->PopulateAsync(UISettings::values.game_dirs);
+}
+
+/// The Harbor menu (console mode): host settings for the console as a whole.
+void MainWindow::HarborAddMenu() {
+#ifdef HAS_LSFG
+    auto* menu = new QMenu(tr("&Harbor"), this);
+    ui->menubar->insertMenu(ui->menu_Help->menuAction(), menu);
+    // Frame generation (Lossless Scaling): the user's own Lossless.dll, then on/off and mode.
+    // Settings apply to whatever is presented, HOME or a title; a DLL change restarts the console.
+    harbor_frame_gen_action = menu->addAction(tr("&Frame generation..."), this, [this] {
+        HarborFrameGenDialog dialog(
+            this,
+            [this](std::function<void()> change) {
+                const bool was_running = emulation_running;
+                ShutdownGame();
+                change();
+                if (was_running) {
+                    HarborRestartConsole();
+                }
+            },
+            [this] { OnSaveConfig(); });
+        dialog.exec();
+    });
+#endif
 }
 
 void MainWindow::HarborStopOpenPak() {

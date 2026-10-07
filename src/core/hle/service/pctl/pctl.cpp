@@ -26,6 +26,9 @@ void LoopProcess(Core::System& system) {
             Pairing::Current().OnUnlinkPush(body);
         }
     });
+    // Test runs with OPENPAK_SIMULATE_PUSH_DIR deliver the parent's pushes from files, with or
+    // without a server (idempotent; does nothing when the variable is unset).
+    OpenPak::Push::StartSimulated();
 
     server_manager->RegisterNamedService("pctl",
                                          std::make_shared<IParentalControlServiceFactory>(
