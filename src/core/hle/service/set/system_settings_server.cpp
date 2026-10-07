@@ -1610,8 +1610,11 @@ Result ISystemSettingsServer::GetSettingsItemValueImpl(std::span<u8> out_value, 
     auto settings{GetSettings()};
     R_UNLESS(settings.contains(category) && settings[category].contains(name), ResultUnknown);
 
-    ASSERT_MSG(out_value.size() >= settings[category][name].size(),
-               "Stored type is bigger than requested type");
+    // A guest buffer smaller than the value gets what fits, and the size copied.
+    if (out_value.size() < settings[category][name].size()) {
+        LOG_WARNING(Service_SET, "{}!{} is {} bytes, the buffer {}; copied what fits", category,
+                    name, settings[category][name].size(), out_value.size());
+    }
     out_size = std::min<u64>(settings[category][name].size(), out_value.size());
     std::memcpy(out_value.data(), settings[category][name].data(), out_size);
     R_SUCCEED();
