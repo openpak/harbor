@@ -9,6 +9,7 @@
 #include "common/logging.h"
 #include "common/uuid.h"
 #include "core/core.h"
+#include "core/file_sys/errors.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/file_sys/vfs/vfs.h"
 
@@ -24,6 +25,12 @@ bool ShouldSaveDataBeAutomaticallyCreated(SaveDataSpaceId space, const SaveDataA
            (space == SaveDataSpaceId::User && ///< Normal Save Data -- Current Title & User
             (attr.type == SaveDataType::Account || attr.type == SaveDataType::Device) &&
             attr.program_id == 0 && attr.system_save_data_id == 0);
+}
+
+constexpr const char* SystemSaveDataOwnerFileName = ".harbor_owner";
+
+std::string GetSystemSaveDataRoot(u64 save_id) {
+    return fmt::format("/system/save/{:016X}", save_id);
 }
 
 std::string GetFutureSaveDataPath(SaveDataSpaceId space_id, SaveDataType type, u64 title_id,
@@ -195,6 +202,38 @@ void SaveDataFactory::WriteSaveDataSize(SaveDataType type, u64 title_id, u128 us
 
 void SaveDataFactory::SetAutoCreate(bool state) {
     auto_create = state;
+}
+
+std::optional<u64> SaveDataFactory::ReadSystemSaveDataOwner(u64 save_id) const {
+    const auto root = dir->GetDirectoryRelative(GetSystemSaveDataRoot(save_id));
+    const auto file = root != nullptr ? root->GetFile(SystemSaveDataOwnerFileName) : nullptr;
+    u64 owner_id{};
+    if (file == nullptr || file->ReadObject(&owner_id) != sizeof(owner_id)) {
+        return std::nullopt;
+    }
+    return owner_id;
+}
+
+void SaveDataFactory::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const {
+    const auto root = GetOrCreateDirectoryRelative(dir, GetSystemSaveDataRoot(save_id));
+    const auto file = root != nullptr ? root->CreateFile(SystemSaveDataOwnerFileName) : nullptr;
+    if (file == nullptr || !file->Resize(sizeof(owner_id))) {
+        LOG_WARNING(Service_FS, "Could not record the owner of system save {:016X}", save_id);
+        return;
+    }
+    file->WriteObject(owner_id);
+}
+
+Result SaveDataFactory::DeleteSystemSaveData(u64 save_id) const {
+    const auto save_root = dir->GetDirectoryRelative("/system/save");
+    const auto name = fmt::format("{:016X}", save_id);
+    if (save_root == nullptr || save_root->GetSubdirectory(name) == nullptr) {
+        return ResultTargetNotFound;
+    }
+    if (!save_root->DeleteSubdirectoryRecursive(name)) {
+        return ResultPermissionDenied;
+    }
+    return ResultSuccess;
 }
 
 } // namespace FileSys
