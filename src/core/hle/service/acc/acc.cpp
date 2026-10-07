@@ -1638,7 +1638,9 @@ public:
 
 void LoopProcess(Core::System& system) {
     auto module = std::make_shared<Module>();
-    auto profile_manager = std::make_shared<ProfileManager>();
+    // The system's ProfileManager, shared with the frontend (not owned here).
+    auto profile_manager =
+        std::shared_ptr<ProfileManager>(std::shared_ptr<void>{}, &system.GetProfileManager());
     auto server_manager = std::make_unique<ServerManager>(system);
 
     server_manager->RegisterNamedService("acc:aa", std::make_shared<ACC_AA>(module, profile_manager, system));

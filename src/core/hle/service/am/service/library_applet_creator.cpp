@@ -5,6 +5,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
+#include "core/core.h"
+#include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/service/am/applet_data_broker.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -24,7 +27,13 @@ namespace Service::AM {
 
 namespace {
 
-bool ShouldCreateGuestApplet(AppletId applet_id) {
+bool ShouldCreateGuestApplet(Core::System& system, AppletId applet_id) {
+    // A HOME session runs every library applet from the firmware, as a console does; the host
+    // (frontend) applets remain for game sessions and as a fallback when a program cannot load.
+    if (system.GetAppletManager().IsHomeSession()) {
+        return true;
+    }
+
 #define X(Name, name)                                                                              \
     if (applet_id == AppletId::Name &&                                                             \
         Settings::values.name##_applet_mode.GetValue() != Settings::AppletMode::LLE) {             \
@@ -50,6 +59,33 @@ bool ShouldCreateGuestApplet(AppletId applet_id) {
 #undef X
 
     return true;
+}
+
+bool IsProgramInstalled(Core::System& system, AppletProgramId program_id) {
+    return system.GetContentProviderUnion().HasEntry(static_cast<u64>(program_id),
+                                                     FileSys::ContentRecordType::Program);
+}
+
+// Firmware 22.0.0+ program ids (switchbrew applet table; behaviour follows the Ryujinx Harbor's
+// ILibraryAppletCreator table). Used in a HOME session when the firmware has the program.
+AppletProgramId AppletIdToFirmware22ProgramId(AppletId applet_id) {
+    switch (applet_id) {
+    case AppletId::Web:
+    case AppletId::WebAuth:
+        return AppletProgramId::WebOpen;
+    case AppletId::Shop:
+    case AppletId::LoginShare:
+    case AppletId::Lhub:
+    case AppletId::Login:
+    case AppletId::Share:
+        return AppletProgramId::WebSystemPages;
+    case AppletId::OfflineWeb:
+    case AppletId::OfflineWebApp3:
+    case AppletId::OfflineWebSystem:
+        return AppletProgramId::OfflineWeb;
+    default:
+        return static_cast<AppletProgramId>(0);
+    }
 }
 
 AppletProgramId AppletIdToProgramId(AppletId applet_id) {
@@ -104,9 +140,17 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
                                                           std::shared_ptr<Applet> caller_applet,
                                                           AppletId applet_id,
                                                           LibraryAppletMode mode) {
-    const auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
+    auto program_id = static_cast<u64>(AppletIdToProgramId(applet_id));
+    if (system.GetAppletManager().IsHomeSession()) {
+        const auto firmware22_id = AppletIdToFirmware22ProgramId(applet_id);
+        if (firmware22_id != static_cast<AppletProgramId>(0) &&
+            IsProgramInstalled(system, firmware22_id)) {
+            program_id = static_cast<u64>(firmware22_id);
+        }
+    }
     if (program_id == 0) {
         // Unknown applet
+        LOG_WARNING(Service_AM, "no firmware program for applet_id={}", applet_id);
         return {};
     }
 
@@ -127,9 +171,13 @@ std::shared_ptr<ILibraryAppletAccessor> CreateGuestApplet(Core::System& system,
             caller_applet->child_applets.push_back(applet);
         }
         window_system.TrackApplet(applet, false);
+        LOG_INFO(Service_AM, "am: library applet {} ({:016x}) created as pid {} ({}) for pid {}",
+                 applet_id, program_id, applet->aruid.pid, mode, caller_applet->aruid.pid);
         return std::make_shared<ILibraryAppletAccessor>(system, broker, applet);
     }
     // Couldn't initialize the guest process
+    LOG_WARNING(Service_AM, "library applet {} ({:016x}) could not be loaded; using the host applet",
+                applet_id, program_id);
     return {};
 }
 
@@ -185,7 +233,7 @@ Result ILibraryAppletCreator::CreateLibraryApplet(
               library_applet_mode);
 
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
-    if (ShouldCreateGuestApplet(applet_id)) {
+    if (ShouldCreateGuestApplet(system, applet_id)) {
         library_applet =
             CreateGuestApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
     }
@@ -211,7 +259,7 @@ Result ILibraryAppletCreator::CreateLibraryAppletEx(
               library_applet_mode, thread_id);
 
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
-    if (ShouldCreateGuestApplet(applet_id)) {
+    if (ShouldCreateGuestApplet(system, applet_id)) {
         library_applet =
             CreateGuestApplet(system, m_window_system, m_applet, applet_id, library_applet_mode);
     }
