@@ -504,7 +504,7 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
 
         std::scoped_lock lk{applet->lock};
 
-        if (!applet->process->IsTerminated()) {
+        if (!applet->process_released) {
             // Not terminated.
             it = std::next(it);
             continue;
@@ -682,6 +682,7 @@ bool WindowSystem::RestartAppletProcessLocked(Applet* applet) {
     }
 
     applet->aruid.pid = applet->process->GetProcessId();
+    applet->process_released = false;
     applet->is_process_running = false;
     applet->is_completed = false;
 

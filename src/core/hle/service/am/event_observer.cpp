@@ -4,7 +4,12 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+
+#include "common/logging.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_memory_manager.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/event_observer.h"
@@ -138,6 +143,16 @@ void EventObserver::OnProcessEvent(ProcessHolder* holder) {
         if (process.IsTerminated()) {
             // Destroy the holder.
             this->DestroyAppletProcessHolderLocked(holder);
+
+            // The ended process gives its memory back now, as on the console; a winding applet's
+            // is reloaded on unwind. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+            // base).
+            process.Finalize();
+            applet.process_released = true;
+            LOG_INFO(Service_AM, "am: applet_id={}{} process released, Applet pool {} MiB free",
+                     static_cast<u32>(applet.applet_id), applet.is_winding ? " (winding)" : "",
+                     m_system.Kernel().MemoryManager().GetFreeSize(
+                         Kernel::KMemoryManager::Pool::Applet) / (1024 * 1024));
         } else {
             // Reset signaled state.
             process.ResetSignal();
