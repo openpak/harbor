@@ -1564,6 +1564,20 @@ std::string PresenceBody() {
         OpenPak::Friends::PresenceState::Instance().Current(Platform::ProfileId()));
 }
 
+bool HasDeviceAccount(const std::string& uid) {
+    if (uid.empty()) {
+        return false;
+    }
+    const Endpoint endpoint = EndpointSnapshot(Get());
+    if (endpoint.host.empty()) {
+        return false;
+    }
+    std::string id;
+    std::string password;
+    LoadDeviceAccount(endpoint, uid, id, password);
+    return !id.empty() && !password.empty();
+}
+
 void ForgetProfile(const std::string& uid) {
     if (uid.empty()) {
         return;

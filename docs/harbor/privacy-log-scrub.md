@@ -19,12 +19,15 @@ The usual fix is to drop the value or wrap it, for example
 
 | File:line | What it logs |
 |---|---|
-| `core/hle/service/acc/acc.cpp:539` | username and uuid (DEBUG) |
-| `core/hle/service/acc/acc.cpp:572` | username and uuid (**INFO**) |
-| `core/hle/service/acc/acc.cpp:421, 438, 445, 885, 916` | user_id |
-| `core/hle/service/acc/acc.cpp:1033, 1044, 1055, 1057` | uuid (INFO/ERROR) |
-| `core/hle/service/acc/acc.cpp:1072, 1084, 1095, 1125, 1138, 1150` | uuid |
-| `core/hle/service/acc/profile_manager.cpp:421` | uuid |
+| `core/hle/service/acc/acc.cpp:1033, 1044` | uuid (INFO): acc:su 200/201, am stream (fixed on `p2/am`, `cd2eadddbd`) |
+| `core/hle/service/acc/acc.cpp:1084` | user_id: acc:su 205 GetProfileEditor, am stream (fixed on `p2/am`, `cd2eadddbd`) |
+| `core/hle/service/acc/profile_manager.cpp:421` | uuid: am stream (fixed on `p2/am`, `cd2eadddbd`) |
+
+Resolved on `p3/acc`: `acc.cpp:539, 572` (IProfileEditor Store/StoreWithImage username and uuid),
+`421, 438, 445` (IProfile), `885, 916` (GetUserExistence, GetProfile), `1055, 1057` (DeleteUser),
+`1072` (SetUserPosition), `1095` (GetBaasAccountAdministrator), `1125, 1138, 1150` (thumbnails,
+GetBaasAccountManagerForSystemService). The new acc code (Nintendo Account procedures, BAAS
+managers, `openpak_account.cpp`) logs no uid, nickname, token, NA id or URL past its host.
 
 ## friend (F stream)
 
@@ -66,11 +69,9 @@ Resolved: `psc/ovln/sender.cpp` and `sender_service.cpp`. The OvlnAgent rewrite 
 | `core/hle/service/olsc/olsc_service_for_system_service.cpp:121` | uuid (WARNING) |
 | `core/hle/service/olsc/olsc_service_for_application.cpp:58` | account id (WARNING) |
 
-## nim (W stream)
+## nim (A stream)
 
-| File:line | What it logs |
-|---|---|
-| `core/hle/service/nim/nim.cpp:135` | the shop Prepare URL (INFO). Use `RedactUrl` |
+Resolved on `p3/acc`: `nim.cpp:135`, the shop Prepare URL, now goes through `RedactUrl`.
 
 ## ssl, nifm, internal_network (net stream)
 
