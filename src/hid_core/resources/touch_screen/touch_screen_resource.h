@@ -5,6 +5,8 @@
 
 #include <array>
 #include <mutex>
+#include <span>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/point.h"
@@ -80,7 +82,17 @@ public:
 
     void OnTouchUpdate(s64 timestamp);
 
+    // The aruid gets the touch screen back: the fingers down right now stay hidden from it until
+    // lifted.
+    void HoldTouches(u64 aruid);
+
+    // Self-test only (HARBOR_HID_SELFTEST): the listed aruids read this touch state instead of
+    // the screen's. An empty list restores the screen.
+    void SetSelfTestTouches(std::span<const u64> aruids, const TouchScreenState& state);
+
 private:
+    const TouchScreenState& HostTouchState(u64 aruid) const;
+
     Result Finalize();
 
     void StorePreviousTouchState(TouchScreenState& out_previous_touch,
@@ -114,6 +126,8 @@ private:
     AutoPilotState auto_pilot{};
     GestureHandler gesture_handler{};
     std::array<TouchAruidData, 0x20> aruid_data{};
+    std::vector<u64> self_test_aruids;
+    TouchScreenState self_test_touch_state{};
     Common::Point<f32> magnification{1.0f, 1.0f};
     Common::Point<f32> offset{0.0f, 0.0f};
     Core::HID::TouchScreenModeForNx default_touch_screen_mode{

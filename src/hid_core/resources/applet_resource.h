@@ -59,10 +59,30 @@ struct AruidRegisterList {
 };
 static_assert(sizeof(AruidRegisterList) == 0x180, "AruidRegisterList is an invalid size");
 
+// Input focus of one aruid. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+// Only an aruid whose pad or touch input has been disabled at least once (am moved the input focus
+// away from it) is managed: while disabled it reads neutral npad entries whose sampling numbers keep
+// advancing, and a button or finger already down when it gets the input back stays hidden from it
+// until released. A plain game boot never disables its aruid, so its input is written as before.
+struct AruidInputFocus {
+    bool is_managed{};
+    // Per npad index, the Core::HID::NpadButton bits hidden until released.
+    std::array<u64, 10> held_buttons{};
+    // Bit n: touch finger id n, hidden until lifted.
+    u64 held_fingers{};
+};
+
+// The buttons of `pressed` an aruid may see. A held button counts again once it has been released.
+constexpr u64 ReleaseHeldButtons(u64& held, u64 pressed) {
+    held &= pressed;
+    return pressed & ~held;
+}
+
 struct AruidData {
     DataStatusFlag flag{};
     u64 aruid{};
     SharedMemoryFormat* shared_memory_format{nullptr};
+    AruidInputFocus input_focus{};
 };
 
 struct HandheldConfig {
@@ -106,11 +126,11 @@ public:
 
     Result DestroySevenSixAxisTransferMemory();
 
-    void EnableInput(u64 aruid, bool is_enabled);
     bool SetAruidValidForVibration(u64 aruid, bool is_enabled);
     void EnableSixAxisSensor(u64 aruid, bool is_enabled);
-    void EnablePadInput(u64 aruid, bool is_enabled);
-    void EnableTouchScreen(u64 aruid, bool is_enabled);
+    // Both return true when the aruid gets the input back after it had been disabled.
+    bool EnablePadInput(u64 aruid, bool is_enabled);
+    bool EnableTouchScreen(u64 aruid, bool is_enabled);
     void SetIsPalmaConnectable(u64 aruid, bool is_connectable);
     void EnablePalmaBoostMode(u64 aruid, bool is_enabled);
 
