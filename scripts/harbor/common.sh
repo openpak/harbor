@@ -50,8 +50,8 @@ locked() {
             if [ "$(awk '/MemAvailable/ {print $2}' /proc/meminfo)" -lt "$MIN_FREE_KB" ]; then
                 break
             fi
-            flock -n -E 200 --close "$slot" nice -n 19 bash -c 'refuse_while_emulator_runs; exec "$@"' _ "$@"
-            rc=$?
+            rc=0
+            flock -n -E 200 --close "$slot" nice -n 19 bash -c 'refuse_while_emulator_runs; exec "$@"' _ "$@" || rc=$?
             [ "$rc" -ne 200 ] && return "$rc"
         done
         sleep 10
