@@ -12,7 +12,10 @@
 #include <algorithm>
 #include <array>
 #include <core/hle/service/am/frontend/applet_mii_edit.h>
+#include <functional>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "core/hle/result.h"
 #include "core/hle/service/set/settings_types.h"
@@ -105,4 +108,56 @@ inline std::pair<Service::Set::FirmwareVersionFormat, Result> GetFirmwareVersion
 }
 
 // TODO(crueter): GET AS STRING
-}
+
+/// The firmware Harbor is developed against. Others may be installed, with a warning.
+inline constexpr std::string_view HarborFirmwareVersion = "23.0.1";
+
+/// The HOME menu program, which a console session boots.
+inline constexpr u64 QLaunchProgramId = 0x0100000000001000ULL;
+
+struct FirmwareProgress {
+    std::string stage;
+    std::optional<double> fraction; ///< empty while the length of the step is unknown
+};
+
+/// Called while firmware is copied; returning false cancels.
+using FirmwareProgressCallback = std::function<bool(const FirmwareProgress&)>;
+
+struct FirmwareResult {
+    bool ok = false;
+    std::string version; ///< the display version, e.g. "23.0.1"
+    std::string error;   ///< why it failed, in words for the user
+};
+
+/// What is installed in the system NAND, read without a Core::System (before a frontend starts one).
+struct InstalledFirmware {
+    bool present = false;     ///< any firmware content is installed
+    bool has_qlaunch = false; ///< the HOME menu program is there and readable with the installed keys
+    std::string version;      ///< empty when the system version could not be read
+};
+
+/**
+ * @brief Copies the firmware at `source` into a staging folder next to the NAND and checks it there:
+ * readable with the installed keys, with a system version and the HOME menu program (qlaunch).
+ * The installed firmware is not touched.
+ * @param source A .zip (a path, or a content URI on Android) or a folder of .nca files.
+ */
+FirmwareResult StageFirmware(const std::string& source, const FirmwareProgressCallback& progress);
+
+/// Replaces the installed firmware with the staged one (a rename, so it is quick and all or nothing).
+bool CommitStagedFirmware(std::string* error);
+
+/// Deletes the staged copy, if any.
+void DiscardStagedFirmware();
+
+/**
+ * @brief Installs the firmware at `source`: StageFirmware, then CommitStagedFirmware. The installed
+ * firmware is replaced only when the new one checked out. A running Core::System must rescan its NAND
+ * afterwards (FileSystemController::CreateFactories).
+ */
+FirmwareResult InstallFirmware(const std::string& source, const FirmwareProgressCallback& progress);
+
+/// The installed firmware's version and whether qlaunch is there.
+InstalledFirmware InspectInstalledFirmware();
+
+} // namespace FirmwareManager

@@ -28,4 +28,4 @@ endif()
 create_target_directory_groups(frontend_common)
 target_link_libraries(frontend_common
     PUBLIC core SimpleIni::SimpleIni frozen::frozen-headers
-    PRIVATE common Boost::headers)
+    PRIVATE common Boost::headers ZLIB::ZLIB)
