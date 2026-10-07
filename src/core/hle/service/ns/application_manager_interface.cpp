@@ -642,9 +642,13 @@ Result IApplicationManagerInterface::IsGameCardApplicationRunning(Out<bool> out_
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown936(Out<u64> out_result) {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
-    *out_result = 0;
+Result IApplicationManagerInterface::Unknown936(Out<UnknownCountedRecord> out_record) {
+    // Unnamed; the qlaunch proxy stub is "no input -> (s32, 0x80-byte record)". Nothing to report.
+    // Shape follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
+                "0x80-byte record");
+    *out_record = {};
     R_SUCCEED();
 }
 
@@ -865,9 +869,13 @@ Result IApplicationManagerInterface::Unknown4022(
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4023(Out<u64> out_result) {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
-    *out_result = 0;
+Result IApplicationManagerInterface::Unknown4023(Out<UnknownTryPopRecord> out_record) {
+    // Pairs with the 4022 event: a try-pop answering (bool, 0x50-byte record), as the Ryujinx
+    // Harbor does. The shape is inferred from the client proxy stub, not proven.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 4023; returning false and an empty "
+                "0x50-byte record");
+    *out_record = {};
     R_SUCCEED();
 }
 
