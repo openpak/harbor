@@ -211,8 +211,9 @@ private:
                 LOG_ERROR(Service_SSL, "invalid socket fd {} after duplication", dup_fd);
                 return ResultInvalidSocket;
             }
+            // Shared with the backend: SetIoMode and the handshake still need it here.
             socket = std::move(*sock);
-            backend->SetSocket(std::move(socket));
+            backend->SetSocket(socket);
             return ResultSuccess;
         }
         LOG_ERROR(Service_SSL, "Failed to duplicate socket with fd {}", in_fd);
