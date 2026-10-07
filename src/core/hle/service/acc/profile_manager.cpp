@@ -12,6 +12,7 @@
 #include <boost/algorithm/string/find.hpp>
 #include <fmt/ranges.h>
 
+#include "common/cityhash.h"
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/fs_types.h"
@@ -137,6 +138,16 @@ void ProfileManager::RemoveAllProfiles()
 }
 
 /// Helper function to register a user to the system
+std::array<u8, 0x10> ProfileManager::ImageId(std::span<const u8> image) {
+    std::array<u8, 0x10> id{};
+    if (!image.empty()) {
+        const u128 hash =
+            Common::CityHash128(reinterpret_cast<const char*>(image.data()), image.size());
+        std::memcpy(id.data(), hash.data(), id.size());
+    }
+    return id;
+}
+
 Result ProfileManager::AddUser(const ProfileInfo& user) {
     if (!AddToProfiles(user)) {
         return ERROR_TOO_MANY_USERS;
