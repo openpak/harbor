@@ -84,6 +84,10 @@ void ISaveDataInfoReader::FindAllSaves(FileSys::SaveDataSpaceId space) {
 void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
                                           const FileSys::VirtualDir& type) {
     for (const auto& save_id : type->GetSubdirectories()) {
+        // Emulator bookkeeping (/system/save/.harbor) is not a save.
+        if (save_id->GetName().starts_with('.')) {
+            continue;
+        }
         for (const auto& user_id : save_id->GetSubdirectories()) {
             // Skip non user id subdirectories
             if (user_id->GetName().size() != 0x20) {

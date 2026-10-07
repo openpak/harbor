@@ -50,8 +50,8 @@ public:
 
     void SetAutoCreate(bool state);
 
-    /// The owner recorded when system save save_id was created here, if any. Kept next to the
-    /// save's user directories, outside what the program sees.
+    /// The owner recorded when system save save_id was created here, if any. Kept under
+    /// /system/save/.harbor, outside every save.
     std::optional<u64> ReadSystemSaveDataOwner(u64 save_id) const;
     void WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const;
     /// Removes system save save_id for every user, with its owner record.

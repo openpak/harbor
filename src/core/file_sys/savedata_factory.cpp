@@ -27,11 +27,9 @@ bool ShouldSaveDataBeAutomaticallyCreated(SaveDataSpaceId space, const SaveDataA
             attr.program_id == 0 && attr.system_save_data_id == 0);
 }
 
-constexpr const char* SystemSaveDataOwnerFileName = ".harbor_owner";
-
-std::string GetSystemSaveDataRoot(u64 save_id) {
-    return fmt::format("/system/save/{:016X}", save_id);
-}
+// Owner records of system saves, one u64 file per save id. They live outside every save so no
+// program mounting or copying a save sees them; save enumeration skips dot directories.
+constexpr const char* SystemSaveDataOwnersPath = "/system/save/.harbor/owners";
 
 std::string GetFutureSaveDataPath(SaveDataSpaceId space_id, SaveDataType type, u64 title_id,
                                   u128 user_id) {
@@ -205,8 +203,8 @@ void SaveDataFactory::SetAutoCreate(bool state) {
 }
 
 std::optional<u64> SaveDataFactory::ReadSystemSaveDataOwner(u64 save_id) const {
-    const auto root = dir->GetDirectoryRelative(GetSystemSaveDataRoot(save_id));
-    const auto file = root != nullptr ? root->GetFile(SystemSaveDataOwnerFileName) : nullptr;
+    const auto owners = dir->GetDirectoryRelative(SystemSaveDataOwnersPath);
+    const auto file = owners != nullptr ? owners->GetFile(fmt::format("{:016X}", save_id)) : nullptr;
     u64 owner_id{};
     if (file == nullptr || file->ReadObject(&owner_id) != sizeof(owner_id)) {
         return std::nullopt;
@@ -215,8 +213,9 @@ std::optional<u64> SaveDataFactory::ReadSystemSaveDataOwner(u64 save_id) const {
 }
 
 void SaveDataFactory::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const {
-    const auto root = GetOrCreateDirectoryRelative(dir, GetSystemSaveDataRoot(save_id));
-    const auto file = root != nullptr ? root->CreateFile(SystemSaveDataOwnerFileName) : nullptr;
+    const auto owners = GetOrCreateDirectoryRelative(dir, SystemSaveDataOwnersPath);
+    const auto file =
+        owners != nullptr ? owners->CreateFile(fmt::format("{:016X}", save_id)) : nullptr;
     if (file == nullptr || !file->Resize(sizeof(owner_id))) {
         LOG_WARNING(Service_FS, "Could not record the owner of system save {:016X}", save_id);
         return;
@@ -232,6 +231,10 @@ Result SaveDataFactory::DeleteSystemSaveData(u64 save_id) const {
     }
     if (!save_root->DeleteSubdirectoryRecursive(name)) {
         return ResultPermissionDenied;
+    }
+    if (const auto owners = dir->GetDirectoryRelative(SystemSaveDataOwnersPath);
+        owners != nullptr) {
+        owners->DeleteFile(name);
     }
     return ResultSuccess;
 }
