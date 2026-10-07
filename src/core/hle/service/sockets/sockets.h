@@ -30,6 +30,27 @@ enum class Errno : u32 {
     CONNREFUSED = 111,
     INPROGRESS = 115,
     ISCONN = 106,
+    // Harbor: Linux numbering, like the rest. Written from: Linux errno(3).
+    NOENT = 2,
+    INTR = 4,
+    NOMEM = 12,
+    ACCES = 13,
+    FAULT = 14,
+    NOTSOCK = 88,
+    DESTADDRREQ = 89,
+    PROTOTYPE = 91,
+    NOPROTOOPT = 92,
+    PROTONOSUPPORT = 93,
+    OPNOTSUPP = 95,
+    AFNOSUPPORT = 97,
+    ADDRINUSE = 98,
+    ADDRNOTAVAIL = 99,
+    NETDOWN = 100,
+    NETUNREACH = 101,
+    NOBUFS = 105,
+    HOSTDOWN = 112,
+    HOSTUNREACH = 113,
+    ALREADY = 114,
 };
 
 enum class GetAddrInfoError : s32 {
@@ -54,6 +75,7 @@ enum class GetAddrInfoError : s32 {
 enum class Domain : u32 {
     Unspecified = 0,
     INET = 2,
+    INET6 = 28, // FreeBSD AF_INET6; served over the host's IPv4 with v4-mapped addresses
 };
 
 enum class Type : u32 {
@@ -185,6 +207,8 @@ enum class Protocol : u32 {
 enum class SocketLevel : u32 {
     IP = 0,
     TCP = 6,
+    UDP = 17,
+    IPV6 = 41,
     SOCKET = 0xffff, // i.e. SOL_SOCKET
 };
 
@@ -199,6 +223,12 @@ enum class OptName : u32 {
     RCVTIMEO = 0x1006,
     ERROR_ = 0x1007,   // avoid name collision with Windows macro
     NOSIGPIPE = 0x800, // at least according to libnx
+    // Harbor: the rest of FreeBSD's SOL_SOCKET names. Written from: FreeBSD sys/socket.h.
+    OOBINLINE = 0x100,
+    REUSEPORT = 0x200,
+    SNDLOWAT = 0x1003,
+    RCVLOWAT = 0x1004,
+    TYPE = 0x1008,
     ACCEPTFILTER = 0x1000,
     BINTIME = 0x2000,
     NO_OFFLOAD = 0x4000,
@@ -224,6 +254,20 @@ struct SockAddrIn {
     std::array<u8, 248> zeroes;
 };
 static_assert(sizeof(SockAddrIn) == 0x100);
+
+/// The 16 bytes of a guest sockaddr_in that are written back (and counted in addrlen).
+constexpr u32 SockAddrInSize = 16;
+
+/// Guest (FreeBSD) sockaddr_in6. Written from: FreeBSD netinet6/in6.h.
+struct SockAddrIn6 {
+    u8 len;
+    u8 family;
+    u16 portno; // network order
+    u32 flowinfo;
+    std::array<u8, 16> addr;
+    u32 scope_id;
+};
+static_assert(sizeof(SockAddrIn6) == 28);
 
 enum class PollEvents : u16 {
     // Using Pascal case because IN is a macro on Windows.

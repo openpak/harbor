@@ -78,12 +78,8 @@ std::vector<Network::ScanData> ScanWifiNetworks(std::chrono::milliseconds deadli
                     sd.flags |= 1;
                 if (nw.bSecurityEnabled)
                     sd.flags |= 2;
+                // [Harbor] No log line: SSIDs of the host's surroundings are private.
                 out.emplace_back(sd);
-
-                char tmp[0x22]{};
-                std::memcpy(tmp, sd.ssid, sd.ssid_len);
-                LOG_INFO(Network, "[WifiScan] +%u \"%s\" quality=%u flags=0x%X", sd.ssid_len, tmp,
-                         sd.quality, sd.flags);
             }
             WlanFreeMemory(list);
         }
@@ -160,8 +156,6 @@ std::vector<Network::ScanData> ScanWifiNetworks(std::chrono::milliseconds deadli
                     sd.flags |= 2;
 
                 out.emplace_back(sd);
-                char tmp[0x22]{};
-                std::memcpy(tmp, sd.ssid, sd.ssid_len);
             }
         }
         have = !out.empty();

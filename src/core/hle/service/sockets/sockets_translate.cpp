@@ -43,9 +43,51 @@ Errno Translate(Network::Errno value) {
         return Errno::INPROGRESS;
     case Network::Errno::ISCONN:
         return Errno::ISCONN;
+    case Network::Errno::HOSTUNREACH:
+        return Errno::HOSTUNREACH;
+    case Network::Errno::NETDOWN:
+        return Errno::NETDOWN;
+    case Network::Errno::NETUNREACH:
+        return Errno::NETUNREACH;
+    case Network::Errno::MSGSIZE:
+        return Errno::MSGSIZE;
+    case Network::Errno::ADDRINUSE:
+        return Errno::ADDRINUSE;
+    case Network::Errno::ADDRNOTAVAIL:
+        return Errno::ADDRNOTAVAIL;
+    case Network::Errno::AFNOSUPPORT:
+        return Errno::AFNOSUPPORT;
+    case Network::Errno::OPNOTSUPP:
+        return Errno::OPNOTSUPP;
+    case Network::Errno::NOPROTOOPT:
+        return Errno::NOPROTOOPT;
+    case Network::Errno::NOMEM:
+        return Errno::NOMEM;
+    case Network::Errno::ALREADY:
+        return Errno::ALREADY;
+    case Network::Errno::NOBUFS:
+        return Errno::NOBUFS;
+    case Network::Errno::ACCES:
+        return Errno::ACCES;
+    case Network::Errno::PROTONOSUPPORT:
+        return Errno::PROTONOSUPPORT;
+    case Network::Errno::DESTADDRREQ:
+        return Errno::DESTADDRREQ;
+    case Network::Errno::NOTSOCK:
+        return Errno::NOTSOCK;
+    case Network::Errno::INTR:
+        return Errno::INTR;
+    case Network::Errno::FAULT:
+        return Errno::FAULT;
+    case Network::Errno::PROTOTYPE:
+        return Errno::PROTOTYPE;
+    case Network::Errno::HOSTDOWN:
+        return Errno::HOSTDOWN;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented errno={}", value);
-        return Errno::SUCCESS;
+        // [Harbor] An unmapped host error is EINVAL, never SUCCESS: a failed call reported as a
+        // success hands the guest a result it then trusts.
+        // Written from: emulator-parity-ledger §2 Sockets ("Unmapped host errno is EINVAL").
+        return Errno::INVAL;
     }
 }
 
@@ -136,6 +178,7 @@ Network::Domain Translate(Domain domain) {
     case Domain::Unspecified:
         return Network::Domain::Unspecified;
     case Domain::INET:
+    case Domain::INET6: // [Harbor] host IPv4; bsd translates the v4-mapped addresses
         return Network::Domain::INET;
     default:
         UNIMPLEMENTED_MSG("Unimplemented domain={}", domain);

@@ -50,6 +50,24 @@ enum class Errno {
     MSGSIZE,
     INPROGRESS,
     ISCONN,
+    // Harbor: the errnos a console reports that used to collapse into OTHER (and from there
+    // into a guest SUCCESS). Written from: POSIX errno(3), emulator-parity-ledger §2 Sockets.
+    ADDRINUSE,
+    ADDRNOTAVAIL,
+    AFNOSUPPORT,
+    OPNOTSUPP,
+    NOPROTOOPT,
+    NOMEM,
+    ALREADY,
+    NOBUFS,
+    ACCES,
+    PROTONOSUPPORT,
+    DESTADDRREQ,
+    NOTSOCK,
+    INTR,
+    FAULT,
+    PROTOTYPE,
+    HOSTDOWN,
     OTHER,
 };
 

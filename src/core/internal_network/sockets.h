@@ -20,6 +20,36 @@ namespace Network {
 
 struct ProxyPacket;
 
+// Harbor: the rest of the guest (FreeBSD-numbered) message flags Recv/Send translate.
+// FLAG_MSG_PEEK and FLAG_MSG_DONTWAIT live in common/socket_types.h.
+// Written from: FreeBSD sys/socket.h via recv(2)/send(2).
+constexpr int FLAG_MSG_OOB = 0x1;
+constexpr int FLAG_MSG_DONTROUTE = 0x4;
+constexpr int FLAG_MSG_WAITALL = 0x40;
+
+// Harbor: integer socket options the bsd service passes through to the host.
+enum class SockOpt {
+    ReuseAddr,
+    ReusePort,
+    KeepAlive,
+    Broadcast,
+    OobInline,
+    SndBuf,
+    RcvBuf,
+    SndLowat,
+    RcvLowat,
+    Type,
+    TcpNoDelay,
+    TcpMaxSeg,
+    TcpKeepIdle,
+    TcpKeepIntvl,
+    TcpKeepCnt,
+    IpTos,
+    IpTtl,
+    IpMulticastTtl,
+    IpMulticastLoop,
+};
+
 class SocketBase {
 public:
 #ifndef _WIN32
@@ -86,6 +116,27 @@ public:
     virtual Errno SetNonBlock(bool enable) = 0;
 
     virtual std::pair<Errno, Errno> GetPendingError() = 0;
+
+    // Harbor: generic options. Sockets that have no host side (the LDN proxy) accept them all.
+    virtual Errno SetIntOption(SockOpt opt, s32 value) {
+        return Errno::SUCCESS;
+    }
+    virtual std::pair<s32, Errno> GetIntOption(SockOpt opt) {
+        return {0, Errno::SUCCESS};
+    }
+    /// Timeout in milliseconds (0 = none).
+    virtual std::pair<u32, Errno> GetTimeoutOption(bool send) {
+        return {0, Errno::SUCCESS};
+    }
+    virtual std::pair<std::pair<bool, u32>, Errno> GetLinger() {
+        return {{false, 0}, Errno::SUCCESS};
+    }
+    virtual Errno SetMulticastMembership(bool join, IPv4Address group, IPv4Address iface) {
+        return Errno::SUCCESS;
+    }
+    virtual Errno SetMulticastInterface(IPv4Address iface) {
+        return Errno::SUCCESS;
+    }
 
     virtual bool IsOpened() const = 0;
 
@@ -161,11 +212,24 @@ public:
     template <typename T>
     std::pair<T, Errno> GetSockOpt(SOCKET fd, int option);
 
+    Errno SetIntOption(SockOpt opt, s32 value) override;
+    std::pair<s32, Errno> GetIntOption(SockOpt opt) override;
+    std::pair<u32, Errno> GetTimeoutOption(bool send) override;
+    std::pair<std::pair<bool, u32>, Errno> GetLinger() override;
+    Errno SetMulticastMembership(bool join, IPv4Address group, IPv4Address iface) override;
+    Errno SetMulticastInterface(IPv4Address iface) override;
+
     bool IsOpened() const override;
 
     void HandleProxyPacket(const ProxyPacket& packet) override;
 
+    bool IsNonBlocking() const {
+        return is_non_blocking;
+    }
+
 private:
+    int TranslateMsgFlags(int flags, bool& toggle_nonblock) const;
+
     bool is_non_blocking = false;
 };
 
