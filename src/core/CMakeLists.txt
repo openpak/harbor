@@ -1293,4 +1293,6 @@ else()
     target_sources(core PRIVATE hle/service/ssl/ssl_backend_none.cpp)
 endif()
 
+include(openpak/openpak.cmake)
+
 create_target_directory_groups(core)
