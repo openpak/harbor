@@ -53,8 +53,22 @@ Host problems found on the way, which phase 2 or 4 must fix:
   already steers Adreno 6xx users to Turnip; the Eden Harbor must as well.
 - Log: `scratch/harbor-eden/run/phone/stock-qlaunch-crash-29852.txt`.
 
-## Still open for gate 1
+### Second phone run, on Turnip (2026-10-07)
 
-- Rerun the phone timing on Turnip, including NetConnect and PlayerSelect against Harbor's 2.76 s and
-  2.54 s (risk 2 in the plan).
-- An API 33+ device for the mainline APK.
+- The first Turnip attempt still used the stock driver. The installed package was KIMCHI's Turnip
+  v25.3.0-R11, built for Adreno 7xx (`vulkan.ad07xx.so`); on the Adreno 650 Eden fell back to the
+  system driver without saying so, and crashed again. On the same stock driver one boot also died in
+  a CPU core thread (SIGSEGV through `WaitSynchronization`), logged in `run/phone/crash-cpucore-4563.txt`.
+  Harbor's wizard must filter drivers by GPU family, as the Ryujinx Harbor's catalogue already does,
+  and say when it falls back.
+- With **MrPurple Turnip T30** (`turnip_mrpurple_T30-toasted.adpkg.zip`, sha256 `f65b2d33…3227`,
+  driver `26.3.0-T30-1.4.359`), stock Eden runs firmware 23.0.1 HOME on the phone with the owner's
+  library on the tiles, at 174 FPS, without crashing.
+- qlaunch load → lock screen: about 4 s. HOME with tiles was up within 13 s of loading; that includes
+  the owner unlocking it by hand, so it is not a clean measurement.
+
+## Still open
+
+- NetConnect and PlayerSelect timing on the phone, against Harbor's 2.76 s and 2.54 s (risk 2 in the
+  plan). Moved to the start of phase 2.
+- An API 33+ device for the mainline APK. Not a blocker (owner).
