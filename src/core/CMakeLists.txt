@@ -623,6 +623,8 @@ add_library(core STATIC
     hle/service/caps/caps_c.h
     hle/service/caps/caps_manager.cpp
     hle/service/caps/caps_manager.h
+    hle/service/caps/caps_overlay_screenshot.cpp
+    hle/service/caps/caps_overlay_screenshot.h
     hle/service/caps/caps_result.h
     hle/service/caps/caps_sc.cpp
     hle/service/caps/caps_sc.h
