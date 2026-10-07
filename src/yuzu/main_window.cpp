@@ -21,6 +21,8 @@
 #include "updater/update_dialog.h"
 
 #include "common/fs/ryujinx_compat.h"
+#include "harbor_setup/harbor_setup.h"
+#include "harbor_setup/record.h"
 #include "main_window.h"
 #include "network/network.h"
 #include "qt_common/discord/discord.h"
@@ -439,6 +441,23 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
+    // Harbor console mode: the setup's folders are the library. The scan still registers every game,
+    // DLC and update with the content provider (what qlaunch and ns read), but no list is shown.
+    if (const auto harbor = HarborSetup::LoadRecord(HarborSetup::RecordPath()); harbor.completed) {
+        harbor_console = true;
+        HarborSetup::ApplyConsolePreset();
+        UISettings::values.game_dirs.clear();
+        for (const auto& dir : harbor.game_dirs.value_or(std::vector<std::string>{})) {
+            UISettings::values.game_dirs.append(UISettings::GameDir{dir, true, false});
+        }
+        // Updates and DLC: NSP/XCI under the DLC and update folders (any depth) through the external
+        // content provider, rebuilt here so it scans them now; those beside the games through the scan.
+        Settings::values.external_content_dirs = harbor.AutoloadDirs();
+        Settings::values.ext_content_from_game_dirs.SetValue(true);
+        QtCommon::system->GetFileSystemController().CreateFactories(*QtCommon::vfs);
+        game_list->hide();
+        game_list_placeholder->hide();
+    }
     game_list->PopulateAsync(UISettings::values.game_dirs);
 
     // Set up game list mode checkboxes.
@@ -550,6 +569,18 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 QString::fromStdString(hbl_path),
                 LibraryAppletParameters(0x010000000000100Dull, Service::AM::AppletId::QLaunch));
         }
+    }
+
+    // Harbor console mode: HOME boots once the library scan has registered the games.
+    if (harbor_console && !emulation_running) {
+        connect(
+            game_list, &GameList::PopulatingCompleted, this,
+            [this] {
+                if (!emulation_running) {
+                    LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
+                }
+            },
+            Qt::SingleShotConnection);
     }
 }
 
@@ -2157,7 +2188,9 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
-    if (game_list->IsEmpty()) {
+    if (harbor_console) {
+        // Harbor console mode shows no game list; a stopped-console page comes later.
+    } else if (game_list->IsEmpty()) {
         game_list_placeholder->show();
     } else {
         game_list->show();
@@ -2688,7 +2721,7 @@ void MainWindow::OnGameListAddDirectory() {
 }
 
 void MainWindow::OnGameListShowList(bool show) {
-    if (emulation_running && ui->action_Single_Window_Mode->isChecked())
+    if (harbor_console || (emulation_running && ui->action_Single_Window_Mode->isChecked()))
         return;
     game_list->setVisible(show);
     game_list_placeholder->setVisible(!show);

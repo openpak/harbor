@@ -539,6 +539,8 @@ private:
 
     // Whether emulation is currently running in yuzu.
     bool emulation_running = false;
+    // Harbor console mode: a completed setup boots the HOME menu, and no game list is shown.
+    bool harbor_console = false;
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
