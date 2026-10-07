@@ -21,6 +21,7 @@
 #include "updater/update_dialog.h"
 
 #include "common/fs/ryujinx_compat.h"
+#include "core/openpak/boot_connection.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/record.h"
 #include "main_window.h"
@@ -88,6 +89,7 @@
 #include <QShortcut>
 #include <QStatusBar>
 #include <QtConcurrentRun>
+#include <thread>
 
 // Qt Common //
 #include "qt_common/config/shared_translation.h"
@@ -428,6 +430,20 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     }
 #endif
 
+    // Harbor console mode: a completed setup boots the HOME menu, and its folders are the library.
+    // Set before the content providers are built, so the external content provider scans the
+    // setup's DLC and update folders at every boot (a new update or DLC is in the next boot).
+    if (const auto harbor = HarborSetup::LoadRecord(HarborSetup::RecordPath());
+        harbor.completed && HarborSetup::DesktopConsoleAllowed()) {
+        harbor_console = true;
+        HarborSetup::ApplyConsolePreset();
+        HarborSetup::ApplyRecordFolders(harbor);
+        UISettings::values.game_dirs.clear();
+        for (const auto& dir : harbor.game_dirs.value_or(std::vector<std::string>{})) {
+            UISettings::values.game_dirs.append(UISettings::GameDir{dir, true, false});
+        }
+    }
+
     // Setup content providers.
     QtCommon::SetupContentProviders();
 
@@ -442,22 +458,21 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (Settings::values.use_dev_keys.GetValue()) {
         Core::Crypto::KeyManager::Instance().ReloadKeys();
     }
-    // Harbor console mode: the setup's folders are the library. The scan still registers every game,
-    // DLC and update with the content provider (what qlaunch and ns read), but no list is shown.
-    if (const auto harbor = HarborSetup::LoadRecord(HarborSetup::RecordPath()); harbor.completed) {
-        harbor_console = true;
-        HarborSetup::ApplyConsolePreset();
-        UISettings::values.game_dirs.clear();
-        for (const auto& dir : harbor.game_dirs.value_or(std::vector<std::string>{})) {
-            UISettings::values.game_dirs.append(UISettings::GameDir{dir, true, false});
-        }
-        // Updates and DLC: NSP/XCI under the DLC and update folders (any depth) through the external
-        // content provider, rebuilt here so it scans them now; those beside the games through the scan.
-        Settings::values.external_content_dirs = harbor.AutoloadDirs();
-        Settings::values.ext_content_from_game_dirs.SetValue(true);
-        QtCommon::system->GetFileSystemController().CreateFactories(*QtCommon::vfs);
+    if (harbor_console) {
+        // The scan still registers every game, DLC and update with the content provider (what
+        // qlaunch and ns read), but no list is shown.
         game_list->hide();
         game_list_placeholder->hide();
+
+        // OpenPak connects while the library is scanned (up to ~10 s on a first connect).
+        harbor_status = new QLabel(tr("Connecting to OpenPak..."), this);
+        harbor_status->setAlignment(Qt::AlignCenter);
+        ui->horizontalLayout->addWidget(harbor_status);
+        harbor_connect = std::thread([this] {
+            HarborSetup::ConnectOpenPak();
+            QMetaObject::invokeMethod(
+                this, [this] { HarborConsoleStep(HarborConsoleConnected); }, Qt::QueuedConnection);
+        });
     }
     game_list->PopulateAsync(UISettings::values.game_dirs);
 
@@ -577,7 +592,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             BootGame(QString::fromStdString(lp.filepath), ApplicationAppletParameters());
         } else if (lp.launch_setup) {
             LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::Starter), std::nullopt);
-        } else if (lp.launch_qlaunch) {
+        } else if (lp.launch_qlaunch && !harbor_console) {
+            // (Console mode boots HOME itself, once the library and OpenPak are ready.)
             LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
         } else if (lp.launch_hlaunch) {
             std::filesystem::path const sd_dir =
@@ -589,20 +605,50 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         }
     }
 
-    // Harbor console mode: HOME boots once the library scan has registered the games.
-    if (harbor_console && !emulation_running) {
+    // Harbor console mode: HOME boots once the library scan has registered the games and OpenPak
+    // has connected (or found it cannot).
+    if (harbor_console) {
         connect(
             game_list, &GameList::PopulatingCompleted, this,
-            [this] {
-                if (!emulation_running) {
-                    LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
-                }
-            },
-            Qt::SingleShotConnection);
+            [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
+    }
+}
+
+void MainWindow::HarborConsoleStep(int done) {
+    harbor_console_steps |= done;
+    if (harbor_console_steps != (HarborConsoleScanned | HarborConsoleConnected) || emulation_running) {
+        return;
+    }
+    if (harbor_status) {
+        harbor_status->hide();
+    }
+    LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
+}
+
+void MainWindow::HarborRestartConsole() {
+    // As a console does on a restart, the library is read again: an update or DLC added meanwhile
+    // is there for HOME.
+    LOG_INFO(Frontend, "harbor: the console restarts");
+    QtCommon::system->GetContentProvider().Refresh();
+    harbor_console_steps = HarborConsoleConnected;
+    connect(
+        game_list, &GameList::PopulatingCompleted, this,
+        [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
+    game_list->PopulateAsync(UISettings::values.game_dirs);
+}
+
+void MainWindow::HarborStopOpenPak() {
+    if (harbor_connect.joinable()) {
+        harbor_connect.join();
+    }
+    if (harbor_console && !std::exchange(harbor_openpak_stopped, true)) {
+        OpenPak::BootConnection::Stop();
     }
 }
 
 MainWindow::~MainWindow() {
+    HarborStopOpenPak();
+
     // will get automatically deleted otherwise
     if (render_window->parent() == nullptr) {
         delete render_window;
@@ -1858,6 +1904,12 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
     if (!QtCommon::Content::CheckGameFirmware(params.program_id))
         return false;
 
+    // Harbor console mode: OpenPak is connected before the console boots (normally done already
+    // while the library was scanned; the call returns the first result).
+    if (harbor_console) {
+        OpenPak::BootConnection::Run(Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir));
+    }
+
     /** Exec */
     const Core::SystemResultStatus result{
         QtCommon::system->Load(*render_window, filename.toStdString(), params)};
@@ -2207,7 +2259,19 @@ void MainWindow::OnEmulationStopped() {
     loading_screen->hide();
     loading_screen->Clear();
     if (harbor_console) {
-        // Harbor console mode shows no game list; a stopped-console page comes later.
+        // Harbor console mode shows no game list; a stopped-console page comes later. HOME's power
+        // menu: a restart boots the console again, turning it off closes Harbor.
+        switch (HarborSetup::ConsolePowerRequest(*QtCommon::system)) {
+        case HarborSetup::PowerRequest::Reboot:
+            QTimer::singleShot(0, this, [this] { HarborRestartConsole(); });
+            break;
+        case HarborSetup::PowerRequest::Shutdown:
+            LOG_INFO(Frontend, "harbor: the console turned off");
+            QTimer::singleShot(0, this, [this] { close(); });
+            break;
+        case HarborSetup::PowerRequest::None:
+            break;
+        }
     } else if (game_list->IsEmpty()) {
         game_list_placeholder->show();
     } else {
@@ -4594,6 +4658,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     // Shutdown session if the emu thread is active...
     if (QtCommon::emu_thread != nullptr)
         ShutdownGame();
+
+    // Harbor: OpenPak hears that the active user is going (the harness exits without destructors).
+    HarborStopOpenPak();
 
     render_window->close();
     multiplayer_state->Close();

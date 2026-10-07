@@ -9,7 +9,12 @@
 
 #include <string>
 
+#include "core/openpak/boot_connection.h"
 #include "harbor_setup/record.h"
+
+namespace Core {
+class System;
+}
 
 namespace HarborSetup {
 
@@ -43,12 +48,33 @@ int RunWizard(Host& host);
 /// stand-ins) and handheld mode. Changes Settings::values; the caller saves them if its config reloads.
 void ApplyConsolePreset();
 
+/// The setup's DLC and update folders as Eden's external content folders, and the add-ons beside
+/// the games too. Set at every boot, before the content providers are built and the library is
+/// scanned, so HOME and every title see the latest update and DLC (a new one the next boot).
+void ApplyRecordFolders(const Record& record);
+
+/// Before every console boot, off the UI thread: the platform's password store for OpenPak's
+/// credentials (frontend_common/secret_store.h), then OpenPak's boot connection. Blocking: under
+/// a second online, ~2 s with the site down, up to ~10 s on a first connect; later calls return the
+/// first result at once. Android: call from a JNI method on a Java thread.
+OpenPak::BootResult ConnectOpenPak();
+
+/// What the HOME menu asked for when it stopped the console (its power menu).
+enum class PowerRequest { None, Shutdown, Reboot };
+PowerRequest ConsolePowerRequest(Core::System& system);
+
 /// Android back: Back on the wizard's current page. Safe from any thread.
 void RequestBack();
 
 /// Desktop: before Qt starts. Runs the wizard when the data directory is not ready or `--harbor-setup`
-/// is given (the flag is removed from argv).
+/// is given (the flag is removed from argv). Under the test harness (HARBOR_CONTROL) or with an
+/// explicit boot target (--qlaunch, a game path) it does nothing, unless `--harbor-setup` or
+/// `--harbor-console` is given.
 /// Returns -1 when no setup was needed, 0 when setup completed, 1 when the window was closed: quit.
 int RunDesktopIfNeeded(int& argc, char** argv);
+
+/// Desktop: whether this process may run in console mode (set by RunDesktopIfNeeded; false under the
+/// test harness or with an explicit boot target unless --harbor-setup / --harbor-console was given).
+bool DesktopConsoleAllowed();
 
 } // namespace HarborSetup

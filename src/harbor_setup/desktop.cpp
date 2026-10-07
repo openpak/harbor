@@ -8,6 +8,8 @@
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <string_view>
 
 #include <SDL3/SDL.h>
 
@@ -130,11 +132,16 @@ private:
 
 } // namespace
 
-int RunDesktopIfNeeded(int& argc, char** argv) {
-    bool forced = false;
+namespace {
+
+bool console_allowed = false;
+
+/// Removes `flag` from argv; whether it was there.
+bool TakeFlag(int& argc, char** argv, const char* flag) {
+    bool found = false;
     for (int i = 1; i < argc;) {
-        if (std::strcmp(argv[i], "--harbor-setup") == 0) {
-            forced = true;
+        if (std::strcmp(argv[i], flag) == 0) {
+            found = true;
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
             }
@@ -144,11 +151,52 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
             i++;
         }
     }
+    return found;
+}
 
-    // Test harness runs (HARBOR_CONTROL) set up their data directory themselves and start --qlaunch.
-    if (!forced && std::getenv("HARBOR_CONTROL")) {
+/// Whether the command line names what to boot: --qlaunch, --hlaunch, --setup (one or two dashes),
+/// -g/--game, or a game path (core/launch_params.cpp).
+bool ExplicitBoot(int argc, char** argv) {
+    for (int i = 1; i < argc; i++) {
+        const std::string_view arg = argv[i];
+        for (const std::string_view target : {"qlaunch", "hlaunch", "setup"}) {
+            if (arg == std::string("-").append(target) || arg == std::string("--").append(target)) {
+                return true;
+            }
+        }
+        if (arg == "-g" || arg == "--game" || arg.starts_with("--game=")) {
+            return true;
+        }
+        // Options that take the next word as their value.
+        if (arg == "-c" || arg == "--config" || arg == "-m" || arg == "--multiplayer" || arg == "-u" ||
+            arg == "--user" || arg == "-p" || arg == "--program" || arg == "-x" || arg == "--filter" ||
+            arg == "-i" || arg == "--input-profile" || arg == "-d" || arg == "--debug") {
+            i++;
+            continue;
+        }
+        if (!arg.empty() && arg[0] != '-') {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool DesktopConsoleAllowed() {
+    return console_allowed;
+}
+
+int RunDesktopIfNeeded(int& argc, char** argv) {
+    const bool forced = TakeFlag(argc, argv, "--harbor-setup");
+    const bool console = TakeFlag(argc, argv, "--harbor-console");
+
+    // Test harness runs (HARBOR_CONTROL) and an explicit boot target (--qlaunch, a game) boot what
+    // was asked: no wizard and no console mode, unless --harbor-setup or --harbor-console says so.
+    if (!forced && !console && (std::getenv("HARBOR_CONTROL") || ExplicitBoot(argc, argv))) {
         return -1;
     }
+    console_allowed = true;
     const auto readiness = CheckReadiness();
     if (!forced && readiness.Ready()) {
         return -1;
