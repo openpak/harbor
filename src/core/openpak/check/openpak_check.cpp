@@ -5,7 +5,8 @@
 //
 //   harbor-openpak-check selftest [--online]
 //       The signed ceiling (good and bad signatures, rollback), RedirectFor's precedence, the
-//       fail-closed families, the CA pin (a mismatch is never written) and the log redaction.
+//       fail-closed families, the CA pin (a mismatch is never written), the log redaction and
+//       Save Data Cloud (the archive list, DataInfo's layout, the olsc daemon settings file).
 //       --online also pins the public CA with a wrong digest against openpak.org (read-only).
 //       Prints "selftest: all checks passed" and exits 0, or names the failed check and exits 1.
 //
@@ -18,6 +19,7 @@
 
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -28,6 +30,7 @@
 #include "common/redact.h"
 #include "core/openpak/boot_connection.h"
 #include "core/openpak/network_profile.h"
+#include "core/openpak/olsc.h"
 #include "core/openpak/platform.h"
 
 namespace np = OpenPak::NetworkProfile;
@@ -242,6 +245,63 @@ void FetchChecks() {
           "an unparseable 200 is not confirmed and leaves the stored profile");
 }
 
+void OlscChecks(const std::filesystem::path& dir) {
+    namespace olsc = OpenPak::Olsc;
+    std::puts("save data cloud");
+    // The saves service's list reply (internal/switchscsi archive JSON), trimmed.
+    const std::string body = R"({"save_data_archives":[
+        {"id":7,"nsa_id":"00000000000000aa","application_id":"0100A00000BB0000","data_size":4096,
+         "datatype":0,"status":"fixed","num_of_partitions":2,"launch_required_version":65536,
+         "previous_save_data_archive_id":null,"series_id":9,"saved_at_as_unixtime":1000,
+         "finished_at_as_unixtime":1010,"acd_index":3,"platform_key_generation":1},
+        {"id":8,"application_id":"0100A00000BB0000","data_size":8192,"status":"fixed",
+         "saved_at_as_unixtime":2000,"finished_at_as_unixtime":null},
+        {"id":9,"application_id":"0100A00000BB0000","status":"uploading","saved_at_as_unixtime":3000},
+        {"id":10,"application_id":"0100A00000BB0000","status":"hand_over"},
+        {"application_id":"0100A00000BB0000","status":"fixed"}]})";
+    const auto list = olsc::ParseArchiveList(body);
+    Check(list && list->size() == 3, "an archive list keeps fixed and uploading, drops the rest");
+    Check(list && (*list)[0].nsa_id == 0xaa && (*list)[0].application_id == 0x0100A00000BB0000 &&
+              (*list)[0].launch_required_version == 65536 && (*list)[0].acd_index == 3,
+          "archive fields parse as the sysmodule reads them");
+    Check(!olsc::ParseArchiveList("{}") && !olsc::ParseArchiveList("not json"),
+          "a reply that is not a list is refused");
+    const auto latest = list ? olsc::LatestFor(*list, 0x0100A00000BB0000) : std::nullopt;
+    Check(latest && latest->id == 8, "GetDataInfo answers the newest fixed archive");
+    Check(list && !olsc::LatestFor(*list, 0x0100000000000001), "another title has no cloud data");
+
+    olsc::ArchiveInfo a;
+    a.id = 0x1122334455667788;
+    a.application_id = 0x0100A00000BB0000;
+    a.status = olsc::StatusUploading;
+    a.data_size = 0x4000;
+    a.saved_at = 0x0A0B;
+    a.finished_at = 0x0C0D;
+    a.acd_index = 5;
+    const auto info = olsc::PackDataInfo(a);
+    std::uint64_t word = 0;
+    std::memcpy(&word, info.data() + 0x08, 8);
+    Check(info[0] == 0x88 && word == 0x0100A00000BB0000 && info[0x10] == 2 && info[0x11] == 0 &&
+              info[0x18] == 0x00 && info[0x19] == 0x40 && info[0x20] == 0x0B &&
+              info[0x28] == 0x0D && info[0x30] == 5 && info[0x37] == 0,
+          "DataInfo is laid out as GetDataInfo copies it");
+
+    const auto file = dir / "olsc-settings.json";
+    const std::string uid = "00112233445566778899aabbccddeeff";
+    {
+        olsc::DaemonSettings settings{file};
+        Check(!settings.GlobalAutoUpload(uid) && !settings.GlobalAutoDownload(uid),
+              "an unknown user reads as off");
+        settings.SetGlobalAutoUpload(uid, true);
+        settings.SetApplicationAutoTransfer(uid, 0x0100A00000BB0000, true);
+    }
+    olsc::DaemonSettings reread{file};
+    Check(reread.GlobalAutoUpload(uid) && !reread.GlobalAutoDownload(uid) &&
+              reread.ApplicationAutoTransfer(uid, 0x0100A00000BB0000) &&
+              !reread.ApplicationAutoTransfer(uid, 0x0100000000000001),
+          "the olsc daemon settings survive a restart");
+}
+
 void RedactChecks() {
     std::puts("redaction");
     Check(fmt::format("{}", Common::Redact(0x1234ULL)) == "<redacted>", "Redact hides a value");
@@ -275,6 +335,7 @@ int SelfTest(bool online) {
     CaChecks(online);
     FetchChecks();
     RedactChecks();
+    OlscChecks(dir);
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {
