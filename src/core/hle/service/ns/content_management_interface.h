@@ -24,6 +24,7 @@ public:
     Result GetTotalSpaceSize(Out<s64> out_total_space_size, FileSys::StorageId storage_id);
     Result GetFreeSpaceSize(Out<s64> out_free_space_size, FileSys::StorageId storage_id);
     Result GetUnknown71(Out<u64> out_value_a, Out<u64> out_value_b, u8 flag);
+    Result IsAnyApplicationRunning(Out<bool> out_is_running);
 };
 
 } // namespace Service::NS

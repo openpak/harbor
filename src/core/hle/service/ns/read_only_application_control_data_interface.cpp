@@ -136,12 +136,13 @@ IReadOnlyApplicationControlDataInterface::IReadOnlyApplicationControlDataInterfa
         {0, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData>, "GetApplicationControlData"},
         {1, D<&IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage>, "GetApplicationDesiredLanguage"},
         {2, D<&IReadOnlyApplicationControlDataInterface::ConvertApplicationLanguageToLanguageCode>, "ConvertApplicationLanguageToLanguageCode"},
-        {3, nullptr, "ConvertLanguageCodeToApplicationLanguage"},
+        {3, D<&IReadOnlyApplicationControlDataInterface::ConvertLanguageCodeToApplicationLanguage>, "ConvertLanguageCodeToApplicationLanguage"},
         {4, nullptr, "SelectApplicationDesiredLanguage"},
         {5, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData2>, "GetApplicationControlData"},
         {10, &IReadOnlyApplicationControlDataInterface::ListApplicationIcon, "ListApplicationIcon"},
         {13, &IReadOnlyApplicationControlDataInterface::ListApplicationTitle, "ListApplicationTitle"},
         {19, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData3>, "GetApplicationControlData"},
+        {20, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData4>, "GetApplicationControlData4"}, //21.0.0+
         {23, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData3>, "GetApplicationControlData"}, //23.0.0+
     };
     // clang-format on
@@ -296,6 +297,34 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationControlData2(
 
     *out_total_size = (static_cast<u64>(total_available) << 32) | static_cast<u64>(flag1);
     R_SUCCEED();
+}
+
+Result IReadOnlyApplicationControlDataInterface::ConvertLanguageCodeToApplicationLanguage(
+    Out<ApplicationLanguage> out_application_language, u64 language_code) {
+    const auto application_language =
+        ConvertToApplicationLanguage(static_cast<Set::LanguageCode>(language_code));
+    if (application_language == std::nullopt) {
+        LOG_ERROR(Service_NS, "Language code not found! language_code={:#x}", language_code);
+        R_THROW(Service::NS::ResultApplicationLanguageNotFound);
+    }
+
+    *out_application_language = *application_language;
+    R_SUCCEED();
+}
+
+Result IReadOnlyApplicationControlDataInterface::GetApplicationControlData4(
+    OutBuffer<BufferAttr_HipcMapAlias> out_buffer, Out<u32> out_flags_a, Out<u32> out_flags_b,
+    Out<u32> out_actual_size, GetApplicationControlData4Input input) {
+    // Unnamed (21.0.0+). overlayDisp calls it on a "friend is online" pop-up with the input of 19
+    // plus a trailing u32 (seen as 1) and a 0x14000 map buffer; answered as 19 (as the Ryujinx
+    // Harbor does).
+    LOG_WARNING(Service_NS,
+                "unknown contract: IReadOnlyApplicationControlDataInterface 20 for {:016X} "
+                "(source {}, flags {}/{}, extra {:#x}); answered as 19",
+                input.application_id, input.control_source, input.flag1, input.flag2, input.extra);
+    R_RETURN(GetApplicationControlData3(out_buffer, out_flags_a, out_flags_b, out_actual_size,
+                                        input.control_source, input.flag1, input.flag2,
+                                        input.application_id));
 }
 
 void IReadOnlyApplicationControlDataInterface::ListApplicationIcon(HLERequestContext& ctx) {
