@@ -86,7 +86,10 @@ constexpr size_t SlabCountKDeviceAddressSpace = 300;
 constexpr size_t SlabCountKSession = 1133;
 constexpr size_t SlabCountKLightSession = 100;
 constexpr size_t SlabCountKObjectName = 7;
-constexpr size_t SlabCountKResourceLimit = 5;
+// The console's kernel has 5: pm shares one limit per process category. Eden creates one per
+// process, so a HOME session (qlaunch, overlayDisp, starter or a title, nested library applets)
+// runs past 5 and the next applet's process creation gets no limit object.
+constexpr size_t SlabCountKResourceLimit = 16;
 constexpr size_t SlabCountKDebug = Core::Hardware::NUM_CPU_CORES;
 constexpr size_t SlabCountKIoPool = 1;
 constexpr size_t SlabCountKIoRegion = 6;

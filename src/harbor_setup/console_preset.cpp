@@ -5,6 +5,7 @@
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "frontend_common/secret_store.h"
 #include "harbor_setup/harbor_setup.h"
 
@@ -42,16 +43,14 @@ OpenPak::BootResult ConnectOpenPak() {
 }
 
 PowerRequest ConsolePowerRequest(Core::System& system) {
-    // TODO(harbor): needs AppletManager::GetPowerRequest() from the am stream (branch p2/am, not
-    // in harbor yet). Once it is merged:
-    //   switch (system.GetAppletManager().GetPowerRequest()) {
-    //   case Service::AM::AppletManager::PowerRequest::Reboot: return PowerRequest::Reboot;
-    //   case Service::AM::AppletManager::PowerRequest::Shutdown: return PowerRequest::Shutdown;
-    //   default: return PowerRequest::None;
-    //   }
-    // Until then a restart or power-off from HOME's power menu just stops the console.
-    static_cast<void>(system);
-    return PowerRequest::None;
+    switch (system.GetAppletManager().GetPowerRequest()) {
+    case Service::AM::AppletManager::PowerRequest::Reboot:
+        return PowerRequest::Reboot;
+    case Service::AM::AppletManager::PowerRequest::Shutdown:
+        return PowerRequest::Shutdown;
+    default:
+        return PowerRequest::None;
+    }
 }
 
 } // namespace HarborSetup
