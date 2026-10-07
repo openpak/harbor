@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <cstdlib>
+
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -121,6 +123,10 @@ void ResourceManager::Initialize() {
                                              motion_update_event);
 
     is_initialized = true;
+
+    if (std::getenv("HARBOR_HID_SELFTEST") != nullptr) {
+        RunInputFocusSelfTest();
+    }
 }
 
 std::shared_ptr<AppletResource> ResourceManager::GetAppletResource() const {
@@ -335,7 +341,8 @@ void ResourceManager::FreeAppletResourceId(u64 aruid) {
 
 void ResourceManager::EnableInput(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnableInput(aruid, is_enabled);
+    EnablePadInput(aruid, is_enabled);
+    EnableTouchScreen(aruid, is_enabled);
 }
 
 void ResourceManager::EnableSixAxisSensor(u64 aruid, bool is_enabled) {
@@ -345,12 +352,18 @@ void ResourceManager::EnableSixAxisSensor(u64 aruid, bool is_enabled) {
 
 void ResourceManager::EnablePadInput(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnablePadInput(aruid, is_enabled);
+    if (applet_resource->EnablePadInput(aruid, is_enabled)) {
+        // The button that closed the applet in front is still down: it must not reach this
+        // aruid as a new press.
+        npad->HoldPressedButtons(aruid);
+    }
 }
 
 void ResourceManager::EnableTouchScreen(u64 aruid, bool is_enabled) {
     std::scoped_lock lock{shared_mutex};
-    applet_resource->EnableTouchScreen(aruid, is_enabled);
+    if (applet_resource->EnableTouchScreen(aruid, is_enabled)) {
+        touch_resource->HoldTouches(aruid);
+    }
 }
 
 NpadVibrationBase* ResourceManager::GetVibrationDevice(

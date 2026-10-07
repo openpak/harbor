@@ -440,7 +440,16 @@ void NPad::RequestPadStateUpdate(Kernel::KernelCore& kernel, u64 aruid, Core::HI
 
     auto& pad_entry = controller.npad_pad_state;
     auto& trigger_entry = controller.npad_trigger_state;
-    const auto button_state = controller.device->GetNpadButtons();
+    auto button_state = ReadHostButtons(controller, aruid);
+
+    // A button held when this aruid got the input back is hidden from it until released.
+    if (auto* data = applet_resource_holder.applet_resource->GetAruidData(aruid); data != nullptr) {
+        auto& held = data->input_focus.held_buttons[NpadIdTypeToIndex(npad_id)];
+        if (held != 0) {
+            button_state.raw = static_cast<Core::HID::NpadButton>(
+                ReleaseHeldButtons(held, static_cast<u64>(button_state.raw)));
+        }
+    }
     const auto stick_state = controller.device->GetSticks();
 
     using btn = Core::HID::NpadButton;
@@ -535,7 +544,8 @@ void NPad::OnUpdate(Kernel::KernelCore& kernel, const Core::Timing::CoreTiming& 
                 }
             }
 
-            if (!data->flag.enable_pad_input) {
+            const bool has_pad_input = data->flag.enable_pad_input != 0;
+            if (!has_pad_input && !data->input_focus.is_managed) {
                 continue;
             }
 
@@ -543,7 +553,21 @@ void NPad::OnUpdate(Kernel::KernelCore& kernel, const Core::Timing::CoreTiming& 
                 continue;
             }
 
-            RequestPadStateUpdate(kernel, aruid, controller.device->GetNpadIdType());
+            if (has_pad_input) {
+                RequestPadStateUpdate(kernel, aruid, controller.device->GetNpadIdType());
+            } else {
+                // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+                // An aruid without the input focus reads the controller at rest, its sampling
+                // numbers still advancing: a lifo frozen on its last entry can hold a button down.
+                if (!controller.is_connected) {
+                    continue;
+                }
+                controller.npad_pad_state.npad_buttons.raw = Core::HID::NpadButton::None;
+                controller.npad_pad_state.l_stick = {};
+                controller.npad_pad_state.r_stick = {};
+                controller.npad_trigger_state.l_analog = 0;
+                controller.npad_trigger_state.r_analog = 0;
+            }
             auto& pad_state = controller.npad_pad_state;
             auto& libnx_state = controller.npad_libnx_state;
             auto& trigger_state = controller.npad_trigger_state;
@@ -1382,6 +1406,41 @@ NpadGcVibrationDevice* NPad::GetGcVibrationDevice(const Core::HID::VibrationDevi
 void NPad::UpdateHandheldAbstractState() {
     std::scoped_lock lock{mutex};
     abstracted_pads[NpadIdTypeToIndex(Core::HID::NpadIdType::Handheld)].Update();
+}
+
+void NPad::HoldPressedButtons(u64 aruid) {
+    std::scoped_lock shared_lock{*applet_resource_holder.shared_mutex};
+    auto* data = applet_resource_holder.applet_resource->GetAruidData(aruid);
+    if (data == nullptr) {
+        return;
+    }
+
+    static_assert(std::tuple_size_v<decltype(data->input_focus.held_buttons)> ==
+                  MaxSupportedNpadIdTypes);
+    for (std::size_t i = 0; i < MaxSupportedNpadIdTypes; ++i) {
+        const auto& controller = GetControllerFromNpadIdType(aruid, IndexToNpadIdType(i));
+        const bool is_connected = controller.device != nullptr && controller.device->IsConnected();
+        data->input_focus.held_buttons[i] =
+            is_connected ? static_cast<u64>(ReadHostButtons(controller, aruid).raw) : 0;
+    }
+}
+
+void NPad::SetSelfTestButtons(std::span<const u64> aruids, Core::HID::NpadButton buttons) {
+    std::scoped_lock shared_lock{*applet_resource_holder.shared_mutex};
+    self_test_aruids.assign(aruids.begin(), aruids.end());
+    self_test_buttons = buttons;
+}
+
+Core::HID::NpadButtonState NPad::ReadHostButtons(const NpadControllerData& controller,
+                                                 u64 aruid) const {
+    if (!self_test_aruids.empty() &&
+        std::find(self_test_aruids.begin(), self_test_aruids.end(), aruid) !=
+            self_test_aruids.end()) {
+        Core::HID::NpadButtonState state{};
+        state.raw = self_test_buttons;
+        return state;
+    }
+    return controller.device->GetNpadButtons();
 }
 
 void NPad::EnableAppletToGetInput(u64 aruid) {
