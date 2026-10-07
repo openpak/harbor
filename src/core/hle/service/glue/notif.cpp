@@ -218,11 +218,11 @@ INotificationServices::INotificationServices(Core::System& system_)
         {530, D<&INotificationServices::LoadApplicationParameter>, "LoadApplicationParameter"},
         {540, D<&INotificationServices::DeleteAlarmSetting>, "DeleteAlarmSetting"},
         {1000, D<&INotificationServices::Initialize>, "Initialize"},
-        {1010, nullptr, "ListNotifications"},
+        {1010, D<&INotificationServices::ListNotifications>, "ListNotifications"},
         {1020, nullptr, "DeleteNotification"},
         {1030, nullptr, "ClearNotifications"},
         {1040, D<&INotificationServices::OpenNotificationSystemEventAccessor>, "OpenNotificationSystemEventAccessor"},
-        {1500, nullptr, "SetNotificationPresentationSetting"},
+        {1500, D<&INotificationServices::SetNotificationPresentationSetting>, "SetNotificationPresentationSetting"},
         {1510, D<&INotificationServices::GetNotificationPresentationSetting>, "GetNotificationPresentationSetting"},
         {2000, nullptr, "GetAlarmSetting"},
         {2001, nullptr, "GetAlarmSettingWithApplicationParameter"},
@@ -283,12 +283,31 @@ Result INotificationServices::OpenNotificationSystemEventAccessor(
     R_SUCCEED();
 }
 
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+Result INotificationServices::ListNotifications(Out<s32> out_count,
+                                                 OutBuffer<BufferAttr_HipcMapAlias> out_notifications) {
+    // No notification is queued on this unit.
+    LOG_DEBUG(Service_NOTIF, "called");
+    *out_count = 0;
+    R_SUCCEED();
+}
+
+Result INotificationServices::SetNotificationPresentationSetting(
+    SetNotificationPresentationSettingInput input) {
+    LOG_DEBUG(Service_NOTIF, "called, channel={}", input.channel);
+
+    presentation_settings[input.channel] = input.setting;
+    R_SUCCEED();
+}
+
 Result INotificationServices::GetNotificationPresentationSetting(
     Out<NotificationPresentationSetting> out_notification_presentation_setting,
     NotificationChannel notification_channel) {
-    LOG_WARNING(Service_NOTIF, "(STUBBED) called");
+    LOG_DEBUG(Service_NOTIF, "called");
 
-    *out_notification_presentation_setting = {};
+    const auto it = presentation_settings.find(static_cast<u32>(notification_channel));
+    *out_notification_presentation_setting =
+        it != presentation_settings.end() ? it->second : NotificationPresentationSetting{};
     R_SUCCEED();
 }
 

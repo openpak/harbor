@@ -33,6 +33,20 @@ public:
 private:
     Result StartGamepadPairing();
     Result CancelGamepadPairing();
+    Result ClearGamepadPairingDatabase();
+    Result GetPairedGamepadCount(Out<u8> out_count);
+    Result AcquireGamepadPairingEvent(Out<bool> out_is_valid,
+                                      OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result IsGamepadPairingStarted(Out<bool> out_is_started);
+    Result StartAudioDeviceDiscovery();
+    Result StopAudioDeviceDiscovery();
+    Result IsDiscoveryingAudioDevice(Out<bool> out_is_discovering);
+    Result ConnectAudioDevice();
+    Result IsConnectingAudioDevice(Out<bool> out_is_connecting);
+    Result DisconnectAudioDevice();
+    Result AcquirePairedAudioDeviceInfoChangedEvent(
+        OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result RemoveAudioDevicePairing();
     Result EnableRadio();
     Result DisableRadio();
     Result IsRadioEnabled(Out<bool> out_is_enabled);
@@ -56,6 +70,9 @@ private:
 
     Kernel::KEvent* radio_event;
     Kernel::KEvent* audio_device_connection_event;
+    Kernel::KEvent* gamepad_pairing_event;
+    Kernel::KEvent* paired_audio_device_info_changed_event;
+    bool gamepad_pairing_started{};
     std::shared_ptr<Service::Set::ISystemSettingsServer> m_set_sys;
 };
 

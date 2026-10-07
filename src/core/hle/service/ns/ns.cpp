@@ -4,7 +4,10 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/hle/service/kernel_helpers.h"
+#include "core/hle/service/ns/async_result.h"
 #include "core/hle/service/ns/develop_interface.h"
+#include "core/hle/service/os/event.h"
 #include "core/hle/service/ns/ns.h"
 #include "core/hle/service/ns/platform_service_manager.h"
 #include "core/hle/service/ns/query_service.h"
@@ -45,14 +48,15 @@ class IVulnerabilityManagerInterface final
     : public ServiceFramework<IVulnerabilityManagerInterface> {
 public:
     explicit IVulnerabilityManagerInterface(Core::System& system_)
-        : ServiceFramework{system_, "ns:vm"} {
+        : ServiceFramework{system_, "ns:vm"}, service_context{system_, "ns:vm"},
+          async_completed_event{service_context} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {1200, D<&IVulnerabilityManagerInterface::NeedsUpdateVulnerability>, "NeedsUpdateVulnerability"},
             {1201, nullptr, "UpdateSafeSystemVersionForDebug"},
             {1202, nullptr, "GetSafeSystemVersion"},
             {3100, D<&IVulnerabilityManagerInterface::GetSafeSystemVersionCheckInfo>, "GetSafeSystemVersionCheckInfo"},
-            {3101, nullptr, "RequestUpdateSafeSystemVersionCheckInfo"},
+            {3101, D<&IVulnerabilityManagerInterface::RequestUpdateSafeSystemVersionCheckInfo>, "RequestUpdateSafeSystemVersionCheckInfo"},
             {3102, D<&IVulnerabilityManagerInterface::ResetSafeSystemVersionCheckInfo>, "ResetSafeSystemVersionCheckInfo"},
         };
         // clang-format on
@@ -76,6 +80,22 @@ public:
         LOG_WARNING(Service_NS, "(STUBBED)");
         R_SUCCEED();
     }
+
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base). On a console ns asks nim
+    // for the lowest system version still considered safe (a network request). Nothing is asked
+    // here: the request completes at once.
+    Result RequestUpdateSafeSystemVersionCheckInfo(OutInterface<IAsyncResult> out_interface,
+                                                   OutCopyHandle<Kernel::KReadableEvent> out_event) {
+        LOG_INFO(Service_NS, "safe system version check requested: completed");
+        async_completed_event.Signal(system.Kernel());
+        *out_event = async_completed_event.GetHandle();
+        *out_interface = std::make_shared<IAsyncResult>(system, &async_completed_event);
+        R_SUCCEED();
+    }
+
+private:
+    KernelHelpers::ServiceContext service_context;
+    Event async_completed_event;
 };
 
 void LoopProcess(Core::System& system) {

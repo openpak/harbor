@@ -19,16 +19,17 @@ class INpnsSystem final : public ServiceFramework<INpnsSystem> {
 public:
     explicit INpnsSystem(Core::System& system_)
         : ServiceFramework{system_, "npns:s"}, service_context{system, "npns:s"},
-          get_receive_event{service_context}, get_request_change_state_cancel_event{service_context} {
+          get_receive_event{service_context}, get_state_change_event{service_context},
+          get_request_change_state_cancel_event{service_context} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {1, nullptr, "ListenAll"},
+            {1, C<&INpnsSystem::ListenAll>, "ListenAll"},
             {2, C<&INpnsSystem::ListenTo>, "ListenTo"},
             {3, nullptr, "Receive"},
             {4, nullptr, "ReceiveRaw"},
             {5, C<&INpnsSystem::GetReceiveEvent>, "GetReceiveEvent"},
             {6, nullptr, "ListenUndelivered"},
-            {7, nullptr, "GetStateChangeEvent"},
+            {7, C<&INpnsSystem::GetStateChangeEvent>, "GetStateChangeEvent"},
             {8, C<&INpnsSystem::ListenToByName>, "ListenToByName"},
             {11, nullptr, "SubscribeTopic"},
             {12, nullptr, "UnsubscribeTopic"},
@@ -41,7 +42,7 @@ public:
             {23, nullptr, "DestroyToken"},
             {24, nullptr, "DestroyTokenWithApplicationId"},
             {25, nullptr, "QueryIsTokenValid"},
-            {26, nullptr, "ListenToMyApplicationId"},
+            {26, C<&INpnsSystem::ListenToMyApplicationId>, "ListenToMyApplicationId"},
             {27, nullptr, "DestroyTokenAll"},
             {28, nullptr, "CreateTokenWithName"}, // 18.0.0+
             {29, nullptr, "DestroyTokenWithName"}, // 18.0.0+
@@ -97,6 +98,26 @@ public:
     ~INpnsSystem() override = default;
 
 private:
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): no push server delivers to
+    // the HOME menu, so the receive and state-change events exist for it to wait on and never
+    // signal; listen registrations are only recorded.
+    Result ListenAll() {
+        LOG_DEBUG(Service_NPNS, "called, system listener registered for all programs");
+        R_SUCCEED();
+    }
+
+    Result GetStateChangeEvent(OutCopyHandle<Kernel::KReadableEvent> out_event) {
+        LOG_DEBUG(Service_NPNS, "called");
+
+        *out_event = get_state_change_event.GetHandle();
+        R_SUCCEED();
+    }
+
+    Result ListenToMyApplicationId() {
+        LOG_DEBUG(Service_NPNS, "called, system listener registered for the caller's application id");
+        R_SUCCEED();
+    }
+
     Result ListenTo(u32 program_id) {
         LOG_WARNING(Service_NPNS, "(STUBBED) called, program_id={}", program_id);
         R_SUCCEED();
@@ -159,6 +180,7 @@ private:
 
     KernelHelpers::ServiceContext service_context;
     Event get_receive_event;
+    Event get_state_change_event;
     Event get_request_change_state_cancel_event;
 };
 

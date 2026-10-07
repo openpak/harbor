@@ -590,6 +590,11 @@ void System::SendCommandToDsp() {
 
     if (initialized) {
         if (active) {
+            if (core.AudioCore().IsSuspended(applet_resource_user_id)) {
+                // am suspended the process: send nothing, so nothing is mixed or output. The next
+                // call after the resume generates commands as usual.
+                return;
+            }
             terminate_event.Reset();
             const auto remaining_command_count{audio_renderer.GetRemainCommandCount(session_id)};
             u64 command_size{0};

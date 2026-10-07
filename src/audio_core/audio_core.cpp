@@ -47,6 +47,20 @@ Sink::Sink& AudioCore::GetInputSink() {
     return *input_sink;
 }
 
+void AudioCore::SetSuspended(u64 aruid, bool suspended) {
+    std::scoped_lock l{suspended_mutex};
+    if (suspended) {
+        suspended_aruids.insert(aruid);
+    } else {
+        suspended_aruids.erase(aruid);
+    }
+}
+
+bool AudioCore::IsSuspended(u64 aruid) const {
+    std::scoped_lock l{suspended_mutex};
+    return suspended_aruids.contains(aruid);
+}
+
 ADSP::ADSP& AudioCore::ADSP() {
     return *adsp;
 }
