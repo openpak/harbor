@@ -33,26 +33,8 @@ namespace Service::NS {
 
 namespace {
 
-// The name, icon and NACP HOME shows come from the update when the title has one (it is the
-// version that runs), else from the base title; Eden's own lookup prefers the base.
 FileSys::PatchManager::Metadata GetApplicationControlMetadata(Core::System& system,
                                                               u64 application_id) {
-    const auto& disabled = Settings::values.disabled_addons[application_id];
-    if (std::find(disabled.begin(), disabled.end(), "Update") == disabled.end()) {
-        const FileSys::PatchManager update{FileSys::GetUpdateTitleID(application_id),
-                                           system.GetFileSystemController(),
-                                           system.GetContentProvider()};
-        auto metadata = update.GetControlMetadata();
-        if (metadata.first != nullptr) {
-            return metadata;
-        }
-    }
-    const FileSys::PatchManager base{application_id, system.GetFileSystemController(),
-                                     system.GetContentProvider()};
-    auto metadata = base.GetControlMetadata();
-    if (metadata.first != nullptr) {
-        return metadata;
-    }
     return FileSys::PatchManager::GetMetadataFromBaseOrUpdate(system, application_id);
 }
 
