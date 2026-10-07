@@ -14,6 +14,7 @@
 #include "common/common_types.h"
 #include "core/hle/service/bcat/news/news_storage.h"
 #include "core/hle/service/kernel_helpers.h"
+#include "core/openpak/async_worker.h"
 
 namespace Core {
 class System;
@@ -21,10 +22,6 @@ class System;
 
 namespace Kernel {
 class KEvent;
-}
-
-namespace Service::BCAT {
-class OpenPakFetcher;
 }
 
 namespace Service::News {
@@ -45,7 +42,13 @@ public:
     Kernel::KEvent* newly_arrived{};
     Kernel::KEvent* overwrite{};
 
+    // Signal newly arrived from any thread: the signal itself happens on the worker's signalling
+    // thread, the one host thread allowed to touch this session's kernel objects.
     void SignalNewlyArrived();
+
+    // The session-owned worker for what blocks on the network: download contexts run on it and
+    // the fill posts its signal through it.
+    std::unique_ptr<OpenPak::AsyncWorker> worker;
 
     // Fill the store from OpenPak's news service on a worker thread. Does nothing while a fill runs or
     // while there is no fetcher.

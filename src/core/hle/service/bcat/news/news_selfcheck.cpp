@@ -1,19 +1,19 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// A standalone self-check for the news query grammar, the record layout and the BCAT manifest
-// helpers. Eden's test target is off in the Harbor build, so this is built by hand and prints
+// A standalone self-check for the news query grammar, the record layout and the BCAT delivery
+// grouping. Eden's test target is off in the Harbor build, so this is built by hand and prints
 // "news selfcheck: N checks, 0 failures" when it passes:
 //
-//   g++ -std=c++20 -I src -I <nlohmann include dir>
+//   g++ -std=c++20 -I src
 //       src/core/hle/service/bcat/news/news_selfcheck.cpp
 //       src/core/hle/service/bcat/news/news_record.cpp
 //       src/core/hle/service/bcat/news/news_query.cpp
 //       src/core/hle/service/bcat/news/msgpack.cpp
-//       src/core/hle/service/bcat/backend/openpak_bcat.cpp -lcrypto -o <out> && <out>
+//       src/core/hle/service/bcat/backend/openpak_bcat.cpp -o <out> && <out>
 //
 // With a directory argument it also writes two sample articles and the index the news fill reads
-// (<dir>/news/openpak/v1/local/...), for a desktop run with HARBOR_OPENPAK_STUB_DIR=<dir>.
+// (<dir>/openpak/v1/local/...), for a desktop run with the stub directory <user dir>/openpak/stub (or HARBOR_OPENPAK_STUB_DIR) pointing at <dir>.
 
 #include <cassert>
 #include <chrono>
@@ -212,26 +212,7 @@ int main(int argc, char** argv) {
     Check(order("read ASC, newly DESC") == std::vector<std::string>{"A", "C", "B"}, "ASC then DESC");
 
     // BCAT manifest helpers.
-    std::string dir, name;
-    Check(SplitBcatPath("event/season.bin", dir, name) && dir == "event" && name == "season.bin", "path split");
-    Check(!SplitBcatPath("season.bin", dir, name), "a bare name is not a path");
-    Check(!SplitBcatPath("a/b/c.bin", dir, name), "three levels do not fit");
-    Check(!SplitBcatPath("../x.bin", dir, name), "dot-dot is refused");
-    Check(!SplitBcatPath("event/a_name_that_is_far_too_long_for_bcat.bin", dir, name), "over 31 characters");
-    Check(!SplitBcatPath("ev ent/x.bin", dir, name), "a space is refused");
-    Check(Sha256Hex({'a', 'b', 'c'}) ==
-              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-          "sha256");
-    const auto day = [](int y, unsigned m, unsigned d) {
-        return std::chrono::sys_days{std::chrono::year{y} / m / d};
-    };
-    const std::string windowed =
-        R"({"valid_from":"2026-09-01T00:00:00Z","valid_until":"2026-10-01T00:00:00Z","files":[{"path":"a/b.bin","sha256":"00","url":"/f/1"}]})";
-    Check(BcatInWindow(windowed, day(2026, 9, 15)), "inside the window");
-    Check(!BcatInWindow(windowed, day(2026, 8, 31)), "before the window");
-    Check(!BcatInWindow(windowed, day(2026, 10, 1)), "at the window's end");
-    Check(BcatManifestEntries(windowed).size() == 1 && BcatManifestEntries(windowed)[0].url == "/f/1", "entries");
-    std::vector<BcatFile> files;
+    std::vector<OpenPak::Bcat::File> files;
     for (int i = 0; i < 120; ++i) {
         files.push_back({"d", "f" + std::to_string(i), {}});
     }
@@ -240,7 +221,7 @@ int main(int argc, char** argv) {
     Check(groups.size() == 1 && groups[0].files.size() == MaxBcatEntries, "duplicates and overflow are dropped");
 
     if (argc > 1) {
-        const std::filesystem::path root = std::filesystem::path(argv[1]) / "news" / "openpak" / "v1" / "local";
+        const std::filesystem::path root = std::filesystem::path(argv[1]) / "openpak" / "v1" / "local";
         const auto first = Article(1000000001ULL, "harbor_sample", "Harbor sample one",
                                    "The first sample article, served from a file.", 1790000000);
         const auto second = Article(1000000002ULL, "harbor_sample", "Harbor sample two",

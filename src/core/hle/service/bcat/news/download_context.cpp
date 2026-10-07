@@ -12,6 +12,7 @@
 #include "core/hle/service/bcat/news/download_context.h"
 #include "core/hle/service/bcat/news/news_shared.h"
 #include "core/hle/service/bcat/openpak_fetch.h"
+#include "core/openpak/async_worker.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/memory.h"
 
@@ -25,12 +26,11 @@ constexpr Result ResultNotDecoded{ErrorModule::News, 81};
 
 } // namespace
 
-// What the worker and the object share. The worker writes into the caller's memory and signals the
-// event under `mutex` while `alive`; the object clears `alive` under it before the event goes away.
+// What the work and the object share. The work writes into the caller's memory under `mutex` while
+// `alive`; the object clears `alive` under it before the memory's owner can go.
 struct IDownloadContext::State {
     std::mutex mutex;
     bool alive{true};
-    Result result{ResultNotDecoded};
     u64 size{};
 };
 
@@ -59,52 +59,43 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
         capacity = 0;
     }
 
-    // The worker owns copies of everything it needs. It never touches this object's members except
-    // through `state`, which the object clears before it goes.
-    std::thread([&kernel_system = system_, shared_state = state, done_event = completed, process, address,
-                 capacity, url = std::move(url)] {
-        Result result = ResultNotDecoded;
-        u64 size = 0;
+    // The fetch blocks, so it runs on the news worker's own thread; the worker signals `completed`
+    // from its signalling thread when the work returns.
+    task = shared_->worker->Run(
+        completed, ResultNotDecoded,
+        [shared_state = state, process, address, capacity,
+         url = std::move(url)](std::stop_token, std::vector<u8>&) -> Result {
+            const std::string route = LocalRoute(url);
 
-        const std::string route = LocalRoute(url);
-        const auto fetcher = BCAT::GetOpenPakFetcher();
+            std::vector<u8> payload;
+            if (route.empty()) {
+                LOG_INFO(Service_BCAT, "News download: no decoded route for it");
+                return ResultNotDecoded;
+            }
 
-        std::vector<u8> payload;
-        bool have = false;
-        if (route.empty() || !fetcher) {
-            LOG_INFO(Service_BCAT, "News download: {}",
-                     route.empty() ? "no decoded route for it" : "no OpenPak fetcher");
-        } else {
-            const auto response = fetcher->Get(BCAT::FetchOrigin::NewsEdge, route);
-            if (response.reached && response.status == 200) {
-                payload = response.body;
-                have = true;
-                LOG_INFO(Service_BCAT, "[OpenPak] News download: {} bytes from {}", payload.size(),
-                         route);
-            } else {
+            const auto response = BCAT::GetOpenPakFetcher()->Get(route);
+            if (!response.reached || response.status != 200) {
                 LOG_WARNING(Service_BCAT, "[OpenPak] News download from {} failed ({})", route,
                             response.reached ? response.status : 0);
+                return ResultNotDecoded;
             }
-        }
+            payload = response.body;
+            LOG_INFO(Service_BCAT, "[OpenPak] News download: {} bytes from {}", payload.size(), route);
 
-        std::scoped_lock lock{shared_state->mutex};
-        if (!shared_state->alive) {
-            return;
-        }
+            if (payload.size() > capacity) {
+                LOG_WARNING(Service_BCAT, "News download: {} bytes do not fit the caller's {}",
+                            payload.size(), capacity);
+                return ResultNotDecoded;
+            }
 
-        if (have && process != nullptr && payload.size() <= capacity) {
+            std::scoped_lock lock{shared_state->mutex};
+            if (!shared_state->alive || process == nullptr) {
+                return ResultNotDecoded;
+            }
             process->GetMemory().WriteBlock(address, payload.data(), payload.size());
-            result = ResultSuccess;
-            size = payload.size();
-        } else if (have) {
-            LOG_WARNING(Service_BCAT, "News download: {} bytes do not fit the caller's {}",
-                        payload.size(), capacity);
-        }
-
-        shared_state->result = result;
-        shared_state->size = size;
-        done_event->Signal(kernel_system.Kernel());
-    }).detach();
+            shared_state->size = payload.size();
+            return ResultSuccess;
+        });
 }
 
 IDownloadContext::~IDownloadContext() {
@@ -112,6 +103,9 @@ IDownloadContext::~IDownloadContext() {
         std::scoped_lock lock{state->mutex};
         state->alive = false;
     }
+
+    // Nothing signals the event after this.
+    task->Detach();
 
     if (transfer_memory != nullptr) {
         transfer_memory->Close(system.Kernel());
@@ -125,8 +119,7 @@ Result IDownloadContext::GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent
 }
 
 Result IDownloadContext::GetResult() {
-    std::scoped_lock lock{state->mutex};
-    R_RETURN(state->result);
+    R_RETURN(task->GetResult());
 }
 
 Result IDownloadContext::GetSize(Out<u64> out_size) {

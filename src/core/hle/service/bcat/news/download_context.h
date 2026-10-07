@@ -9,6 +9,7 @@
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
+#include "core/openpak/async_worker.h"
 
 namespace Core {
 class System;
@@ -49,6 +50,7 @@ private:
     // Held open until the object goes, so the caller's process stays valid for the worker's write.
     Kernel::KTransferMemory* transfer_memory{};
     std::shared_ptr<State> state;
+    std::shared_ptr<OpenPak::AsyncTask> task;
 };
 
 } // namespace Service::News

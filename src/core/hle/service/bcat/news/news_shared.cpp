@@ -101,7 +101,8 @@ std::string LocalRoute(std::string_view url) {
 }
 
 NewsShared::NewsShared(Core::System& system_, std::filesystem::path directory)
-    : system{system_}, store{std::move(directory)}, service_context{system_, "News"} {
+    : system{system_}, store{std::move(directory)}, worker{std::make_unique<OpenPak::AsyncWorker>(system_, "news:OpenPak")},
+      service_context{system_, "News"} {
     newly_arrived = service_context.CreateEvent("News::NewlyArrived");
     overwrite = service_context.CreateEvent("News::Overwrite");
 
@@ -122,12 +123,15 @@ NewsShared::~NewsShared() {
         fill_thread.join();
     }
 
+    // Nothing signals the events after this.
+    worker.reset();
+
     service_context.CloseEvent(newly_arrived);
     service_context.CloseEvent(overwrite);
 }
 
 void NewsShared::SignalNewlyArrived() {
-    newly_arrived->Signal(system.Kernel());
+    worker->Post([this] { newly_arrived->Signal(system.Kernel()); });
 }
 
 u32 NewsShared::GetSubscription(const std::string& topic) {
@@ -147,11 +151,6 @@ void NewsShared::ClearSubscriptions() {
 }
 
 void NewsShared::StartFill() {
-    const auto fetcher = BCAT::GetOpenPakFetcher();
-    if (!fetcher) {
-        LOG_INFO(Service_BCAT, "News: no OpenPak fetcher, nothing fetched");
-        return;
-    }
     if (filling.exchange(true)) {
         return;
     }
@@ -166,7 +165,7 @@ void NewsShared::Fill(std::stop_token stop) {
     const auto fetcher = BCAT::GetOpenPakFetcher();
     int added = 0;
 
-    const auto response = fetcher->Get(BCAT::FetchOrigin::NewsEdge, "/openpak/v1/local/index");
+    const auto response = fetcher->Get("/openpak/v1/local/index");
     if (!response.reached || response.status != 200) {
         LOG_WARNING(Service_BCAT, "[OpenPak] News index not fetched ({})",
                     response.reached ? response.status : 0);
@@ -215,7 +214,6 @@ void NewsShared::Fill(std::stop_token stop) {
         }
 
         const auto article = fetcher->Get(
-            BCAT::FetchOrigin::NewsEdge,
             "/openpak/v1/local/" + EscapeDataString(topic) + "/news/" + std::to_string(id));
         if (!article.reached || article.status != 200) {
             LOG_WARNING(Service_BCAT, "[OpenPak] News article not fetched ({})",

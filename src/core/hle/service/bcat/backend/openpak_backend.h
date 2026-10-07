@@ -8,17 +8,18 @@
 #include <mutex>
 
 #include "core/hle/service/bcat/backend/backend.h"
+#include "core/openpak/async_worker.h"
 
 namespace Service::BCAT {
 
 // Fills a title's delivery cache (the BCAT save the title reads through bcat:u) from OpenPak's news
-// service, sha256-checked and kept for offline starts. A console's bcat daemon downloads in the
+// service (OpenPak::Bcat::Fetch: sha256-checked, kept for offline starts). A console's bcat daemon downloads in the
 // background and a title's RequestSyncDeliveryCache waits on it; here the download starts when the
 // title's BCAT services are created (Prepare) and a sync waits for it. Fetching happens on a worker
 // thread, never on an IPC thread. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 class OpenPakBcatBackend final : public NullBcatBackend {
 public:
-    explicit OpenPakBcatBackend(DirectoryGetter getter);
+    explicit OpenPakBcatBackend(Core::System& system, DirectoryGetter getter);
     ~OpenPakBcatBackend() override;
 
     bool Synchronize(Kernel::KernelCore& kernel, TitleIDVersion title,

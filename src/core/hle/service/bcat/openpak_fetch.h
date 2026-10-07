@@ -13,15 +13,6 @@
 
 namespace Service::BCAT {
 
-// Which OpenPak origin a request goes to. Harbor contacts no other network.
-enum class FetchOrigin {
-    // The news edge (the cdn.nintendo.net name the OpenPak console server answers for), plaintext
-    // local surface: /openpak/v1/local/*.
-    NewsEdge,
-    // OpenPak's website: /api/emulator/v1/bcat/titles/<tid> and the file URLs it lists.
-    Website,
-};
-
 struct FetchResponse {
     // False when no answer arrived (offline, no OpenPak, timeout). Then `status` and `body` are empty.
     bool reached{};
@@ -29,25 +20,32 @@ struct FetchResponse {
     std::vector<u8> body;
 };
 
-// The narrow HTTP surface the news store and the BCAT backend need. Get runs on a worker thread, never
-// on an IPC thread, and must be bounded by the implementation's own timeouts. The real implementation
-// comes from the core stream (src/core/openpak/); FileFetcher below stands in for tests.
+// The narrow HTTP surface the news store needs: GET on OpenPak's news edge (the
+// bcat-topics-lp1.cdn.nintendo.net name the OpenPak console server answers for, plaintext local
+// surface /openpak/v1/local/*). Get blocks, so it runs on a worker thread, never on an IPC thread,
+// and is bounded by the implementation's own timeouts. The default implementation goes through
+// OpenPak::Session::Send (pinned CA, redirected to the console server, no sign-in); FileFetcher
+// stands in for tests. A title's BCAT data goes through OpenPak::Bcat::Fetch instead.
 class OpenPakFetcher {
 public:
     virtual ~OpenPakFetcher() = default;
-    virtual FetchResponse Get(FetchOrigin origin, std::string_view path) = 0;
+    virtual FetchResponse Get(std::string_view path) = 0;
 };
 
-// The fetcher in use, or null while OpenPak is off or not up yet. Nothing is fetched without one.
+// The fetcher in use: the one installed, else the OpenPak session's. Never null; the session's
+// answers "not reached" while OpenPak is off, so nothing is fetched then.
 void SetOpenPakFetcher(std::shared_ptr<OpenPakFetcher> fetcher);
 std::shared_ptr<OpenPakFetcher> GetOpenPakFetcher();
 
-// Answers from files: <root>/news/<path> for the news edge and <root>/website/<path> for the website,
-// 200 for a file, 404 for none. For self-checks and desktop runs without a server.
+// Whether a fetcher other than the session's was installed (tests).
+bool OpenPakFetcherIsStub();
+
+// Answers from files: <root>/<path>, 200 for a file, 404 for none. For self-checks and desktop runs
+// without a server.
 class FileFetcher final : public OpenPakFetcher {
 public:
     explicit FileFetcher(std::filesystem::path root_) : root{std::move(root_)} {}
-    FetchResponse Get(FetchOrigin origin, std::string_view path) override;
+    FetchResponse Get(std::string_view path) override;
 
 private:
     std::filesystem::path root;

@@ -31,7 +31,7 @@ void LoopProcess(Core::System& system) {
     // Until the OpenPak side installs a fetcher, a directory of files can stand in for it (self-checks
     // and desktop runs without a server): HARBOR_OPENPAK_STUB_DIR, or <user dir>/openpak/stub. See
     // FileFetcher.
-    if (!GetOpenPakFetcher()) {
+    if (!OpenPakFetcherIsStub()) {
         std::filesystem::path stub;
         if (const char* env = std::getenv("HARBOR_OPENPAK_STUB_DIR"); env != nullptr && *env != '\0') {
             stub = env;

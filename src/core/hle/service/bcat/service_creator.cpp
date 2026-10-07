@@ -14,10 +14,10 @@
 
 namespace Service::BCAT {
 
-std::unique_ptr<BcatBackend> CreateBackendFromSettings([[maybe_unused]] Core::System& system,
+std::unique_ptr<BcatBackend> CreateBackendFromSettings(Core::System& system,
                                                        DirectoryGetter getter) {
     // Harbor delivers OpenPak's data; with no fetcher it serves what an earlier run cached.
-    return std::make_unique<OpenPakBcatBackend>(std::move(getter));
+    return std::make_unique<OpenPakBcatBackend>(system, std::move(getter));
 }
 
 IServiceCreator::IServiceCreator(Core::System& system_, const char* name_)
