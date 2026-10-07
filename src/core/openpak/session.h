@@ -145,6 +145,12 @@ Response SendAs(const std::string& method, const std::string& host,
                 const std::string& path_and_query, const std::string& content_type,
                 const std::string& body);
 
+/// SendAs for the firmware user `uid` (empty: the active user), for a service that acts for
+/// whichever user the guest names (olsc). Signs `uid` in first. Blocking; never throws.
+Response SendAsUser(const std::string& uid, const std::string& method, const std::string& host,
+                    const std::string& path_and_query, const std::string& content_type,
+                    const std::string& body);
+
 /// One request to a Nintendo hostname through the pinned client (redirected to the console
 /// server, never the real host), with no user bearer and no sign-in first: the NA token exchange,
 /// users/me with the NA access token, a thumbnail. `headers` go out as given; an empty
