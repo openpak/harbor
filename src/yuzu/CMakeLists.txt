@@ -160,6 +160,8 @@ add_executable(yuzu
     game/game_card.h game/game_card.cpp
     game/search_field.h game/search_field.cpp
 
+    harbor_control.cpp
+    harbor_control.h
     hotkeys.cpp
     hotkeys.h
     install_dialog.cpp
