@@ -141,7 +141,7 @@ public:
         }
         global_config->SaveAllValues();
         LOG_INFO(Frontend, "harbor: {} game and {} add-on folders saved", AndroidSettings::values.game_dirs.size(),
-                 Settings::values.external_content_dirs.size());
+                 record.AutoloadDirs().size());
         return true;
     }
 
@@ -294,6 +294,9 @@ extern "C" JNIEXPORT int SDL_main(int argc, char* argv[]) {
 extern "C" {
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JNIEnv* env, jobject) {
+    // Every log line reaches eden_log.txt at once (Eden buffers below Error): a crash in the setup
+    // or the console then leaves its last lines in the file.
+    Settings::values.log_flush_line.SetValue(true);
     if (bridge_class) {
         return;
     }
@@ -316,7 +319,13 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
 }
 
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_isConsoleReady(JNIEnv*, jobject) {
-    const auto readiness = HarborSetup::CheckReadiness();
+    HarborSetup::Readiness readiness;
+    try {
+        readiness = HarborSetup::CheckReadiness();
+    } catch (const std::exception& e) {
+        LOG_ERROR(Frontend, "harbor: readiness check failed: {}", e.what());
+        return JNI_FALSE;
+    }
     LOG_INFO(Frontend, "harbor: readiness keys={} firmware={} qlaunch={} record_completed={}",
              readiness.keys_usable, readiness.firmware_version.empty() ? "none" : readiness.firmware_version,
              readiness.qlaunch, readiness.record_completed);
@@ -364,21 +373,42 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setConsoleMod
 /// What a console session needs every boot: the firmware's own applets, not Eden's stand-ins, and
 /// the setup's folders as the library (so the scan that follows registers the latest add-ons).
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_applyConsolePreset(JNIEnv*, jobject) {
-    HarborSetup::ApplyConsolePreset();
-    ApplyRecordToSettings(LoadRecord(RecordPath()));
-    if (global_config) {
-        global_config->SaveAllValues();
+    try {
+        HarborSetup::ApplyConsolePreset();
+        const auto record = LoadRecord(RecordPath());
+        ApplyRecordToSettings(record);
+        if (global_config) {
+            global_config->SaveAllValues();
+        }
+        LOG_INFO(Frontend, "harbor: console preset applied (every applet LLE, handheld, {} game and {} "
+                           "add-on folders)",
+                 AndroidSettings::values.game_dirs.size(), record.AutoloadDirs().size());
+    } catch (const std::exception& e) {
+        LOG_ERROR(Frontend, "harbor: console preset failed: {}", e.what());
     }
-    LOG_INFO(Frontend, "harbor: console preset applied (every applet LLE, handheld, {} game and {} "
-                       "add-on folders)",
-             AndroidSettings::values.game_dirs.size(), Settings::values.external_content_dirs.size());
+}
+
+/// The setup's DLC and update folders (tree URIs): HarborConsole registers the files under them.
+JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_addonFolders(JNIEnv* env,
+                                                                                        jobject) {
+    std::vector<std::string> dirs;
+    try {
+        dirs = LoadRecord(RecordPath()).AutoloadDirs();
+    } catch (const std::exception& e) {
+        LOG_ERROR(Frontend, "harbor: the setup record could not be read: {}", e.what());
+    }
+    return Common::Android::ToJStringArray(env, dirs);
 }
 
 /// OpenPak before HOME boots, with its credentials in the Android Keystore. Blocking (up to ~10 s
 /// on a first connect): called on the launcher's boot thread, a Java thread, which the Keystore
 /// store needs to find its Kotlin class.
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_connectOpenPak(JNIEnv*, jobject) {
-    HarborSetup::ConnectOpenPak();
+    try {
+        HarborSetup::ConnectOpenPak();
+    } catch (const std::exception& e) {
+        LOG_ERROR(Frontend, "harbor: OpenPak boot connection failed: {}", e.what());
+    }
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_stopOpenPak(JNIEnv*, jobject) {

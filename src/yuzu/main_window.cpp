@@ -1367,9 +1367,15 @@ void MainWindow::LinkActionShortcut(QAction* action, const QString& action_name,
         QtCommon::system->HIDCore().GetEmulatedController(Core::HID::NpadIdType::Player1);
     const auto* controller_hotkey =
         hotkey_registry.GetControllerHotkey(main_window, action_name.toStdString(), controller);
+    // Harbor console mode: the controller's capture button is the firmware's album capture only,
+    // not also a host screenshot (the keyboard shortcut still takes one).
+    const bool firmware_capture = action_name == QStringLiteral("Capture Screenshot");
     connect(
         controller_hotkey, &ControllerShortcut::Activated, this,
-        [action, tas_allowed, this] {
+        [action, tas_allowed, firmware_capture, this] {
+            if (firmware_capture && harbor_console) {
+                return;
+            }
             auto [tas_status, current_tas_frame, total_tas_frames] =
                 input_subsystem->GetTas()->GetStatus();
             if (tas_allowed || tas_status == InputCommon::TasInput::TasState::Stopped) {
