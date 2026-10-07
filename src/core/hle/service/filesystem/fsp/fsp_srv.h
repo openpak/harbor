@@ -99,6 +99,7 @@ private:
     Result OpenSaveDataTransferProhibiter(OutInterface<ISaveDataTransferProhibiter> out_prohibiter,
                                           u64 id);
     Result OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_interface);
+    Result OpenDataStorageByCurrentProcess2(OutInterface<IStorage> out_interface);
     Result OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
                                    FileSys::StorageId storage_id, u32 unknown, u64 title_id);
     Result OpenPatchDataStorageByCurrentProcess(OutInterface<IStorage> out_interface,

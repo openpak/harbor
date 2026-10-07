@@ -131,7 +131,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         // back a storage (overlayDisp 23.0.1 +0x13adf0: no input, one out object). The applets
         // mount their RomFs through 210. Behaviour follows the Ryujinx Harbor (MIT-licensed
         // Ryujinx base).
-        {210, D<&FSP_SRV::OpenDataStorageByCurrentProcess>, "OpenDataStorageByCurrentProcess2"},
+        {210, D<&FSP_SRV::OpenDataStorageByCurrentProcess2>, "OpenDataStorageByCurrentProcess2"},
         {212, D<&FSP_SRV::OpenDataStorageWithProgramIndex>, "OpenDataStorageWithProgramIndex2"},
         {400, nullptr, "OpenDeviceOperator"},
         {500, nullptr, "OpenSdCardDetectionEventNotifier"},
@@ -570,6 +570,11 @@ Result FSP_SRV::OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_inter
     *out_interface = std::make_shared<IStorage>(system, romfs);
 
     R_SUCCEED();
+}
+
+Result FSP_SRV::OpenDataStorageByCurrentProcess2(OutInterface<IStorage> out_interface) {
+    LOG_DEBUG(Service_FS, "called (23.0.0+ command 210), program_id={:016X}", program_id);
+    R_RETURN(OpenDataStorageByCurrentProcess(out_interface));
 }
 
 Result FSP_SRV::OpenDataStorageByDataId(OutInterface<IStorage> out_interface,
