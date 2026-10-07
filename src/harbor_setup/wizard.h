@@ -215,6 +215,7 @@ private:
     void ReportProgress(std::string stage, std::optional<double> fraction);
     void Notify();
     void FillDriverChoices(const std::string& selected);
+    void ChooseRecommendedDriver();
     void InstallDriverPackage(const std::string& location, const std::string& file_name);
     std::vector<Folder>* CurrentFolders();
     std::string AccountProblem() const;
@@ -255,6 +256,8 @@ private:
     std::vector<DriverChoice> driver_choices;
     std::string selected_driver;
     std::vector<DriverRelease> downloads;
+    bool driver_auto_tried = false;     ///< Adreno 6xx: T30 chosen or fetched once per setup
+    bool driver_auto_download = false;  ///< the next listing installs its recommended release
 
     AccountMode account_mode = AccountMode::SignIn;
     AccountState account_state = AccountState::Form;

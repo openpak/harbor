@@ -22,7 +22,12 @@ import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.model.AppletInfo
 import org.yuzu.yuzu_emu.model.Game
+import org.yuzu.yuzu_emu.model.MinimalDocumentFile
+import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.GameHelper
+import org.yuzu.yuzu_emu.utils.GpuDriverHelper
+import org.yuzu.yuzu_emu.features.settings.model.StringSetting
+import java.io.File
 import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
 import org.yuzu.yuzu_emu.utils.Log
@@ -51,6 +56,7 @@ object HarborConsole {
                 NativeLibrary.initializeSystem(true)
             }
             HarborNative.applyConsolePreset()
+            Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
             // The in-game drawer stays shut; the Harbor menu replaces it.
             IntSetting.LOCK_DRAWER.setInt(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
             IntSetting.RENDERER_SCREEN_LAYOUT.setInt(Settings.EmulationOrientation.SensorLandscape.int)
@@ -64,13 +70,19 @@ object HarborConsole {
                 Log.warning("[Harbor] library scan failed: ${e.message}")
                 -1
             }
+            val addons = try {
+                registerAddons()
+            } catch (e: Exception) {
+                Log.warning("[Harbor] add-on scan failed: ${e.message}")
+                -1
+            }
             // OpenPak before HOME, with its credentials in the Android Keystore.
             (from as? HarborStartActivity)?.let { start ->
                 start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
             }
             HarborNative.connectOpenPak()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
-            Log.info("[Harbor] console boot: $games titles registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
+            Log.info("[Harbor] console boot: $games titles and $addons add-on files registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
             from.runOnUiThread {
                 if (qlaunch.isEmpty()) {
                     openSetup(from)
@@ -89,6 +101,58 @@ object HarborConsole {
                 from.finish()
             }
         }
+    }
+
+    /**
+     * The setup's DLC and update folders are SAF tree URIs, which core's file system cannot walk, so
+     * their .nsp/.xci files are registered here, the way Eden's game list registers games (after
+     * GameHelper.getGames, which clears the registrations first). Returns how many were registered.
+     */
+    private fun registerAddons(): Int {
+        var count = 0
+        fun walk(files: Array<MinimalDocumentFile>, depth: Int) {
+            if (depth <= 0) {
+                return
+            }
+            for (file in files) {
+                if (file.isDirectory) {
+                    walk(FileUtil.listFiles(file.uri), depth - 1)
+                } else if (FileUtil.getExtension(file.uri).lowercase() in ADDON_EXTENSIONS) {
+                    NativeLibrary.addFileToFilesystemProvider(file.uri.toString())
+                    count++
+                }
+            }
+        }
+        for (folder in HarborNative.addonFolders().distinct()) {
+            val uri = Uri.parse(folder)
+            if (folder.isEmpty() || !FileUtil.isTreeUriValid(uri)) {
+                Log.warning("[Harbor] an add-on folder is no longer readable; set it again in the setup")
+                continue
+            }
+            walk(FileUtil.listFiles(uri), ADDON_SCAN_DEPTH)
+        }
+        return count
+    }
+
+    private val ADDON_EXTENSIONS = setOf("nsp", "xci")
+    private const val ADDON_SCAN_DEPTH = 3
+
+    /**
+     * The chosen graphics driver unpacked where Eden loads it from (as Eden's game launch does), so
+     * HOME runs with it. Returns its name for the log.
+     */
+    private fun ensureDriver(): String {
+        val chosen = GpuDriverHelper.customDriverSettingData
+        if (GpuDriverHelper.installedCustomDriverData != chosen) {
+            val path = StringSetting.DRIVER_PATH.getString()
+            if (chosen.name == null || !File(path).exists()) {
+                GpuDriverHelper.installDefaultDriver()
+            } else if (!GpuDriverHelper.installCustomDriver(File(path))) {
+                Log.warning("[Harbor] the chosen graphics driver could not be unpacked")
+            }
+        }
+        val installed = GpuDriverHelper.installedCustomDriverData
+        return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
     }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */
@@ -299,6 +363,21 @@ object HarborConsole {
             .setNegativeButton(android.R.string.cancel, null)
             .show()
         HarborPanelInput.attach(dialog)
+    }
+
+    /**
+     * The setup finished: the console boots in a fresh process, as at any cold start. The wizard's
+     * SDL and Borealis are still winding down in this one, and the core read the NAND before the
+     * firmware and keys were installed. The helper process ends this one.
+     */
+    fun bootAfterSetup(from: Activity) {
+        Log.info("[Harbor] the setup finished; starting the console in a new process")
+        from.startActivity(
+            Intent(from, HarborRestartActivity::class.java)
+                .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
+                .putExtra(HarborRestartActivity.EXTRA_CONSOLE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        )
     }
 
     /** Harbor in a fresh process, straight back to the console (a new graphics driver loads then). */

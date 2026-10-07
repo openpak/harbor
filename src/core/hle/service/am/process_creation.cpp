@@ -11,6 +11,9 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs_factory.h"
+#include "core/hle/kernel/k_memory_manager.h"
+#include "core/hle/kernel/k_resource_limit.h"
+#include "core/hle/kernel/kernel.h"
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/os/process.h"
@@ -40,6 +43,17 @@ namespace {
     }
 }
 
+// What the Applet pool and the limit its processes share have left after a process was created;
+// the second is what svcGetInfo(TotalMemorySize) reports to an applet.
+void LogAppletPoolFree(Core::System& system, u64 program_id) {
+    auto& kernel = system.Kernel();
+    constexpr u64 MiB = 1024 * 1024;
+    const auto* limit = kernel.GetAppletResourceLimit();
+    LOG_INFO(Service_AM, "am: process {:016x} created, Applet pool {} MiB free, Applet limit {} MiB free",
+             program_id, kernel.MemoryManager().GetFreeSize(Kernel::KMemoryManager::Pool::Applet) / MiB,
+             limit ? limit->GetFreeValue(Kernel::LimitableResource::PhysicalMemoryMax) / MiB : 0);
+}
+
 [[nodiscard]] inline std::unique_ptr<Process> CreateProcessImpl(std::unique_ptr<Loader::AppLoader>& out_loader, Loader::ResultStatus& out_load_result, Core::System& system, FileSys::VirtualFile file, u64 program_id, u64 program_index) {
     // Get the appropriate loader to parse this NCA.
     out_loader = Loader::GetLoader(system, file, program_id, program_index);
@@ -48,6 +62,7 @@ namespace {
         // Try to load the process.
         auto process = std::make_unique<Process>(system);
         if (process->Initialize(*out_loader, out_load_result)) {
+            LogAppletPoolFree(system, program_id);
             return process;
         }
     }
@@ -126,7 +141,11 @@ bool ReinitializeProcess(Core::System& system, Process& process, u64 program_id)
     }
 
     Loader::ResultStatus status{};
-    return process.Initialize(*loader, status);
+    if (!process.Initialize(*loader, status)) {
+        return false;
+    }
+    LogAppletPoolFree(system, program_id);
+    return true;
 }
 
 } // namespace Service::AM

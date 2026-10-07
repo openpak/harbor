@@ -118,17 +118,16 @@ class HarborSetupActivity : SDLActivity() {
         }
     }
 
-    /** Called by the bridge when "Start Harbor" saved the record: start the console under the wizard. */
+    /**
+     * Called by the bridge when "Start Harbor" saved the record: the console starts in a new process
+     * (HarborConsole.bootAfterSetup), which ends this one.
+     */
     fun onSetupFinished(completed: Boolean) {
         if (!completed || finishedSetup) {
             return
         }
         finishedSetup = true
-        startActivity(
-            Intent(this, HarborStartActivity::class.java)
-                .putExtra(HarborStartActivity.EXTRA_AFTER_SETUP, true)
-                .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
-        )
+        HarborConsole.bootAfterSetup(this)
         @Suppress("DEPRECATION")
         overridePendingTransition(0, 0)
     }

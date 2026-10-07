@@ -19,7 +19,12 @@ namespace Kernel::Board::Nintendo::Nx {
 class KSystemControl {
 public:
     // This can be overridden as needed.
-    static constexpr size_t SecureAppletMemorySize = 4 * 1024 * 1024; // 4_MB
+    // Two 4 MiB slots where the console has one: on firmware 23 the Shop and the Login it starts
+    // (through playerSelect) are both the web program 0x1042, each with a 4 MiB system resource.
+    // The Shop's process is gone by then on a console; the second slot covers the case where its
+    // teardown here has not finished when Login is created.
+    static constexpr size_t SecureAppletMemorySlotSize = 4 * 1024 * 1024; // 4_MB
+    static constexpr size_t SecureAppletMemorySize = 2 * SecureAppletMemorySlotSize;
 
 public:
     class Init {
