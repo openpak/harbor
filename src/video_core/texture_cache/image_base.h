@@ -97,6 +97,9 @@ struct ImageBase {
     bool has_scaled = false;
 
     size_t channel = 0;
+    /// GPU address space whose page tables hold this image (index into the texture cache's
+    /// per-address-space page tables). Unregistering must use these tables, not the bound channel's.
+    size_t gpu_page_table_id = 0;
 
     ImageFlagBits flags = ImageFlagBits::CpuModified;
 
