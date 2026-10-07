@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
+#include <span>
 #include <cstring>
 #include <string>
 
@@ -18,6 +20,16 @@ namespace Service::PSC {
 /// tag, a u32 payload size, then up to 0x78 bytes of payload.
 using OverlayNotification = std::array<u64, 0x10>;
 static_assert(sizeof(OverlayNotification) == 0x80, "OverlayNotification has incorrect size");
+
+/// Builds a notification from a tag and up to 0x78 bytes of payload (the rest is truncated).
+inline OverlayNotification MakeNotification(u32 tag, std::span<const u8> payload = {}) {
+    constexpr std::size_t max_payload = sizeof(OverlayNotification) - 8;
+    const auto size = std::min(payload.size(), max_payload);
+    OverlayNotification notification{};
+    notification[0] = tag | (u64{static_cast<u32>(size)} << 32);
+    std::memcpy(reinterpret_cast<u8*>(notification.data()) + 8, payload.data(), size);
+    return notification;
+}
 
 constexpr u32 GetNotificationTag(const OverlayNotification& notification) {
     return static_cast<u32>(notification[0]);

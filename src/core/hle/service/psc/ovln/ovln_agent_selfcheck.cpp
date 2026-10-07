@@ -153,6 +153,32 @@ void FullQueuePolicies() {
     agent.CloseReceiver(*receiver);
 }
 
+void HostSend() {
+    OvlnAgent agent;
+    auto receiver = NewReceiver();
+    CHECK(agent.AddSource(*receiver, Name("overlay")) == OvlnStatus::Success);
+
+    // The SDK's default sender: option 0x100, a new message replaces a queued one.
+    const auto first = MakeNotification(2000);
+    const auto second = MakeNotification(8101);
+    CHECK(agent.Send("overlay", 0x100, std::span<const u8, 0x80>{reinterpret_cast<const u8*>(first.data()), 0x80}));
+    CHECK(agent.Send("overlay", 0x100, std::span<const u8, 0x80>{reinterpret_cast<const u8*>(second.data()), 0x80}, 7));
+
+    OverlayNotification got{};
+    u64 tick = 0;
+    CHECK(agent.Receive(*receiver, got, tick) == OvlnStatus::Success);
+    CHECK(GetNotificationTag(got) == 8101 && tick == 7);
+    CHECK(agent.Receive(*receiver, got, tick) == OvlnStatus::NoMessage);
+
+    // After a new session the host sender is reopened.
+    agent.Reset();
+    auto again = NewReceiver();
+    CHECK(agent.AddSource(*again, Name("overlay")) == OvlnStatus::Success);
+    CHECK(agent.Send("overlay", 0x100, std::span<const u8, 0x80>{reinterpret_cast<const u8*>(first.data()), 0x80}));
+    CHECK(agent.Receive(*again, got, tick) == OvlnStatus::Success);
+    CHECK(GetNotificationTag(got) == 2000 && GetNotificationPayloadSize(got) == 0);
+}
+
 } // namespace
 
 int main() {
@@ -160,6 +186,7 @@ int main() {
     KeptUntilAReceiverAttachesThenOneFifo();
     ReceiverAddedFirstSeesLaterSends();
     FullQueuePolicies();
+    HostSend();
     std::puts("ovln agent self-check: OK");
     return 0;
 }

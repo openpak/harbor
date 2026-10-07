@@ -20,6 +20,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/hle/service/psc/ovln/ovln_types.h"
@@ -162,6 +165,37 @@ public:
         return OvlnStatus::Success;
     }
 
+    /// Host-side send for HLE modules that notify the overlay without a guest sender (on a console
+    /// they open ovln:snd like any other sender). The source gets one host sender with a queue of
+    /// one, which is reopened after a new session closed it. The option places and bounds the
+    /// message as in the guest Send: 0x100 (what the SDK's default sender uses) makes a new message
+    /// replace a queued one, 1 appends and fails on a full queue.
+    /// @param source - The source name ("overlay" for every firmware sender).
+    /// @param option - The send option.
+    /// @param message - The 0x80 byte message; see MakeNotification for the tag/size/payload layout.
+    /// @param tick - The guest tick reported by ReceiveWithTick (0 when not known).
+    /// @return Whether the message was queued.
+    bool Send(std::string_view source, u64 option, std::span<const u8, sizeof(OverlayNotification)> message,
+              u64 tick = 0) {
+        SourceName name{};
+        std::copy_n(source.begin(), std::min(source.size(), name.name.size()), name.name.begin());
+
+        std::shared_ptr<SenderState> sender;
+        {
+            std::scoped_lock lk{host_mutex};
+            auto& slot = host_senders[name];
+            if (!slot || IsClosed(*slot)) {
+                if (OpenSender(name, 1, slot) != OvlnStatus::Success) {
+                    return false;
+                }
+            }
+            sender = slot;
+        }
+        OverlayNotification notification;
+        std::memcpy(notification.data(), message.data(), sizeof(notification));
+        return Send(*sender, option, notification, tick) == OvlnStatus::Success;
+    }
+
     /// ISender 1 GetUnreceivedMessageCount: what is still in this sender's own queue.
     u32 GetUnreceivedCount(const SenderState& sender) {
         std::scoped_lock lk{mutex};
@@ -288,6 +322,14 @@ private:
             sources.erase(name);
         }
     }
+
+    bool IsClosed(const SenderState& sender) {
+        std::scoped_lock lk{mutex};
+        return sender.closed;
+    }
+
+    std::mutex host_mutex;
+    std::map<SourceName, std::shared_ptr<SenderState>> host_senders;
 
     std::mutex mutex;
     std::map<SourceName, std::shared_ptr<Source>> sources;
