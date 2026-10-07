@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/daemon_controller.h"
 #include "core/hle/service/olsc/olsc_service_for_system_service.h"
@@ -119,7 +120,7 @@ Result IOlscServiceForSystemService::GetDataTransferPolicy(
 Result IOlscServiceForSystemService::GetTransferTaskErrorInfo(Out<TransferTaskErrorInfo> out_info,
                                                              Common::UUID uuid, u64 application_id) {
     LOG_WARNING(Service_OLSC, "(STUBBED) called, uuid={} application_id={:016X}",
-                uuid.FormattedString(), application_id);
+                Common::Redact(uuid), application_id);
 
     TransferTaskErrorInfo info{};
     info.uid = uuid;

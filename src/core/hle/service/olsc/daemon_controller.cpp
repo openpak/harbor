@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/daemon_controller.h"
 
@@ -35,7 +36,7 @@ IDaemonController::~IDaemonController() = default;
 Result IDaemonController::GetApplicationAutoTransferSetting(Out<bool> out_is_enabled,
                                                             Common::UUID user_id,
                                                             u64 application_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", user_id.FormattedString(),
+    LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", Common::Redact(user_id),
              application_id);
     AppKey key{user_id, application_id};
     const auto it = app_auto_transfer_.find(key);
@@ -46,7 +47,7 @@ Result IDaemonController::GetApplicationAutoTransferSetting(Out<bool> out_is_ena
 Result IDaemonController::SetApplicationAutoTransferSetting(bool is_enabled, Common::UUID user_id,
                                                             u64 application_id) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X} is_enabled={}",
-             user_id.FormattedString(), application_id, is_enabled);
+             Common::Redact(user_id), application_id, is_enabled);
     AppKey key{user_id, application_id};
     app_auto_transfer_[key] = is_enabled;
     R_SUCCEED();
@@ -54,21 +55,21 @@ Result IDaemonController::SetApplicationAutoTransferSetting(bool is_enabled, Com
 
 Result IDaemonController::GetGlobalAutoUploadSetting(Out<bool> out_is_enabled,
                                                      Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={}", user_id.FormattedString());
+    LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
     const auto it = global_auto_upload_.find(user_id);
     *out_is_enabled = (it != global_auto_upload_.end()) ? it->second : false;
     R_SUCCEED();
 }
 
 Result IDaemonController::SetGlobalAutoUploadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", user_id.FormattedString(), is_enabled);
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
     global_auto_upload_[user_id] = is_enabled;
     R_SUCCEED();
 }
 
 Result IDaemonController::RunTransferTaskAutonomyRegistration(Common::UUID user_id,
                                                               u64 application_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", user_id.FormattedString(),
+    LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", Common::Redact(user_id),
              application_id);
     // Simulate starting an autonomy task: set status to 1 (running) then back to 0 (idle)
     AppKey key{user_id, application_id};
@@ -80,14 +81,14 @@ Result IDaemonController::RunTransferTaskAutonomyRegistration(Common::UUID user_
 
 Result IDaemonController::GetGlobalAutoDownloadSetting(Out<bool> out_is_enabled,
                                                        Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={}", user_id.FormattedString());
+    LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
     const auto it = global_auto_download_.find(user_id);
     *out_is_enabled = (it != global_auto_download_.end()) ? it->second : false;
     R_SUCCEED();
 }
 
 Result IDaemonController::SetGlobalAutoDownloadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", user_id.FormattedString(), is_enabled);
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
     global_auto_download_[user_id] = is_enabled;
     R_SUCCEED();
 }
@@ -100,7 +101,7 @@ Result IDaemonController::StopAutonomyTaskExecution(Out<SharedPointer<IStopperOb
 }
 
 Result IDaemonController::GetAutonomyTaskStatus(Out<u8> out_status, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={}", user_id.FormattedString());
+    LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
 
     *out_status = 0;
     R_SUCCEED();

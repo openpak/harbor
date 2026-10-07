@@ -6,6 +6,8 @@
 
 #include "common/common_funcs.h"
 #include "core/core.h"
+#include "core/file_sys/common_funcs.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -38,20 +40,49 @@ IContentManagementInterface::~IContentManagementInterface() = default;
 
 Result IContentManagementInterface::CalculateApplicationOccupiedSize(
     Out<ApplicationOccupiedSize> out_size, u64 application_id) {
-    LOG_WARNING(Service_NS, "(STUBBED) called, application_id={:016X}", application_id);
+    // What "Data Management" shows for a title: the sizes of the content the user's folders (and
+    // the NAND/SD card) hold for it, base, update and DLC, as the HOME menu counts them.
+    const auto& content = system.GetContentProviderUnion();
+    const auto update_id = FileSys::GetUpdateTitleID(application_id);
 
-    using namespace Common::Literals;
-
-    constexpr ApplicationOccupiedSizeEntity stub_entity{
-        .storage_id = FileSys::StorageId::SdCard,
-        .app_size = 8_GiB,
-        .patch_size = 2_GiB,
-        .aoc_size = 12_MiB,
+    const auto size_of = [&content](u64 title_id) {
+        u64 total = 0;
+        for (u8 type = 0; type < static_cast<u8>(FileSys::ContentRecordType::Count); ++type) {
+            if (const auto file =
+                    content.GetEntryRaw(title_id, static_cast<FileSys::ContentRecordType>(type))) {
+                total += file->GetSize();
+            }
+        }
+        return total;
     };
 
-    for (auto& entity : out_size->entities) {
-        entity = stub_entity;
+    u64 aoc_size = 0;
+    for (const auto& entry : content.ListEntriesFilter(FileSys::TitleType::AOC, std::nullopt, std::nullopt)) {
+        if (FileSys::GetBaseTitleID(entry.title_id) == FileSys::GetBaseTitleID(application_id)) {
+            if (const auto file = content.GetEntryRaw(entry.title_id, entry.type)) {
+                aoc_size += file->GetSize();
+            }
+        }
     }
+
+    // Folders and the SD card count as the SD card, the NAND as the user storage.
+    auto storage_id = FileSys::StorageId::SdCard;
+    if (const auto slot = content.GetSlotForEntry(application_id, FileSys::ContentRecordType::Program);
+        slot && (*slot == FileSys::ContentProviderUnionSlot::UserNAND ||
+                 *slot == FileSys::ContentProviderUnionSlot::SysNAND)) {
+        storage_id = FileSys::StorageId::NandUser;
+    }
+
+    out_size->entities = {};
+    out_size->entities[0] = {
+        .storage_id = storage_id,
+        .app_size = size_of(application_id),
+        .patch_size = size_of(update_id),
+        .aoc_size = aoc_size,
+    };
+    LOG_DEBUG(Service_NS, "called, application_id={:016X}, app={:#x} patch={:#x} aoc={:#x}",
+              application_id, out_size->entities[0].app_size, out_size->entities[0].patch_size,
+              out_size->entities[0].aoc_size);
 
     R_SUCCEED();
 }

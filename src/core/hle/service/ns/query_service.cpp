@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/logging.h"
+#include "common/redact.h"
 #include "common/uuid.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/ns/query_service.h"
@@ -61,7 +62,7 @@ Result IQueryService::QueryPlayStatisticsByApplicationIdAndUserAccountId(
     };
 
     LOG_WARNING(Service_NS, "(STUBBED) called. unknown={}. application_id={:016X}, account_id={}",
-                unknown, application_id, account_id.uuid.FormattedString());
+                unknown, application_id, Common::Redact(account_id));
     R_SUCCEED();
 }
 

@@ -15,6 +15,12 @@
 
 namespace Service::NS {
 
+/// The version HOME shows for an application: the update that will be applied when the title
+/// starts (the newest enabled one in the external content folders, the frontend's game folders, or
+/// the NAND/SD card), else the base title's own version. Updates and DLC in the user's folders are
+/// part of the installed content, as on a console after the downloads finished.
+[[nodiscard]] u32 GetInstalledApplicationVersion(Core::System& system, u64 application_id);
+
 class IApplicationManagerInterface final : public ServiceFramework<IApplicationManagerInterface> {
 public:
     explicit IApplicationManagerInterface(Core::System& system_);

@@ -14,7 +14,9 @@ add_library(frontend_common STATIC
     play_time_manager.cpp
     play_time_manager.h
     settings_generator.h settings_generator.cpp
-    mod_manager.h mod_manager.cpp)
+    mod_manager.h mod_manager.cpp
+    joycon_rails.cpp
+    joycon_rails.h)
 
 if (ENABLE_UPDATE_CHECKER)
     target_link_libraries(frontend_common PRIVATE httplib::httplib)
@@ -28,4 +30,4 @@ endif()
 create_target_directory_groups(frontend_common)
 target_link_libraries(frontend_common
     PUBLIC core SimpleIni::SimpleIni frozen::frozen-headers
-    PRIVATE common Boost::headers)
+    PRIVATE common hid_core Boost::headers)
