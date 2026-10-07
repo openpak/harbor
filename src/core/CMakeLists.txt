@@ -969,13 +969,18 @@ add_library(core STATIC
     hle/service/os/process.h
     hle/service/pcie/pcie.cpp
     hle/service/pcie/pcie.h
+    hle/service/pctl/moon.cpp
+    hle/service/pctl/moon.h
     hle/service/pctl/parental_control_service_factory.cpp
     hle/service/pctl/parental_control_service_factory.h
     hle/service/pctl/parental_control_service.cpp
     hle/service/pctl/parental_control_service.h
     hle/service/pctl/pctl.cpp
+    hle/service/pctl/pctl_async.h
     hle/service/pctl/pctl.h
     hle/service/pctl/pctl_results.h
+    hle/service/pctl/pctl_setting.cpp
+    hle/service/pctl/pctl_setting.h
     hle/service/pctl/pctl_types.h
     hle/service/pcv/pcv.cpp
     hle/service/pcv/pcv.h
