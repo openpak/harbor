@@ -23,6 +23,7 @@
 #include "core/hle/service/acc/nintendo_account_oauth.h"
 #include "core/hle/service/acc/openpak_account.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/openpak/account.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
 
@@ -214,6 +215,8 @@ bool IsActiveLinked(const Common::UUID& uid) {
         return false;
     }
     const std::string text = UidString(uid);
+    // A user the setup's account is being linked to right now answers as it will in a moment.
+    OpenPak::WaitForFirmwareUserLink(text);
     return text == OpenPak::Platform::ProfileId() && OpenPak::Session::Linked(text);
 }
 
