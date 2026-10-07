@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include <memory>
+#include <string>
 
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -130,11 +132,14 @@ private:
         R_SUCCEED();
     }
 
-    Result ListenToByName() {
-        LOG_DEBUG(Service_NPNS, "(STUBBED) called.");
-
-        // TODO (jarrodnorwell)
-
+    // The overlay applet registers its listener by name ("ntf") in a pointer (X) buffer; other
+    // callers may use a map alias one, so the buffer is auto-selected. Recorded only: nothing is
+    // delivered to listeners here (behaviour follows the Ryujinx Harbor).
+    Result ListenToByName(InBuffer<BufferAttr_HipcAutoSelect> name_buffer) {
+        const std::string name(reinterpret_cast<const char*>(name_buffer.data()),
+                               strnlen(reinterpret_cast<const char*>(name_buffer.data()),
+                                       name_buffer.size()));
+        LOG_DEBUG(Service_NPNS, "called, system listener registered by name '{}'", name);
         R_SUCCEED();
     }
 
@@ -218,12 +223,14 @@ public:
     }
 
 private:
-    Result ListenToByName(InBuffer<BufferAttr_HipcMapAlias> name_buffer) {
-        const std::string name(reinterpret_cast<const char*>(name_buffer.data()), name_buffer.size());
-        LOG_DEBUG(Service_NPNS, "called, name={}", name);
+    Result ListenToByName(InBuffer<BufferAttr_HipcAutoSelect> name_buffer) {
+        const std::string name(reinterpret_cast<const char*>(name_buffer.data()),
+                               strnlen(reinterpret_cast<const char*>(name_buffer.data()),
+                                       name_buffer.size()));
+        LOG_DEBUG(Service_NPNS, "called, user listener registered by name '{}' (nothing is delivered)",
+                  name);
 
-        // Store the name for future use if needed
-        // For now, just acknowledge the registration
+        // Recorded only, as the Ryujinx Harbor does.
         R_SUCCEED();
     }
 
