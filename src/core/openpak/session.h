@@ -31,6 +31,7 @@
 #include <future>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace OpenPak::Session {
@@ -66,7 +67,9 @@ std::future<bool> EnsureAsync(std::string uid);
 void EnsureAsync(std::string uid, std::function<void(bool)> done);
 
 /// Bind `uid`'s device account to the Nintendo Account that `account_id_token` belongs to
-/// (federation). Empty on success, else why not (for the log, never shown as host UI).
+/// (federation). Empty on success, else why not (for the log, never shown as host UI). `uid` need
+/// not be a firmware user yet (registration federates before acc creates the user): its device
+/// account is created and kept in the secret store, and ForgetProfile(uid) undoes that.
 std::string Link(const std::string& uid, const std::string& account_id_token);
 std::future<std::string> LinkAsync(std::string uid, std::string account_id_token);
 
@@ -84,6 +87,17 @@ std::string FriendCode(const std::string& uid);
 /// Signed in is not linked: an unlinked device account gets a valid token no title server can
 /// attach to a person.
 bool Linked(const std::string& uid);
+/// From the login/federation reply's user object, as sent; never logged.
+std::uint64_t NintendoAccountId(const std::string& uid); ///< links.nintendoAccount.id, or 0
+std::string Birthday(const std::string& uid);            ///< "YYYY-MM-DD" (may be 0000-00-00)
+std::string Country(const std::string& uid);
+std::string ThumbnailUrl(const std::string& uid);
+
+/// A dauth token for another client with this install's device identity: the device auth token
+/// (empty `vendor`, /v8/device_auth_tokens) or an edge token (/v8/edge_tokens with vendor_id,
+/// e.g. "akamai" for nim:shp). Empty on failure or with no console server. Blocking: run it from
+/// an AsyncWorker task only.
+std::string DauthToken(const std::string& client_id, const std::string& vendor);
 
 /// A firmware user was deleted: its device account is forgotten (secret store) and its identity
 /// dropped from this process.
@@ -124,5 +138,14 @@ struct Response {
 Response SendAs(const std::string& method, const std::string& host,
                 const std::string& path_and_query, const std::string& content_type,
                 const std::string& body);
+
+/// One request to a Nintendo hostname through the pinned client (redirected to the console
+/// server, never the real host), with no user bearer and no sign-in first: the NA token exchange,
+/// users/me with the NA access token, a thumbnail. `headers` go out as given; an empty
+/// `content_type` sends no body, any other is sent as is. Blocking; never throws.
+using Headers = std::vector<std::pair<std::string, std::string>>;
+Response Send(const std::string& method, const std::string& host,
+              const std::string& path_and_query, const Headers& headers,
+              const std::string& content_type, const std::string& body);
 
 } // namespace OpenPak::Session
