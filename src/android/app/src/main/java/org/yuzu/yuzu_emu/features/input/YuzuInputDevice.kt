@@ -60,6 +60,45 @@ class YuzuPhysicalDevice(
     override fun hasKeys(keys: IntArray): BooleanArray = device.hasKeys(*keys)
 }
 
+/**
+ * Harbor: a left and a right Joy-Con as one pad. Both halves' events go to one guid and port (the left
+ * half's), and the mapping sees the union of their buttons and axes: the left stick and D-pad from the
+ * left half, the right stick and face buttons from the right.
+ */
+class YuzuJoyconPair(
+    private val left: InputDevice,
+    private val right: InputDevice,
+    private val port: Int,
+    useSystemVibrator: Boolean
+) : YuzuInputDevice {
+    private val vibrator = if (useSystemVibrator) {
+        YuzuVibrator.getSystemVibrator()
+    } else {
+        YuzuVibrator.getControllerVibrator(right)
+    }
+
+    override fun getName(): String = "${left.name} + ${right.name}"
+
+    override fun getGUID(): String = left.getGUID()
+
+    override fun getPort(): Int = port
+
+    override fun getSupportsVibration(): Boolean = vibrator.supportsVibration()
+
+    override fun vibrate(intensity: Float) {
+        vibrator.vibrate(intensity)
+    }
+
+    override fun getAxes(): Array<Int> =
+        (left.motionRanges.map { it.axis } + right.motionRanges.map { it.axis }).distinct().toTypedArray()
+
+    override fun hasKeys(keys: IntArray): BooleanArray {
+        val l = left.hasKeys(*keys)
+        val r = right.hasKeys(*keys)
+        return BooleanArray(keys.size) { l[it] || r[it] }
+    }
+}
+
 class YuzuInputOverlayDevice(
     private val vibration: Boolean,
     private val port: Int

@@ -41,6 +41,7 @@
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
 #include "harbor_control.h"
+#include "harbor_system_keys.h"
 #include "loading_screen.h"
 #include "qt_common/util/vk.h"
 #include "ryujinx_dialog.h"
@@ -537,6 +538,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     thread_dump_shortcut->setContext(Qt::ApplicationShortcut);
     connect(thread_dump_shortcut, &QShortcut::activated, this,
             [] { QtCommon::system->LogGuestThreads(); });
+
+    // F8 HOME and F4 Capture, held as long as the key is.
+    new HarborSystemKeys(*input_subsystem, this);
 
     // F7 takes the Joy-Cons off the console's rails or puts them back (the firmware's setup waits
     // for them to leave at "Detaching Joy-Con Controllers").
@@ -1928,7 +1932,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
             tr("You are using the deconstructed ROM directory format for this game, which is an "
                "outdated format that has been superseded by others such as NCA, NAX, XCI, or "
                "NSP. Deconstructed ROM directories lack icons, metadata, and update "
-               "support.<br>For an explanation of the various Switch formats Eden supports, "
+               "support.<br>For an explanation of the various Switch formats Harbor supports, "
                "out our user handbook. This message will not be shown again."));
     }
 
@@ -4206,9 +4210,10 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
     static const std::string build_id = std::string{Common::g_build_id};
+    // Harbor: the product's name in the title bar, not the build's.
     static const std::string yuzu_title =
-        fmt::format("{} | {} | {}", std::string{Common::g_build_name},
-                    std::string{Common::g_build_version}, std::string{Common::g_compiler_id});
+        fmt::format("Harbor | {} | {}", std::string{Common::g_build_version},
+                    std::string{Common::g_compiler_id});
 
     const auto override_title =
         fmt::format(fmt::runtime(std::string(Common::g_title_bar_format_idle)), build_id);
@@ -4517,7 +4522,7 @@ void MainWindow::OnCheckGraphicsBackend() {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
         QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Eden to apply the X11 backend."));
+                                 tr("Restart Harbor to apply the X11 backend."));
     }
 }
 #endif
@@ -4636,8 +4641,8 @@ bool MainWindow::ConfirmClose() {
         UISettings::values.confirm_before_stopping.GetValue() == ConfirmStop::Ask_Based_On_Game)
         return true;
 
-    const auto text = tr("Are you sure you want to close Eden?");
-    return question(this, tr("Eden"), text);
+    const auto text = tr("Are you sure you want to close Harbor?");
+    return question(this, tr("Harbor"), text);
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -4728,7 +4733,7 @@ bool MainWindow::ConfirmChangeGame() {
 
     // Use custom question to link controller navigation
     return question(
-        this, tr("Eden"),
+        this, tr("Harbor"),
         tr("Are you sure you want to stop the emulation? Any unsaved progress will be lost."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 }
@@ -4737,10 +4742,10 @@ bool MainWindow::ConfirmForceLockedExit() {
     if (QtCommon::emu_thread == nullptr)
         return true;
 
-    const auto text = tr("The currently running application has requested Eden to not exit.\n\n"
+    const auto text = tr("The currently running application has requested Harbor to not exit.\n\n"
                          "Would you like to bypass this and exit anyway?");
 
-    return question(this, tr("Eden"), text);
+    return question(this, tr("Harbor"), text);
 }
 
 void MainWindow::RequestGameExit() {

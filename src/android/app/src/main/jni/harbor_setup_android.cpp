@@ -396,6 +396,10 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setJoyconsDet
                                        detached == JNI_TRUE);
 }
 
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_logGuestThreads(JNIEnv*, jobject) {
+    EmulationSession::GetInstance().System().LogGuestThreads();
+}
+
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {
     return FrontendCommon::JoyconsDetached(EmulationSession::GetInstance().System().HIDCore()) ? JNI_TRUE
                                                                                              : JNI_FALSE;
