@@ -4,7 +4,13 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cctype>
+#include <string>
+#include <string_view>
+#include <vector>
+#include "core/arm/arm_interface.h"
+#include "core/arm/debug.h"
 #include "core/core.h"
 #include "core/debugger/debugger.h"
 #include "core/hle/kernel/k_process.h"
@@ -16,8 +22,83 @@
 
 namespace Kernel::Svc {
 
+namespace {
+
+std::string_view BreakReasonName(BreakReason reason) {
+    switch (reason) {
+    case BreakReason::Panic:
+        return "Panic";
+    case BreakReason::Assert:
+        return "Assert";
+    case BreakReason::User:
+        return "User";
+    case BreakReason::PreLoadDll:
+        return "PreLoadDll";
+    case BreakReason::PostLoadDll:
+        return "PostLoadDll";
+    case BreakReason::PreUnloadDll:
+        return "PreUnloadDll";
+    case BreakReason::PostUnloadDll:
+        return "PostUnloadDll";
+    case BreakReason::CppException:
+        return "CppException";
+    default:
+        return "Unknown";
+    }
+}
+
+// Logs who called svcBreak and what the info buffer holds. Behaviour follows the Ryujinx Harbor
+// (MIT-licensed Ryujinx base): Syscall.Break.
+void LogBreakCaller(Core::System& system, BreakReason reason, bool notification_only, u64 info1,
+                    u64 info2) {
+    auto& kernel = system.Kernel();
+    auto& process = GetCurrentProcess(kernel);
+    auto& thread = GetCurrentThread(kernel);
+    const auto thread_name = Core::GetThreadName(&thread);
+
+    Svc::ThreadContext ctx{};
+    if (auto* const interface = process.GetArmInterface(kernel.CurrentPhysicalCoreIndex())) {
+        interface->GetContext(ctx);
+    }
+
+    // Break reasons that pass a buffer carry a Result (4 bytes), a value (8 bytes) or text.
+    constexpr u64 MaxBufferSize = 0x400;
+    constexpr u64 MaxHexBytes = 0x100;
+    std::string buffer;
+    auto& memory = process.GetMemory();
+    if (info1 != 0 && info2 != 0 && info2 <= MaxBufferSize &&
+        memory.IsValidVirtualAddressRange(info1, info2)) {
+        if (info2 == sizeof(u32)) {
+            const u32 value = memory.Read32(info1);
+            buffer = fmt::format(" result={:#010x} (2{:03}-{:04})", value, value & 0x1FF,
+                                 (value >> 9) & 0x1FFF);
+        } else if (info2 == sizeof(u64)) {
+            buffer = fmt::format(" value={:#018x}", memory.Read64(info1));
+        } else {
+            std::vector<u8> bytes(std::min(info2, MaxHexBytes));
+            memory.ReadBlock(info1, bytes.data(), bytes.size());
+            buffer = " buffer=";
+            for (const u8 byte : bytes) {
+                buffer += fmt::format("{:02x}", byte);
+            }
+        }
+    }
+
+    LOG_INFO(Debug_Emulated,
+             "svcBreak: reason={:#x} ({}){} info1={:#x} info2={:#x}{} process pid={} "
+             "program={:016x} name=\"{}\" thread id={} name=\"{}\" pc={:#x} lr={:#x}",
+             static_cast<u32>(reason), BreakReasonName(reason & ~BreakReason::NotificationOnlyFlag),
+             notification_only ? " notification-only" : "", info1, info2, buffer,
+             process.GetProcessId(), process.GetProgramId(), process.GetName(),
+             thread.GetThreadId(), thread_name.value_or(std::string{}), ctx.pc, ctx.lr);
+}
+
+} // namespace
+
 /// Break program execution
 void Break(Core::System& system, BreakReason reason, u64 info1, u64 info2) {
+    LogBreakCaller(system, reason, True(reason & BreakReason::NotificationOnlyFlag), info1, info2);
+
     BreakReason break_reason =
         reason & static_cast<BreakReason>(~BreakReason::NotificationOnlyFlag);
     bool notification_only = True(reason & BreakReason::NotificationOnlyFlag);

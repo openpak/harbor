@@ -36,6 +36,7 @@
 #include "install_dialog.h"
 
 #include "bootmanager.h"
+#include "harbor_control.h"
 #include "loading_screen.h"
 #include "qt_common/util/vk.h"
 #include "ryujinx_dialog.h"
@@ -495,6 +496,30 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     // so now we have to make this completely unnecessary call
     // to prevent the UI from blowing up.
     UpdateUITheme();
+
+    // F12 logs every guest thread, for hangs.
+    auto* thread_dump_shortcut = new QShortcut(QKeySequence(Qt::Key_F12), this);
+    thread_dump_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(thread_dump_shortcut, &QShortcut::activated, this,
+            [] { QtCommon::system->LogGuestThreads(); });
+
+    // Test harness: HARBOR_CONTROL=<fifo path> accepts input, screenshot and dump commands.
+    harbor_control = HarborControl::CreateFromEnvironment(
+        this, *input_subsystem,
+        {
+            .screenshot =
+                [this](const std::string& path, std::function<void(bool)> done) {
+                    if (QtCommon::emu_thread == nullptr || !QtCommon::emu_thread->IsRunning()) {
+                        LOG_ERROR(Frontend, "harbor-control: no running emulation to capture");
+                        done(false);
+                        return;
+                    }
+                    render_window->CaptureScreenshot(QString::fromStdString(path),
+                                                     std::move(done));
+                },
+            .quit = [this] { close(); },
+            .threads = [] { QtCommon::system->LogGuestThreads(); },
+        });
 
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {
         QList<QByteArray> qba{};
