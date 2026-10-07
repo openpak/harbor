@@ -216,6 +216,32 @@ void CaChecks(bool online) {
     }
 }
 
+void FetchChecks() {
+    std::puts("profile fetch");
+    const std::string body =
+        R"({"version":7,"platform":"switch","server":{"address":"203.0.113.10"},)"
+        R"("redirect":{"suffixes":[".nintendo.net"]}})";
+    const auto none = np::DecideFetched("switch", 0, {}, {}, {});
+    Check(!none.confirmed && none.source == np::Source::BuiltIn,
+          "no answer and nothing stored: built-in, not confirmed");
+    const auto fresh = np::DecideFetched("switch", 200, body, "\"e1\"", {});
+    Check(fresh.confirmed && fresh.source == np::Source::Fetched && fresh.profile.version == 7,
+          "a 200 is confirmed and applied");
+    const auto unchanged = np::DecideFetched("switch", 304, {}, {}, "\"e1\"");
+    Check(unchanged.confirmed && unchanged.source == np::Source::Cached &&
+              unchanged.profile.version == 7,
+          "a 304 confirms the stored profile (online, not offline)");
+    const auto silent = np::DecideFetched("switch", 0, {}, {}, "\"e1\"");
+    Check(!silent.confirmed && silent.source == np::Source::Cached && !silent.error.empty(),
+          "no answer falls back to the stored profile, not confirmed");
+    const auto failed = np::DecideFetched("switch", 503, "busy", {}, "\"e1\"");
+    Check(!failed.confirmed && failed.source == np::Source::Cached,
+          "an HTTP error falls back to the stored profile, not confirmed");
+    const auto refused = np::DecideFetched("switch", 200, "{", {}, "\"e1\"");
+    Check(!refused.confirmed && refused.source == np::Source::Cached,
+          "an unparseable 200 is not confirmed and leaves the stored profile");
+}
+
 void RedactChecks() {
     std::puts("redaction");
     Check(fmt::format("{}", Common::Redact(0x1234ULL)) == "<redacted>", "Redact hides a value");
@@ -247,6 +273,7 @@ int SelfTest(bool online) {
 
     RedirectChecks();
     CaChecks(online);
+    FetchChecks();
     RedactChecks();
 
     std::filesystem::remove_all(dir, ec);

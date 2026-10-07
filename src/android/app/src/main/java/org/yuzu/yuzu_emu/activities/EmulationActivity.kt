@@ -137,7 +137,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                 hasConfiguredControllers = true
             }
         }
-        if (!hasConfiguredControllers && InputHandler.androidControllers.isNotEmpty()) {
+        if (HarborConsole.active) {
+            InputHandler.bindFirstControllerIfUnbound()
+        } else if (!hasConfiguredControllers && InputHandler.androidControllers.isNotEmpty()) {
             var params: ParamPackage? = null
             for (controller in InputHandler.registeredControllers) {
                 if (controller.get("port", -1) == 0) {
@@ -256,6 +258,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onPause() {
+        // Nothing stays held in the guest while Harbor is in the background.
+        InputHandler.releaseAll()
         nfcReader.stopScanning()
         stopMotionSensorListener()
         super.onPause()
@@ -432,21 +436,65 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             }
         }
 
-    // Plus and Minus held together open the Harbor menu, as Android back does.
-    private fun harborMenuChord(event: KeyEvent) {
+    // Plus and Minus together open the Harbor menu, as Android back does, and never reach the guest:
+    // a Plus or Minus press waits briefly for its partner before it is passed on.
+    private var harborPendingPress: KeyEvent? = null
+    private val harborPendingRunnable = Runnable { harborFlushPendingPress() }
+
+    private fun harborFlushPendingPress() {
+        val pending = harborPendingPress ?: return
+        harborPendingPress = null
+        InputHandler.dispatchKeyEvent(pending)
+    }
+
+    /** The Harbor menu closed: the chord's buttons were released while it had the input. */
+    fun harborResetChord() {
+        harborHeldButtons.clear()
+    }
+
+    /** Whether `event` belongs to the Plus+Minus chord and must not reach the guest. */
+    private fun harborMenuChord(event: KeyEvent): Boolean {
         val code = event.keyCode
         if (code != KeyEvent.KEYCODE_BUTTON_START && code != KeyEvent.KEYCODE_BUTTON_SELECT) {
-            return
+            return false
+        }
+        val partner = if (code == KeyEvent.KEYCODE_BUTTON_START) {
+            KeyEvent.KEYCODE_BUTTON_SELECT
+        } else {
+            KeyEvent.KEYCODE_BUTTON_START
         }
         when (event.action) {
             KeyEvent.ACTION_DOWN -> {
-                harborHeldButtons.add(code)
-                if (event.repeatCount == 0 && harborHeldButtons.size == 2) {
-                    HarborConsole.showMenu(this)
+                if (event.repeatCount > 0) {
+                    return code in harborHeldButtons || harborPendingPress?.keyCode == code
                 }
+                if (harborPendingPress?.keyCode == partner || partner in harborHeldButtons) {
+                    mainHandler.removeCallbacks(harborPendingRunnable)
+                    harborPendingPress = null
+                    harborHeldButtons.add(code)
+                    harborHeldButtons.add(partner)
+                    InputHandler.releaseAll()
+                    HarborConsole.showMenu(this)
+                    return true
+                }
+                harborPendingPress?.let { harborFlushPendingPress() }
+                harborPendingPress = KeyEvent(event)
+                mainHandler.postDelayed(harborPendingRunnable, HARBOR_CHORD_WINDOW_MS)
+                return true
             }
-            KeyEvent.ACTION_UP -> harborHeldButtons.remove(code)
+            KeyEvent.ACTION_UP -> {
+                if (harborHeldButtons.remove(code)) {
+                    return true
+                }
+                if (harborPendingPress?.keyCode == code) {
+                    // A quick tap: the press goes through now, then this release.
+                    mainHandler.removeCallbacks(harborPendingRunnable)
+                    harborFlushPendingPress()
+                }
+                return false
+            }
         }
+        return false
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -475,8 +523,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         if (isControllerInput && event.action == KeyEvent.ACTION_DOWN) {
             notifyControllerInput()
         }
-        if (isControllerInput && HarborConsole.active) {
-            harborMenuChord(event)
+        if (isControllerInput && HarborConsole.active && harborMenuChord(event)) {
+            return true
         }
 
         return InputHandler.dispatchKeyEvent(event)
@@ -523,12 +571,19 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     override fun onInputDeviceAdded(deviceId: Int) {
         if (isGameController(deviceId)) {
             InputHandler.updateControllerData()
+            if (HarborConsole.active) {
+                InputHandler.bindFirstControllerIfUnbound()
+            }
             notifyPhysicalControllerState()
         }
     }
 
     override fun onInputDeviceRemoved(deviceId: Int) {
+        InputHandler.releaseAll()
         InputHandler.updateControllerData()
+        if (HarborConsole.active) {
+            InputHandler.bindFirstControllerIfUnbound()
+        }
         notifyPhysicalControllerState()
     }
 
@@ -900,6 +955,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         const val EXTRA_SELECTED_GAME = "SelectedGame"
         const val EXTRA_OVERLAY_GAMELESS_EDIT_MODE = "overlayGamelessEditMode"
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
+        // How long a Plus or Minus press waits for its partner (the Harbor menu chord).
+        private const val HARBOR_CHORD_WINDOW_MS = 80L
         @Volatile
         private var processHasEmulationSession = false
         @Volatile

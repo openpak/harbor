@@ -49,4 +49,7 @@ object HarborNative {
 
     /** Whether the Joy-Cons are off the rails. */
     external fun joyconsDetached(): Boolean
+
+    /** Every guest thread to the log (System::LogGuestThreads), for hangs. */
+    external fun logGuestThreads()
 }

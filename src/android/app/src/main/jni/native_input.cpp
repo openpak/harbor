@@ -19,6 +19,7 @@
 #include "input_common/drivers/touch_screen.h"
 #include "input_common/drivers/virtual_amiibo.h"
 #include "input_common/drivers/virtual_gamepad.h"
+#include "harbor_setup_android.h"
 #include "native.h"
 
 ::Common::unordered_map<std::string, std::unique_ptr<AndroidConfig>> map_profiles;
@@ -80,6 +81,45 @@ bool LoadProfile(std::string& profile_name, std::size_t player_index) {
     Settings::values.players.GetValue()[player_index].profile_name = profile_name;
     map_profiles[profile_name]->ReadAndroidControlPlayerValues(player_index);
     return true;
+}
+
+// Harbor: every pad's face buttons by Switch position (right A, bottom B, top X, left Y), the way the
+// Ryujinx Harbor maps them, rather than by the label on the button. Android reports face buttons by
+// the Xbox position (BUTTON_A bottom, BUTTON_B right, BUTTON_X left, BUTTON_Y top) on every pad except
+// Nintendo's own, whose driver already reports X on top and Y on the left. Eden flips only a list of
+// vendors; this flips all of them, ASUS (ROG Kunai, VID 0b05) included.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), PhysicalGamepad.cs.
+void MakeFaceButtonsPositional(InputCommon::ButtonMapping& mapping, const Common::ParamPackage& device) {
+    constexpr int KeycodeA = 96, KeycodeB = 97, KeycodeX = 99, KeycodeY = 100;
+    const bool nintendo = device.Get("guid", "").ends_with("057e");
+    std::vector<Common::ParamPackage> face;
+    for (const auto button : {Settings::NativeButton::A, Settings::NativeButton::B,
+                              Settings::NativeButton::X, Settings::NativeButton::Y}) {
+        if (const auto it = mapping.find(button); it != mapping.end()) {
+            face.push_back(it->second);
+            mapping.erase(it);
+        }
+    }
+    for (auto& param : face) {
+        switch (param.Get("button", 0)) {
+        case KeycodeA:
+            mapping.insert_or_assign(Settings::NativeButton::B, param);
+            break;
+        case KeycodeB:
+            mapping.insert_or_assign(Settings::NativeButton::A, param);
+            break;
+        case KeycodeX:
+            mapping.insert_or_assign(nintendo ? Settings::NativeButton::X : Settings::NativeButton::Y,
+                                     param);
+            break;
+        case KeycodeY:
+            mapping.insert_or_assign(nintendo ? Settings::NativeButton::Y : Settings::NativeButton::X,
+                                     param);
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 void ApplyControllerConfig(size_t player_index,
@@ -498,6 +538,9 @@ void Java_org_yuzu_yuzu_1emu_features_input_NativeInput_updateMappingsWithDefaul
     // Apply new mappings
     auto device = Common::ParamPackage(Common::Android::GetJString(env, j_device_params));
     auto button_mappings = input_subsystem.GetButtonMappingForDevice(device);
+    if (Harbor::ConsoleMode()) {
+        MakeFaceButtonsPositional(button_mappings, device);
+    }
     auto analog_mappings = input_subsystem.GetAnalogMappingForDevice(device);
     auto display_name = Common::Android::GetJString(env, j_display_name);
     for (const auto& button_mapping : button_mappings) {

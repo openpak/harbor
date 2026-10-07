@@ -3,8 +3,9 @@
 
 // How a guest TLS connection decides whom it trusts. The model is the Ryujinx Harbor's: the host
 // verifies every connection itself, whatever verify option the guest set and whatever CAs it
-// imported. A chain is accepted when it reaches a root the host trusts or the pinned OpenPak CA;
-// the peer's certificate must carry the name the guest dialled (its IP SAN when the guest named an
+// imported. A chain is accepted when it reaches a root the host trusts, or the pinned OpenPak CA
+// for a name OpenPak answers (one the resolver redirects, or the console server itself); the
+// peer's certificate must carry the name the guest dialled (its IP SAN when the guest named an
 // address), and a mismatch is never excused: behind a redirect, the name is the only thing that
 // says who answered.
 //
@@ -25,6 +26,8 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
+
+#include "core/hle/service/sockets/sfdnsres_redirect.h"
 
 namespace Service::SSL::Trust {
 
@@ -161,6 +164,59 @@ inline int VerifyChain(X509_STORE* store, X509* leaf, STACK_OF(X509)* untrusted,
     const int error = ok == 1 ? X509_V_OK : X509_STORE_CTX_get_error(ctx);
     X509_STORE_CTX_free(ctx);
     return error == X509_V_OK && ok != 1 ? X509_V_ERR_UNSPECIFIED : error;
+}
+
+// Whether the pinned OpenPak CA may vouch for `name` (the name the guest dialled). Only for a name
+// the resolver redirects to OpenPak, from the same answer it gives the guest, and for the console
+// server's own address or name. Everything else is checked against the host roots alone: the
+// OpenPak CA signs for any name it is asked for, and must not speak for one the guest reached
+// through host DNS. Answered from memory on every connection, so a profile refresh applies at once.
+inline bool PinnedCaTrustedFor(std::string_view name, const Sockets::Dns::Hooks& hooks,
+                               std::string_view console_server) {
+    namespace Dns = Sockets::Dns;
+    const std::string host = Dns::Normalise(name);
+    if (host.empty() || !hooks.enabled || !hooks.enabled()) {
+        return false;
+    }
+    if (!console_server.empty() && host == Dns::Normalise(console_server)) {
+        return true;
+    }
+    return Dns::Decide(host, hooks).verdict == Dns::Verdict::Redirect;
+}
+
+// The store a connection verifies against: `pinned_store` (the host roots plus the pinned CA) for
+// a name the pinned CA may vouch for, `host_store` for every other.
+inline X509_STORE* StoreFor(std::string_view name, X509_STORE* host_store,
+                            X509_STORE* pinned_store, const Sockets::Dns::Hooks& hooks,
+                            std::string_view console_server) {
+    return pinned_store != nullptr && PinnedCaTrustedFor(name, hooks, console_server)
+               ? pinned_store
+               : host_store;
+}
+
+// Whether a certificate in `chain` was issued by a CA certificate in `pem` (for the log line that
+// names a refused OpenPak chain).
+inline bool ChainIssuedBy(STACK_OF(X509)* chain, std::string_view pem) {
+    if (chain == nullptr || pem.empty()) {
+        return false;
+    }
+    BIO* const bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
+    if (bio == nullptr) {
+        return false;
+    }
+    bool issued = false;
+    while (X509* const ca = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
+        for (int i = 0; !issued && i < sk_X509_num(chain); ++i) {
+            issued = X509_check_ca(ca) >= 1 &&
+                     X509_check_issued(ca, sk_X509_value(chain, i)) == X509_V_OK;
+        }
+        X509_free(ca);
+        if (issued) {
+            break;
+        }
+    }
+    BIO_free(bio);
+    return issued;
 }
 
 } // namespace Service::SSL::Trust

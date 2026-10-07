@@ -99,6 +99,10 @@ std::string ThumbnailUrl(const std::string& uid);
 /// an AsyncWorker task only.
 std::string DauthToken(const std::string& client_id, const std::string& vendor);
 
+/// Whether `uid` has a device account at the configured server, from the secret store alone: no
+/// network, no sign-in. False with no server configured.
+bool HasDeviceAccount(const std::string& uid);
+
 /// A firmware user was deleted: its device account is forgotten (secret store) and its identity
 /// dropped from this process.
 void ForgetProfile(const std::string& uid);

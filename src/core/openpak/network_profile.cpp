@@ -413,6 +413,9 @@ Result Finish(std::string const& platform, Fetched const& fetch, std::string con
         if (!stored) {
             out.error = "server says the profile is unchanged, but nothing is stored";
         }
+        // The stored copy is the current one. Nothing reads the files' age (the re-check is a
+        // timer from boot), so the stored file is left as it is.
+        out.confirmed = stored.has_value();
         return out;  // stored, or built-in if nothing was stored
     }
     if (fetch.status != 200) {
@@ -429,6 +432,7 @@ Result Finish(std::string const& platform, Fetched const& fetch, std::string con
     FilterToCeiling(*fetched, CurrentCeiling().FamiliesFor(platform));
     out.profile = *fetched;
     out.source = Source::Fetched;
+    out.confirmed = true;
     return out;
 }
 
@@ -453,8 +457,9 @@ Result FetchWithCeiling(std::string const& platform, bool conditional, char cons
     LoadCeiling(ceiling.get());
     Result out = Finish(platform, fetch, etag);
     Apply(out);
-    LOG_INFO(WebService, "[OpenPak] network profile: {} platform {} -> {} source, version {}{}",
+    LOG_INFO(WebService, "[OpenPak] network profile: {} platform {} -> {} source, version {}{}{}",
              verb, platform, SourceName(out.source), out.profile.version,
+             fetch.status == 304 && out.confirmed ? " (unchanged, 304)" : "",
              out.error.empty() ? std::string{} : fmt::format(" ({})", out.error));
     return out;
 }
@@ -467,6 +472,11 @@ Result Fetch(std::string const& platform) {
 
 Result Refresh(std::string const& platform) {
     return FetchWithCeiling(platform, false, "refreshed");
+}
+
+Result DecideFetched(std::string const& platform, int status, std::string const& body,
+                     std::string const& etag, std::string const& etag_sent) {
+    return Finish(platform, Fetched{status, body, etag}, etag_sent);
 }
 
 std::optional<std::string> FetchFreshDigest(std::string const& platform) {
