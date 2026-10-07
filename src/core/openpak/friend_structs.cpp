@@ -20,6 +20,7 @@ namespace OpenPak::Friends {
 // differently sized members, which the trait cannot see through; their offsets are pinned above.)
 static_assert(std::has_unique_object_representations_v<FriendImpl>);
 static_assert(std::has_unique_object_representations_v<FriendForViewerImpl>);
+static_assert(std::has_unique_object_representations_v<FriendForViewerImplV2>);
 static_assert(std::has_unique_object_representations_v<FriendDetailedInfoImpl>);
 static_assert(std::has_unique_object_representations_v<FriendSettingImpl>);
 static_assert(std::has_unique_object_representations_v<FriendSettingImplV2>);
@@ -610,20 +611,57 @@ FriendImpl ToFriendImpl(const Baas::Friend& friend_, const Uid& user_id,
     return impl;
 }
 
-FriendForViewerImpl ToFriendForViewerImpl(const Baas::Friend& friend_, const Uid& user_id,
-                                          std::uint64_t own_presence_group_id) {
+namespace {
+
+/// The cached presence block from what 10101 would answer a viewer: offline keeps only the title
+/// and the time, and nothing at all without a time.
+ViewerPresenceImpl ToViewerPresence(const Baas::Friend& friend_, const FriendPresenceImpl& basis) {
+    ViewerPresenceImpl presence{};
+    const auto state = static_cast<std::uint8_t>(basis.status);
+    if (state == 0 && basis.last_update_timestamp <= 0) {
+        return presence;
+    }
+    presence.application_id = basis.application_id;
+    presence.acd_index = friend_.acd_index;
+    presence.presence_group_id = basis.presence_group_id;
+    presence.updated_at = basis.last_update_timestamp;
+    if (state == 0) {
+        return presence;
+    }
+    presence.state = state;
+    std::memcpy(presence.app_field, basis.app_key_value_storage, sizeof(presence.app_field));
+    return presence;
+}
+
+template <typename Record>
+Record ToViewerRecord(const Baas::Friend& friend_, const Uid& user_id,
+                      std::uint64_t own_presence_group_id) {
     const FriendImpl basis = ToFriendImpl(friend_, user_id, own_presence_group_id, true);
 
-    FriendForViewerImpl impl{};
-    impl.user_id = user_id;
-    impl.network_user_id = basis.network_user_id;
-    impl.nickname = basis.nickname;
-    impl.presence = basis.presence;
-    impl.is_favourite = basis.is_favourite;
-    impl.is_new = basis.is_new;
-    impl.is_valid = 1;
-    FixedUtf8(Field(impl.thumbnail_url), friend_.thumbnail_url);
-    return impl;
+    Record record{};
+    record.user_id = user_id;
+    record.network_user_id = friend_.id;
+    record.nickname = basis.nickname;
+    FixedUtf8(Field(record.thumbnail_url), friend_.thumbnail_url);
+    record.presence = ToViewerPresence(friend_, basis.presence);
+    record.is_favourite = friend_.is_favorite ? 1 : 0;
+    record.is_new = friend_.is_newly ? 1 : 0;
+    record.is_valid = 1;
+    return record;
+}
+
+} // namespace
+
+FriendForViewerImpl ToFriendForViewerImpl(const Baas::Friend& friend_, const Uid& user_id,
+                                          std::uint64_t own_presence_group_id) {
+    return ToViewerRecord<FriendForViewerImpl>(friend_, user_id, own_presence_group_id);
+}
+
+FriendForViewerImplV2 ToFriendForViewerImplV2(const Baas::Friend& friend_, const Uid& user_id,
+                                              std::uint64_t own_presence_group_id) {
+    auto record = ToViewerRecord<FriendForViewerImplV2>(friend_, user_id, own_presence_group_id);
+    FixedUtf8(Field(record.friend_note), friend_.note);
+    return record;
 }
 
 FriendDetailedInfoImpl ToDetailedInfoImpl(const Baas::Friend& friend_, const Uid& user_id) {
