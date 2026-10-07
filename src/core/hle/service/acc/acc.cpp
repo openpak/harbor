@@ -243,8 +243,9 @@ public:
 private:
     // The module reads su/baas/<uid>.dat (23.0.1 0x085BB4F0, research/acc-fw23 notes §1): no
     // registration at BAAS is 2124-0200, which is what a user made a moment ago has. With OpenPak on,
-    // a user is registered once its device account signed in (this process); PlayerSelect's
-    // "Sign In and Link" registers and links a user that answers 0200. Offline: as stock Eden.
+    // a user is registered once it has a device account (secret store, or signed in in this
+    // process); PlayerSelect's "Sign In and Link" registers and links a user that answers 0200.
+    // Offline: as stock Eden.
     void CheckAvailability(HLERequestContext& ctx) {
         const bool registered = IsRegisteredAtBaas();
         LOG_DEBUG(Service_ACC, "called, registered={}", registered);
@@ -284,7 +285,9 @@ private:
         if (!OpenPakAccount::Enabled()) {
             return true;
         }
-        return OpenPak::Session::NetworkServiceAccountId(OpenPakAccount::UidString(account_id)) != 0;
+        const std::string uid = OpenPakAccount::UidString(account_id);
+        return OpenPak::Session::HasDeviceAccount(uid) ||
+               OpenPak::Session::NetworkServiceAccountId(uid) != 0;
     }
 
     void GetAccountId(HLERequestContext& ctx) {
