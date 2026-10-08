@@ -46,6 +46,7 @@ class GameList;
 class GImageInfo;
 class GRenderWindow;
 class HarborControl;
+class HarborMenu;
 class LoadingScreen;
 class OverlayDialog;
 class ControllerDialog;
@@ -490,6 +491,7 @@ private:
     std::unique_ptr<PlayTime::PlayTimeManager> play_time_manager;
     std::shared_ptr<InputCommon::InputSubsystem> input_subsystem;
     std::unique_ptr<HarborControl> harbor_control;
+    std::unique_ptr<HarborMenu> harbor_menu;
 
 #ifdef ENABLE_UPDATE_CHECKER
     QFuture<std::optional<Common::Net::Release>> update_future;
@@ -547,7 +549,6 @@ private:
     int harbor_console_steps = 0;
     std::thread harbor_connect;
     bool harbor_openpak_stopped = false;
-    QAction* harbor_frame_gen_action = nullptr; // Harbor menu, Frame generation
     QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
