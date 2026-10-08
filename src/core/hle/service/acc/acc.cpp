@@ -112,6 +112,20 @@ static u64 NetworkServiceAccountIdOf(const Common::UUID& user) {
     return id != 0 ? id : user.Hash();
 }
 
+/// A user OpenPak signed in whose device account is not linked to an account: on a console that
+/// user has no network service account a title can use (2124-0200), so a title is never handed
+/// its id_token. The token carries no openpak claim, and every title server refuses it with the
+/// title's own error instead of the firmware's link prompt. False while nobody has signed the
+/// user in yet (that is EnsureIdTokenCacheAsync's to find out) and when OpenPak is off.
+static bool SignedInUnlinked(const Common::UUID& user) {
+    if (!OpenPakAccount::Enabled()) {
+        return false;
+    }
+    const std::string uid = OpenPakAccount::UidString(user);
+    OpenPak::WaitForFirmwareUserLink(uid);
+    return OpenPak::Session::NetworkServiceAccountId(uid) != 0 && !OpenPak::Session::Linked(uid);
+}
+
 /// LoadIdTokenCache (3 and 4): the user's OpenPak id_token, size checked against the buffer.
 static void LoadIdTokenCacheFor(HLERequestContext& ctx, const Common::UUID& user) {
     std::string token;
@@ -1048,8 +1062,9 @@ public:
 
 private:
     void CheckAvailability(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "(STUBBED) called");
-        PushResult(ctx, ResultSuccess);
+        const bool unlinked = SignedInUnlinked(user_id);
+        LOG_DEBUG(Service_ACC, "called, unlinked={}", unlinked);
+        PushResult(ctx, unlinked ? ResultNetworkServiceAccountUnavailable : ResultSuccess);
     }
 
     void GetAccountId(HLERequestContext& ctx) {
@@ -1068,6 +1083,11 @@ private:
 
     void LoadIdTokenCache(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
+        if (SignedInUnlinked(user_id)) {
+            LOG_INFO(Service_ACC, "acc: the user is not linked; no id_token for the title");
+            PushResult(ctx, ResultNetworkServiceAccountUnavailable);
+            return;
+        }
         LoadIdTokenCacheFor(ctx, user_id);
     }
 
@@ -1115,11 +1135,14 @@ private:
     }
 
     OpenPak::AsyncWorker::Work EnsureWork() const {
-        return [uid = OpenPakAccount::UidString(user_id)](std::stop_token, std::vector<u8>&) {
-            if (OpenPakAccount::Enabled()) {
-                OpenPakAccount::EnsureAndAdopt(uid);
+        return [user = user_id](std::stop_token, std::vector<u8>&) {
+            if (!OpenPakAccount::Enabled()) {
+                return ResultSuccess;
             }
-            return ResultSuccess;
+            OpenPakAccount::EnsureAndAdopt(OpenPakAccount::UidString(user));
+            // Signed in but not linked: the console's answer for a user without a network service
+            // account, which sends the title to the firmware's link prompt.
+            return SignedInUnlinked(user) ? ResultNetworkServiceAccountUnavailable : ResultSuccess;
         };
     }
 
