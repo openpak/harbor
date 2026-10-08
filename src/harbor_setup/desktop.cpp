@@ -194,10 +194,15 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
     const bool forced = TakeFlag(argc, argv, "--harbor-setup");
     const bool console = TakeFlag(argc, argv, "--harbor-console");
 
-    // Test harness runs (HARBOR_CONTROL) and an explicit boot target (--qlaunch, a game) boot what
-    // was asked: no wizard and no console mode, unless --harbor-setup or --harbor-console says so.
-    if (!forced && !console && (std::getenv("HARBOR_CONTROL") || ExplicitBoot(argc, argv))) {
+    // Harbor always starts the console (the setup first when it is needed): there is no plain Eden
+    // mode. Only the test harness (HARBOR_CONTROL) boots what its command line asks for (--qlaunch),
+    // unless --harbor-setup or --harbor-console says so.
+    if (!forced && !console && std::getenv("HARBOR_CONTROL")) {
         return -1;
+    }
+    if (ExplicitBoot(argc, argv)) {
+        Common::Log::Initialize();
+        LOG_INFO(Frontend, "harbor: a boot target on the command line is ignored: Harbor starts the console");
     }
     console_allowed = true;
     const auto readiness = CheckReadiness();
