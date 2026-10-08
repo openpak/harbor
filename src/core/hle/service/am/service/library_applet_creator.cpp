@@ -234,6 +234,29 @@ Result CreateAppletForCaller(std::shared_ptr<ILibraryAppletAccessor>* out, Core:
                              AppletId applet_id, LibraryAppletMode mode) {
     std::shared_ptr<ILibraryAppletAccessor> library_applet;
     if (ShouldCreateGuestApplet(system, applet_id)) {
+        // HOME session: one firmware library applet per caller, as on the console; a second
+        // CreateLibraryApplet while the first has not completed is refused. Behaviour follows the
+        // Ryujinx Harbor (MIT-licensed Ryujinx base).
+        if (system.GetAppletManager().IsHomeSession()) {
+            std::shared_ptr<Applet> open;
+            {
+                std::scoped_lock lk{caller->lock};
+                for (const auto& child : caller->child_applets) {
+                    // An ended process not yet pruned is gone; a winding one is still open.
+                    if (!child->is_completed && (!child->process_released || child->is_winding)) {
+                        open = child;
+                        break;
+                    }
+                }
+            }
+            if (open) {
+                LOG_WARNING(Service_AM,
+                            "am: CreateLibraryApplet {} refused: pid {} already has library "
+                            "applet {} pid {} open",
+                            applet_id, caller->aruid.pid, open->applet_id, open->aruid.pid);
+                R_THROW(ResultAppletLaunchFailed);
+            }
+        }
         library_applet = CreateGuestApplet(system, window_system, caller, applet_id, mode);
     }
     if (!library_applet && system.GetAppletManager().IsHomeSession()) {
