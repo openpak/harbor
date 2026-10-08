@@ -300,6 +300,7 @@ struct System::Impl {
 
         // Before any service can open an OpenPak session: a new server gets this NAND's own TLS
         // certificate, not a self-signed one.
+        Harbor::InstallSecretNamespace();
         Harbor::InstallClientIdentity();
 
         service_manager = std::make_shared<Service::SM::ServiceManager>(kernel);

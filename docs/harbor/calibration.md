@@ -137,4 +137,10 @@ an archive *without* the server's package.
   established, no caller seen); ethc `GetMacAddress` (a wired adapter, not in CAL0); the starter's
   Internet pages show "System MAC address: ---" and "LAN MAC address: ---", fed by a nifm call
   not yet identified.
+- Password store: every OpenPak secret key (device accounts, Penne, pctl, website account) is
+  kept as `console-<8 bytes of SHA-256("harbor-console:" + device id)>-<key>`
+  (`Harbor::InstallSecretNamespace`, set before any secret is read); an older global entry moves
+  under the namespace on its first read. The device key itself stays host-wide. A NAND copied
+  together with `calibration/prodinfo.bin` is the same console and shares the namespace; remove
+  the binary from the copy to make it a console of its own.
 - set:sys `GetMiiAuthorId` already is a per-install random UUID in the system settings save.

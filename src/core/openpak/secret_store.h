@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -43,5 +44,18 @@ bool HasSecretStore();
 std::optional<std::string> LoadSecret(std::string_view key);
 bool StoreSecret(std::string_view key, std::string_view secret);
 void EraseSecret(std::string_view key);
+
+/// The console the secrets above belong to. Every key is kept as "<namespace>-<key>", so two
+/// consoles (NANDs) on one host, even with the same firmware user, never share credentials. The
+/// function is asked at each use, so it follows the current NAND; an empty answer means no
+/// namespace. An entry kept before namespacing is moved under the namespace the first time it is
+/// read (read the old key, write the new one, erase the old one), so nobody is signed out.
+void SetSecretNamespace(std::function<std::string()> resolve);
+
+/// Host-wide entries outside any console's namespace: the console's own device key, which names
+/// the namespace and so cannot live inside it.
+std::optional<std::string> LoadHostSecret(std::string_view key);
+bool StoreHostSecret(std::string_view key, std::string_view secret);
+void EraseHostSecret(std::string_view key);
 
 } // namespace OpenPak
