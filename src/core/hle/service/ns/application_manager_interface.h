@@ -97,7 +97,10 @@ public:
     Result Unknown935();
     Result Unknown2366(OutInterface<IAsyncResult> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id);
-    Result Unknown4008(UserIdAndValue input);
+    Result Unknown4008(OutInterface<IAsyncResult> out_interface,
+                       OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id,
+                       u64 work_buffer_size,
+                       InCopyHandle<Kernel::KTransferMemory> work_buffer);
     Result Unknown4058();
     Result Unknown4084();
     Result Unknown4096();
@@ -125,6 +128,7 @@ private:
     Event unknown518_event;
     Event unknown1508_event;
     Event async_completed_event;
+    Event unknown4008_event;
 };
 
 } // namespace Service::NS
