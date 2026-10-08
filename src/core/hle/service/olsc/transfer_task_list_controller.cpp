@@ -11,6 +11,15 @@
 
 namespace Service::OLSC {
 
+namespace {
+
+// The 23.0.1 sysmodule's answers when the task asked for does not exist (0x1a96b0, 0x1aa1b0,
+// 0x1ab020) and when no task is running (0x1a9850).
+constexpr Result ResultTransferTaskNotFound{ErrorModule::OLSC, 1102};
+constexpr Result ResultNoCurrentTransferTask{ErrorModule::OLSC, 1103};
+
+} // namespace
+
 ITransferTaskListController::ITransferTaskListController(Core::System& system_)
     : ServiceFramework{system_, "ITransferTaskListController"} {
     // clang-format off
@@ -32,8 +41,8 @@ ITransferTaskListController::ITransferTaskListController(Core::System& system_)
         {14, nullptr, "GetRepairTransferTaskProgress"},
         {15, nullptr, "EnsureExecutableForRepairTransferTask"},
         {16, D<&ITransferTaskListController::GetTransferTaskCount>, "GetTransferTaskCount"},
-        {17, nullptr, "GetTransferTaskInfo"},
-        {18, nullptr, "ListTransferTaskInfo"},
+        {17, D<&ITransferTaskListController::GetTransferTaskInfo>, "GetTransferTaskInfo"},
+        {18, D<&ITransferTaskListController::ListTransferTaskInfo>, "ListTransferTaskInfo"},
         {19, nullptr, "DeleteTransferTask"},
         {20, nullptr, "RaiseTransferTaskPriority"},
         {21, D<&ITransferTaskListController::GetTransferTaskProgress>, "GetTransferTaskProgress"}, //10.1.0+
@@ -75,27 +84,54 @@ Result ITransferTaskListController::GetTransferTaskStartEventNativeHandleHolder(
     R_SUCCEED();
 }
 
-Result ITransferTaskListController::GetCurrentTransferTaskInfo(Out<std::array<u8, 0x30>> out_info,
-                                                              u8 unknown) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called, unknown={:#x}", unknown);
-    out_info->fill(0);
+Result ITransferTaskListController::GetCurrentTransferTaskInfo(Out<TransferTaskInfo> out_info,
+                                                              u8 filter) {
+    // 0x223010 -> 0x1a9850: the running task's info, or 2179-1103 when none runs. Harbor runs no
+    // transfer tasks (upload and download are not built), so there never is one.
+    LOG_DEBUG(Service_OLSC, "called, filter={}", filter);
+    *out_info = {};
+    R_RETURN(ResultNoCurrentTransferTask);
+}
+
+Result ITransferTaskListController::GetTransferTaskInfo(Out<TransferTaskInfo> out_info, u8 filter,
+                                                       u64 task_id) {
+    // 0x222b10 -> 0x1a96b0: {u8 filter, u64 task id} in, the info or 2179-1102.
+    LOG_DEBUG(Service_OLSC, "called, filter={} task={:#x}", filter, task_id);
+    *out_info = {};
+    R_RETURN(ResultTransferTaskNotFound);
+}
+
+Result ITransferTaskListController::ListTransferTaskInfo(
+    Out<s32> out_count, OutArray<TransferTaskInfo, BufferAttr_HipcMapAlias> out_infos, u8 filter,
+    s32 offset) {
+    // 0x222ca0 -> 0x1a9b60: {u8 filter, s32 offset} in, TransferTaskInfo[] and an s32 count out.
+    LOG_DEBUG(Service_OLSC, "called, filter={} offset={} capacity={}", filter, offset,
+              out_infos.size());
+    *out_count = 0;
     R_SUCCEED();
 }
 
-Result ITransferTaskListController::GetTransferTaskProgress() {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called.");
-    R_SUCCEED();
+Result ITransferTaskListController::GetTransferTaskProgress(Out<std::array<u8, 0x18>> out_progress,
+                                                           u8 filter, u64 task_id) {
+    // 0x222e80 -> 0x1aa1b0: {u8 filter, u64 task id} in, 0x18 bytes out, or 2179-1102 when the
+    // task does not exist.
+    LOG_DEBUG(Service_OLSC, "called, filter={} task={:#x}", filter, task_id);
+    out_progress->fill(0);
+    R_RETURN(ResultTransferTaskNotFound);
 }
 
-Result ITransferTaskListController::FindTransferTaskInfo(Out<std::array<u8, 0x30>> out_info,
-                                                        InBuffer<BufferAttr_HipcAutoSelect> in) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called, in_size={}", in.size());
-    out_info->fill(0);
-    R_SUCCEED();
+Result ITransferTaskListController::FindTransferTaskInfo(Out<TransferTaskInfo> out_info,
+                                                        [[maybe_unused]] std::array<u64, 4> query) {
+    // 0x2231c0 -> 0x1ab020: 0x20 bytes inline (Eden read a buffer), the info or 2179-1102. The
+    // query's fields were not read; no task ever exists here.
+    LOG_DEBUG(Service_OLSC, "called");
+    *out_info = {};
+    R_RETURN(ResultTransferTaskNotFound);
 }
 
-Result ITransferTaskListController::GetTransferTaskCount(Out<u32> out_count, u8 unknown) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called, unknown={:#x}", unknown);
+Result ITransferTaskListController::GetTransferTaskCount(Out<u32> out_count, u8 filter) {
+    // 0x222980 -> 0x1a9400: tasks of a kind (filter 0: types 0-1, 1: types 2-3, 2: all).
+    LOG_DEBUG(Service_OLSC, "called, filter={}", filter);
     *out_count = 0;
     R_SUCCEED();
 }
