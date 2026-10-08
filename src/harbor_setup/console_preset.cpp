@@ -10,6 +10,8 @@
 #include "core/core.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/set/setting_formats/system_settings.h"
+#include "core/hle/service/set/system_settings_server.h"
+#include "core/hle/service/sm/sm.h"
 #include "frontend_common/secret_store.h"
 #include "harbor_setup/harbor_setup.h"
 
@@ -71,6 +73,22 @@ PowerRequest ConsolePowerRequest(Core::System& system) {
 std::optional<bool> SavedConsoleDarkTheme() {
     return ReadConsoleDarkTheme(Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) /
                                 "system/save/8000000000000050/settings.dat");
+}
+
+std::optional<bool> LiveConsoleDarkTheme(Core::System& system) {
+    if (!system.IsPoweredOn()) {
+        return std::nullopt;
+    }
+    const auto set_sys =
+        system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", false);
+    if (!set_sys) {
+        return std::nullopt;
+    }
+    Service::Set::ColorSet color{};
+    if (set_sys->GetColorSetId(&color).IsError()) {
+        return std::nullopt;
+    }
+    return color == Service::Set::ColorSet::BasicBlack;
 }
 
 std::optional<bool> ReadConsoleDarkTheme(const std::filesystem::path& path) {

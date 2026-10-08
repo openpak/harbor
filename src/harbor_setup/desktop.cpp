@@ -12,6 +12,9 @@
 #include <string_view>
 
 #include <SDL3/SDL.h>
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -208,7 +211,20 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
     LOG_INFO(Frontend, "harbor: setup {} before the console starts", forced ? "requested" : "needed");
 
     DesktopHost host;
-    return RunWizard(host);
+    const int result = RunWizard(host);
+#ifdef __linux__
+    if (result == 0) {
+        // Borealis ran the setup in this process with SDL's window; the Harbor menu starts it with
+        // its own platform, once per process. The console starts in a fresh process (same pid).
+        LOG_INFO(Frontend, "harbor: setup completed; starting the console in a fresh process");
+        Common::Log::Stop();
+        std::vector<char*> args(argv, argv + argc);
+        args.push_back(nullptr);
+        execv("/proc/self/exe", args.data());
+        // execv failed: go on in this process.
+    }
+#endif
+    return result;
 }
 
 } // namespace HarborSetup

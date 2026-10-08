@@ -6,11 +6,7 @@ package org.yuzu.yuzu_emu.harbor
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
-import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.Toast
-import android.os.Handler
-import android.os.Looper
 import android.os.Process
 import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -18,11 +14,6 @@ import kotlin.concurrent.thread
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
-import org.yuzu.yuzu_emu.dialogs.QuickSettings
-import org.yuzu.yuzu_emu.features.input.NativeInput
-import org.yuzu.yuzu_emu.features.input.model.NativeButton
-import org.yuzu.yuzu_emu.features.input.model.NpadStyleIndex
-import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.model.AppletInfo
@@ -94,6 +85,8 @@ object HarborConsole {
                 start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
             }
             HarborNative.connectOpenPak()
+            // The Harbor menu and the mapped Power button, for this console session.
+            HarborNative.initMenu()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
             Log.info("[Harbor] console boot: $games titles and $addons add-on files registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
             from.runOnUiThread {
@@ -257,44 +250,6 @@ object HarborConsole {
         activity.finish()
     }
 
-    /**
-     * Frame generation (Lossless Scaling, Eden's LSFG): the user's own Lossless.dll, then the on/off and
-     * mode settings Eden's quick settings had. Off by default; the settings are console-wide and apply to
-     * whatever is presented, HOME or a title launched from it.
-     */
-    fun showFrameGeneration(activity: EmulationActivity) {
-        if (!LosslessScalingHelper.isInstalled()) {
-            activity.harborLosslessPicker.launch(arrayOf("*/*"))
-            return
-        }
-        val fragment = activity.harborEmulationFragment() ?: return
-        val container = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
-        QuickSettings(fragment).addFrameGen(container)
-        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-            .setTitle(R.string.harbor_menu_frame_gen)
-            .setView(ScrollView(activity).apply { addView(container) })
-            .setPositiveButton(R.string.harbor_close, null)
-            .setNeutralButton(R.string.lossless_scaling_replace) { _, _ ->
-                activity.harborLosslessPicker.launch(arrayOf("*/*"))
-            }
-            .setNegativeButton(R.string.lossless_scaling_remove) { _, _ ->
-                val confirm = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-                    .setTitle(R.string.lossless_scaling_remove)
-                    .setMessage(
-                        activity.getString(R.string.lossless_scaling_remove_confirmation) + "\n\n" +
-                            activity.getString(R.string.harbor_frame_gen_restart)
-                    )
-                    .setPositiveButton(R.string.lossless_scaling_remove) { _, _ ->
-                        changeLosslessDll(activity) { LosslessScalingHelper.remove(); null }
-                    }
-                    .setNegativeButton(android.R.string.cancel, null)
-                    .show()
-                HarborPanelInput.attach(confirm)
-            }
-            .show()
-        HarborPanelInput.attach(dialog)
-    }
-
     /** A picked Lossless.dll: installed with the console stopped, as Eden requires, then HOME again. */
     fun installLosslessDll(activity: EmulationActivity, uri: Uri) {
         changeLosslessDll(activity) {
@@ -309,7 +264,7 @@ object HarborConsole {
     }
 
     /** Lossless.dll cannot change while the renderer uses it: stop, change it off the UI thread, restart. */
-    private fun changeLosslessDll(activity: EmulationActivity, change: () -> String?) {
+    internal fun changeLosslessDll(activity: EmulationActivity, change: () -> String?) {
         activity.harborStop {
             val progress = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
                 .setMessage(R.string.lossless_scaling_installing)
@@ -332,115 +287,30 @@ object HarborConsole {
     }
 
     /**
-     * The Harbor menu (Android back, or Plus and Minus together): Resume, Detach/Attach Joy-Con,
-     * Restart, Graphics driver, Show/Hide FPS, Log threads, Frame generation (on GPUs that can run
-     * it), Set up again, Exit. Physical input is released first so nothing stays held in the guest.
+     * The Harbor menu (Android back, Plus and Minus together, or the on-screen button): drawn by
+     * Borealis onto the console's own screen (harbor_setup/menu.h); what it asks for comes back
+     * through HarborMenuBridge. Physical input is released first so nothing stays held in the guest.
      */
     fun showMenu(activity: EmulationActivity, trigger: String) {
-        // A menu left behind by an earlier emulation screen (destroyed without a dismiss) does not
-        // count: only one showing on this screen does.
-        val open = menuDialog?.takeIf { it.isShowing && it.ownerActivity === activity }
-        if (activity.isFinishing || open != null) {
-            Log.info("[Harbor] menu asked for by $trigger: ${if (open != null) "already open" else "the screen is closing"}")
+        if (activity.isFinishing) {
+            Log.info("[Harbor] menu asked for by $trigger: the screen is closing")
+            return
+        }
+        if (HarborNative.menuOpen()) {
+            // Android back is the menu's own Back; Plus+Minus is handled by the menu itself.
+            when (trigger) {
+                "Android back" -> HarborNative.menuBack()
+                "on-screen button" -> HarborNative.closeMenu()
+            }
             return
         }
         Log.info("[Harbor] menu opened by $trigger")
         InputHandler.releaseAll()
-        val fps = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
-        val items = buildList<Pair<Int, () -> Unit>> {
-            add(R.string.harbor_menu_resume to {})
-            add(R.string.harbor_menu_home to { pressHome(HOME_SHORT_MS) })
-            add(R.string.harbor_menu_home_hold to { pressHome(HOME_HOLD_MS) })
-            add(R.string.harbor_menu_power to { pressPower() })
-            add(
-                (if (HarborNative.joyconsDetached()) R.string.harbor_menu_attach_joycons else R.string.harbor_menu_detach_joycons) to {
-                    HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
-                }
-            )
-            if (!HarborKeyService.enabled(activity)) {
-                add(R.string.harbor_menu_controller_home to {
-                    Toast.makeText(activity, R.string.harbor_key_service_hint, Toast.LENGTH_LONG).show()
-                    activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                })
-            }
-            add(R.string.harbor_menu_restart to { stopThen(activity) { restartConsole(activity) } })
-            // Only an Adreno GPU can load another driver (G4.GPU.1).
-            if (GpuDriverHelper.isAdrenoGpu()) {
-                add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
-            }
-            add(
-                (if (fps) R.string.harbor_menu_hide_fps else R.string.harbor_menu_show_fps) to {
-                    activity.harborEmulationFragment()?.harborShowStats(!fps)
-                }
-            )
-            add(R.string.harbor_menu_touch_controls to { showTouchControls(activity) })
-            add(R.string.harbor_menu_log_threads to { HarborNative.logGuestThreads() })
-            if (LosslessScalingHelper.isSupportedByGpu()) {
-                add(R.string.harbor_menu_frame_gen to { showFrameGeneration(activity) })
-            }
-            add(R.string.harbor_menu_backup to { askBackupPassphrase(activity) })
-            add(R.string.harbor_menu_restore to { confirmRestore(activity) })
-            add(R.string.harbor_menu_new_console to { confirmNewConsole(activity) })
-            add(
-                R.string.harbor_menu_setup_again to {
-                    stopThen(activity) {
-                        HarborNative.stopOpenPak()
-                        restartIntoSetup(activity)
-                    }
-                }
-            )
-            add(
-                R.string.harbor_menu_exit to {
-                    activity.harborStop {
-                        HarborNative.stopOpenPak()
-                        activity.finishAndRemoveTask()
-                    }
-                }
-            )
-        }
-        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-            .setTitle(R.string.harbor_menu_title)
-            .setItems(items.map { activity.getString(it.first) as CharSequence }.toTypedArray()) { _, which ->
-                items[which].second()
-            }
-            .setOnDismissListener {
-                menuDialog = null
-                activity.harborResetChord()
-            }
-            .show()
-        dialog.setOwnerActivity(activity)
-        menuDialog = dialog
-        HarborPanelInput.attach(dialog)
+        activity.harborResetChord()
+        HarborNative.openMenu(MENU_PAGE_MENU)
     }
 
-    /**
-     * The graphics driver HOME and every title run with: the phone's own or one installed by the
-     * setup. A driver loads when the process starts, so a change restarts Harbor into the console.
-     */
-    private fun showDriverPicker(activity: EmulationActivity) {
-        val flat = HarborSetupBridge.installedDrivers()
-        val ids = mutableListOf("")
-        val names = mutableListOf<CharSequence>(activity.getString(R.string.harbor_driver_system))
-        for (i in 0 until flat.size / 3) {
-            ids.add(flat[i * 3])
-            names.add(
-                if (flat[i * 3 + 2].isEmpty()) flat[i * 3 + 1] else "${flat[i * 3 + 1]} (${flat[i * 3 + 2]})"
-            )
-        }
-        val current = ids.indexOf(HarborSetupBridge.currentDriver()).coerceAtLeast(0)
-        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-            .setTitle(R.string.harbor_menu_driver)
-            .setSingleChoiceItems(names.toTypedArray(), current) { picker, which ->
-                picker.dismiss()
-                if (which == current || !HarborSetupBridge.selectDriver(ids[which])) {
-                    return@setSingleChoiceItems
-                }
-                activity.harborStop { restartProcess(activity) }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-        HarborPanelInput.attach(dialog)
-    }
+    private const val MENU_PAGE_MENU = 0
 
     /**
      * The setup finished: the console boots in a fresh process, as at any cold start. The wizard's
@@ -485,8 +355,6 @@ object HarborConsole {
         Runtime.getRuntime().exit(0)
     }
 
-    private var menuDialog: android.app.Dialog? = null
-
     /**
      * The Harbor menu's Show FPS, kept by Harbor itself: off unless chosen there, whatever Eden's
      * own default or saved setting for its performance overlay says.
@@ -500,6 +368,13 @@ object HarborConsole {
 
     private const val PREF_SHOW_FPS = "show_fps"
 
+    /** Harbor Settings: the device and its driver on a line under the FPS (off unless chosen). */
+    var showDeviceLine: Boolean
+        get() = preferences().getBoolean(PREF_DEVICE_LINE, false)
+        set(value) = preferences().edit().putBoolean(PREF_DEVICE_LINE, value).apply()
+
+    private const val PREF_DEVICE_LINE = "show_device_line"
+
     /** The touch controls hidden by the user's choice in the Harbor menu (not by a controller). */
     var padHidden: Boolean
         get() = preferences().getBoolean(PREF_PAD_HIDDEN, false)
@@ -507,57 +382,8 @@ object HarborConsole {
 
     private const val PREF_PAD_HIDDEN = "pad_hidden"
 
-    /** The Harbor menu's Touch controls page: show or hide, edit the layout, size and opacity, reset. */
-    private fun showTouchControls(activity: EmulationActivity) {
-        val fragment = activity.harborEmulationFragment() ?: return
-        val hidden = padHidden
-        val items = listOf<Pair<Int, () -> Unit>>(
-            (if (hidden) R.string.harbor_pad_show else R.string.harbor_pad_hide) to {
-                fragment.harborSetControlsHidden(!hidden)
-            },
-            R.string.harbor_pad_edit to { fragment.harborEditControls() },
-            R.string.harbor_pad_adjust to { fragment.harborAdjustControls() },
-            R.string.harbor_pad_reset to { fragment.harborResetControls() }
-        )
-        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-            .setTitle(R.string.harbor_menu_touch_controls)
-            .setItems(items.map { activity.getString(it.first) as CharSequence }.toTypedArray()) { _, which ->
-                items[which].second()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-        HarborPanelInput.attach(dialog)
-    }
-
-    /**
-     * The HOME button from the Harbor menu, held for `holdMs` on the controller the touch overlay
-     * drives (Handheld while the Joy-Cons are attached, Player 1 when detached). am times it like a
-     * real press: under 400 ms is a short press, past the long-press time quick settings.
-     */
-    private fun pressHome(holdMs: Long) {
-        val port = if (NativeInput.getStyleIndex(0) == NpadStyleIndex.Handheld) 8 else 0
-        Log.info("[Harbor] HOME from the menu, held $holdMs ms")
-        val handler = Handler(Looper.getMainLooper())
-        // After the menu has closed, so the press lands in the guest.
-        handler.postDelayed({
-            NativeInput.onOverlayButtonEvent(port, NativeButton.Home, NativeInput.ButtonState.PRESSED)
-            handler.postDelayed({
-                NativeInput.onOverlayButtonEvent(port, NativeButton.Home, NativeInput.ButtonState.RELEASED)
-            }, holdMs)
-        }, HOME_AFTER_MENU_MS)
-    }
-
-    /**
-     * The console's power button from the Harbor menu, as the Ryujinx Harbor's F5: held, so HOME's
-     * overlay opens its power menu (Sleep Mode, Restart, Power Off). Sent after the menu has closed.
-     */
-    private fun pressPower() {
-        Log.info("[Harbor] power button from the menu")
-        Handler(Looper.getMainLooper()).postDelayed({ HarborNative.pressPower() }, HOME_AFTER_MENU_MS)
-    }
-
     /** "Stopping the console…" while the session stops, then `next` (Restart, Set up again). */
-    private fun stopThen(activity: EmulationActivity, next: () -> Unit) {
+    internal fun stopThen(activity: EmulationActivity, next: () -> Unit) {
         val notice = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
             .setMessage(R.string.harbor_stopping)
             .setCancelable(false)
@@ -596,7 +422,7 @@ object HarborConsole {
             .show()
     }
 
-    private fun askBackupPassphrase(activity: EmulationActivity) {
+    internal fun askBackupPassphrase(activity: EmulationActivity) {
         askPassphrase(activity, R.string.harbor_backup_passphrase) { first ->
             if (first == null) return@askPassphrase
             if (first.length < MIN_PASSPHRASE) {
@@ -654,7 +480,7 @@ object HarborConsole {
         }
     }
 
-    private fun confirmRestore(activity: EmulationActivity) {
+    internal fun confirmRestore(activity: EmulationActivity) {
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle(R.string.harbor_menu_restore)
             .setMessage(R.string.harbor_restore_confirm)
@@ -746,7 +572,7 @@ object HarborConsole {
         }
     }
 
-    private fun confirmNewConsole(activity: EmulationActivity) {
+    internal fun confirmNewConsole(activity: EmulationActivity) {
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle(R.string.harbor_menu_new_console)
             .setMessage(R.string.harbor_new_console_confirm)
@@ -767,9 +593,4 @@ object HarborConsole {
             .show()
         HarborPanelInput.attach(dialog)
     }
-
-    private const val HOME_SHORT_MS = 100L
-    // Past am's 800 ms default and any long-press time the HOME menu sets for itself.
-    private const val HOME_HOLD_MS = 1500L
-    private const val HOME_AFTER_MENU_MS = 200L
 }

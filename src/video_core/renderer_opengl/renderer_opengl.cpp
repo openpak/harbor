@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include "common/settings.h"
 #include "core/core_timing.h"
 #include "core/frontend/emu_window.h"
+#include "video_core/host_screen.h"
 #include "video_core/capture.h"
 #include "video_core/present.h"
 #include "video_core/renderer_opengl/gl_blit_screen.h"
@@ -140,6 +142,14 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
     }
 
     RenderAppletCaptureLayer(framebuffers);
+
+    // Harbor: the host screen (the Harbor menu) is presented in place of the console's picture.
+    const auto host_frame = VideoCore::HostScreen::Current();
+    std::array<Tegra::FramebufferConfig, 1> host_layer{};
+    if (host_frame) {
+        host_layer[0] = VideoCore::HostScreen::MakeLayer(*host_frame);
+        framebuffers = host_layer;
+    }
     RenderScreenshot(framebuffers);
 
     state_tracker.BindFramebuffer(0);

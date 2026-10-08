@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <array>
 #include <functional>
 #include <memory>
@@ -133,6 +134,11 @@ public:
     /// Returns the latest status of touch input from the console
     TouchFingerState GetTouch() const;
 
+    /// Harbor: while the host owns the touch screen (the Harbor menu covers the console's picture),
+    /// the guest reads no touch; the host reads it with GetHostTouch.
+    void SetHostOwnsTouch(bool host);
+    TouchFingerState GetHostTouch() const;
+
     /**
      * Adds a callback to the list of events
      * @param update_callback A ConsoleUpdateCallback that will be triggered
@@ -183,6 +189,7 @@ private:
     TouchDevices touch_devices;
 
     mutable std::mutex mutex;
+    std::atomic_bool host_owns_touch{false};
     mutable std::mutex callback_mutex;
     ::Common::unordered_map<int, ConsoleUpdateCallback> callback_list;
     int last_callback_key = 0;

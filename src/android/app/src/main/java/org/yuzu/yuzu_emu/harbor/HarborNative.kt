@@ -112,6 +112,21 @@ object HarborNative {
     /** A fresh calibration and device key; this console's OpenPak credentials dropped. */
     external fun makeNewConsole(): Boolean
 
+    /** Once a console boots: the Harbor menu's host and the mapped Power button (harbor_menu_android.cpp). */
+    external fun initMenu()
+
+    /** Opens the Harbor menu on the console's screen: 0 the menu, 1 Settings, 2 frame generation, 3 controllers. */
+    external fun openMenu(page: Int)
+
+    /** Closes it: the console's picture and its controllers come back. */
+    external fun closeMenu()
+
+    /** Whether the Harbor menu is open. */
+    external fun menuOpen(): Boolean
+
+    /** Android back while the menu is open: the menu's own Back (on its top level it closes). */
+    external fun menuBack()
+
     /** The console's picture on the emulation surface (left, top, right, bottom), empty while none runs. */
     external fun pictureRect(): IntArray
 }

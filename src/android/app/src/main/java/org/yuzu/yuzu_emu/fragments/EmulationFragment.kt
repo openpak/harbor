@@ -1717,6 +1717,15 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         readout.setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
         readout.setBackgroundResource(0)
         readout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+        // Harbor Settings: the device and its graphics driver on a second line, under the FPS.
+        val deviceLine = if (HarborConsole.showDeviceLine) {
+            val driver = GpuDriverHelper.installedCustomDriverData.let { data ->
+                data.name?.let { "$it ${data.version ?: ""}".trim() }
+            } ?: getString(R.string.harbor_driver_system)
+            "\n${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} · $driver"
+        } else {
+            ""
+        }
         perfStatsUpdater = {
             val b = _binding
             if (b != null) {
@@ -1726,7 +1735,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                     val stats = NativeLibrary.getPerfStats()
                     b.showStatsOverlayText.text = String.format(
                         java.util.Locale.ROOT, "%.0f FPS · speed %.0f%%", stats[1], stats[3] * 100.0
-                    )
+                    ) + deviceLine
                 }
                 b.showStatsOverlayText.setVisible(running)
                 perfStatsUpdateHandler.postDelayed(perfStatsRunnable!!, HARBOR_FPS_REFRESH_MS)
@@ -2344,6 +2353,25 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         if (!isAdded || _binding == null) return
         toggleOverlay(true)
         adjustOverlay()
+    }
+
+    /** Harbor Settings, Touch Controls: the size and opacity of all controls, saved. */
+    fun harborSetControlScale(scale: Int) {
+        if (!isAdded || _binding == null) return
+        setControlScale(scale)
+        NativeConfig.saveGlobalConfig()
+    }
+
+    fun harborSetControlOpacity(opacity: Int) {
+        if (!isAdded || _binding == null) return
+        setControlOpacity(opacity.coerceAtLeast(HARBOR_MIN_OPACITY.toInt()))
+        NativeConfig.saveGlobalConfig()
+    }
+
+    /** The controls drawn again after their saved data changed (one shown or hidden). */
+    fun harborRefreshControls() {
+        if (!isAdded || _binding == null) return
+        binding.surfaceInputOverlay.refreshControls()
     }
 
     fun harborResetControls() {

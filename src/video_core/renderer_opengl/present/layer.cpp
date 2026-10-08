@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include "video_core/framebuffer_config.h"
+#include "video_core/host_screen.h"
 #include "video_core/present.h"
 #include "video_core/renderer_opengl/gl_blit_screen.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
@@ -119,8 +121,11 @@ FramebufferTextureInfo Layer::PrepareRenderTarget(const Tegra::FramebufferConfig
 
 FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuffer) {
     const VAddr framebuffer_addr{framebuffer.address + framebuffer.offset};
+    // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
+    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress;
     const auto accelerated_info =
-        rasterizer.AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride);
+        host_screen ? std::nullopt
+                    : rasterizer.AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride);
     if (accelerated_info) {
         return *accelerated_info;
     }
@@ -140,7 +145,15 @@ FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig&
     const u32 bytes_per_pixel{VideoCore::Surface::BytesPerBlock(pixel_format)};
     const u64 size_in_bytes{Tegra::Texture::CalculateSize(
         true, bytes_per_pixel, framebuffer.stride, framebuffer.height, 1, block_height_log2, 0)};
-    const u8* const host_ptr{device_memory.GetPointer<u8>(framebuffer_addr)};
+    if (host_screen) {
+        const auto frame = VideoCore::HostScreen::Current();
+        const u64 size = u64{framebuffer.width} * framebuffer.height * 4;
+        if (frame && frame->width == framebuffer.width && frame->height == framebuffer.height &&
+            frame->rgba.size() >= size && gl_framebuffer_data.size() >= size) {
+            std::memcpy(gl_framebuffer_data.data(), frame->rgba.data(), size);
+        }
+    }
+    const u8* const host_ptr{host_screen ? nullptr : device_memory.GetPointer<u8>(framebuffer_addr)};
     if (host_ptr) {
         const std::span<const u8> input_data(host_ptr, size_in_bytes);
         Tegra::Texture::UnswizzleTexture(gl_framebuffer_data, input_data, bytes_per_pixel,
