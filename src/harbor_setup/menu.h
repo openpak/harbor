@@ -65,6 +65,15 @@ public:
     virtual void SetupAgain() = 0;
     virtual void Exit() = 0;
 
+    /// The FPS line the menu draws on the console's screen (desktop; Android draws its own):
+    /// its text (one or two lines), or nullopt while it is off. Asked twice a second.
+    virtual bool HasHud() const {
+        return false;
+    }
+    virtual std::optional<std::string> HudText() {
+        return std::nullopt;
+    }
+
     // Display & Performance.
     virtual bool ShowFps() = 0;
     virtual void SetShowFps(bool show) = 0;

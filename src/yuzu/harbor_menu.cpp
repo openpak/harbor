@@ -10,9 +10,13 @@
 #include <QStyleHints>
 #include <QWidget>
 
+#include <fmt/format.h>
+
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/core.h"
+#include "video_core/gpu.h"
+#include "video_core/renderer_base.h"
 #include "frontend_common/joycon_rails.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
@@ -24,8 +28,25 @@
 #include "yuzu/harbor_frame_gen.h"
 #endif
 
+namespace {
+QString HarborIni() {
+    return QString::fromStdString(
+        (Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor.ini").string());
+}
+
+bool ReadFlag(const char* key) {
+    return QSettings(HarborIni(), QSettings::IniFormat).value(QString::fromUtf8(key), false).toBool();
+}
+
+void WriteFlag(const char* key, bool value) {
+    QSettings(HarborIni(), QSettings::IniFormat).setValue(QString::fromUtf8(key), value);
+}
+} // namespace
+
 HarborMenu::HarborMenu(QWidget* window_, InputCommon::InputSubsystem& input_, Hooks hooks_)
     : window{window_}, input{input_}, hooks{std::move(hooks_)} {
+    show_fps = ReadFlag("show_fps");
+    show_device_line = ReadFlag("show_device_line");
     HarborSetup::MenuSetHost(*this);
     WatchChord();
 }
@@ -118,34 +139,41 @@ void HarborMenu::Exit() {
     OnGui([this] { hooks.exit(); });
 }
 
+
 bool HarborMenu::ShowFps() {
-    return hooks.fps_shown();
+    return show_fps;
 }
 
 void HarborMenu::SetShowFps(bool show) {
-    // Kept at once, so the menu reads it back; the overlay follows on the GUI thread.
-    UISettings::values.show_perf_overlay = show;
-    OnGui([this, show] { hooks.show_fps(show); });
-}
-
-namespace {
-QString HarborIni() {
-    return QString::fromStdString(
-        (Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor.ini").string());
-}
-} // namespace
-
-bool HarborDeviceLineShown() {
-    return QSettings(HarborIni(), QSettings::IniFormat).value(QStringLiteral("show_device_line"), false).toBool();
+    show_fps = show;
+    WriteFlag("show_fps", show);
 }
 
 bool HarborMenu::ShowDeviceLine() {
-    return HarborDeviceLineShown();
+    return show_device_line;
 }
 
 void HarborMenu::SetShowDeviceLine(bool show) {
-    QSettings(HarborIni(), QSettings::IniFormat).setValue(QStringLiteral("show_device_line"), show);
-    OnGui([this] { hooks.device_line_changed(); });
+    show_device_line = show;
+    WriteFlag("show_device_line", show);
+}
+
+void HarborMenu::SetStats(double fps_, double speed_) {
+    fps = fps_;
+    speed = speed_;
+}
+
+/// "N FPS · speed N%", as on Android, and the GPU and its driver under it when chosen.
+std::optional<std::string> HarborMenu::HudText() {
+    auto& system = *QtCommon::system;
+    if (!show_fps || !system.IsPoweredOn()) {
+        return std::nullopt;
+    }
+    std::string text = fmt::format("{:.0f} FPS · speed {:.0f}%", fps.load(), speed.load() * 100.0);
+    if (show_device_line) {
+        text += "\n" + system.GPU().Renderer().GetDeviceDescription();
+    }
+    return text;
 }
 
 bool HarborMenu::FrameGenSupported() {

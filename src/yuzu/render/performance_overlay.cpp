@@ -12,7 +12,6 @@
 #include <QGraphicsLayout>
 #include <QLineSeries>
 #include <QMouseEvent>
-#include <QLabel>
 #include <QPainter>
 #include <QValueAxis>
 
@@ -87,25 +86,6 @@ PerformanceOverlay::PerformanceOverlay(MainWindow* parent)
 
 PerformanceOverlay::~PerformanceOverlay() {
     delete ui;
-}
-
-void PerformanceOverlay::SetDeviceLine(const QString& text) {
-    if (!m_device_line) {
-        m_device_line = new QLabel(this);
-        m_device_line->setStyleSheet(QStringLiteral("color: white; background: black; padding: 2px;"));
-        layout()->addWidget(m_device_line);
-    }
-    if (m_device_line->text() == text && m_device_line->isHidden() == text.isEmpty()) {
-        return;
-    }
-    m_device_line->setText(text);
-    m_device_line->setVisible(!text.isEmpty());
-    adjustSize();
-    // A compositor keeps a shown window's size: shown again, it takes the new one.
-    if (isVisible()) {
-        hide();
-        show();
-    }
 }
 
 void PerformanceOverlay::resetPosition(const QPoint& _) {

@@ -3,8 +3,6 @@
 
 #pragma once
 
-class QLabel;
-
 #include <deque>
 #include <QWidget>
 
@@ -31,9 +29,6 @@ public:
     explicit PerformanceOverlay(MainWindow* parent = nullptr);
     ~PerformanceOverlay();
 
-    /// Harbor: the GPU and its driver on a line under the readings; empty hides it.
-    void SetDeviceLine(const QString& text);
-
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -47,7 +42,6 @@ private:
 
     MainWindow* m_mainWindow = nullptr;
     Ui::PerformanceOverlay* ui;
-    QLabel* m_device_line = nullptr;
 
     // colors
     QColor m_background{127, 127, 127, 190};

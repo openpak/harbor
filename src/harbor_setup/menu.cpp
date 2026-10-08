@@ -530,6 +530,62 @@ void DrawFrame() {
     }
 }
 
+bool hud_shown = false;
+
+/// The FPS line on the console's screen while the menu is closed (desktop): white text with a
+/// shadow at the top left, on an otherwise clear picture laid over the console's.
+void DrawHud() {
+    const auto text = menu_host->HudText();
+    if (!text) {
+        if (hud_shown) {
+            VideoCore::HostScreen::PublishOverlay(nullptr);
+            hud_shown = false;
+        }
+        return;
+    }
+    const auto [width, height] = ConsoleResolution();
+    target.Resize(width, height);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+    glViewport(0, 0, width, height);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+    NVGcontext* vg = platform->video.getNVGContext();
+    const float scale = static_cast<float>(width) / 1280.0f;
+    nvgBeginFrame(vg, static_cast<float>(width), static_cast<float>(height), 1.0f);
+    nvgFontFaceId(vg, brls::Application::getFont(brls::FONT_REGULAR));
+    nvgFontSize(vg, 17.0f * scale);
+    nvgTextAlign(vg, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
+    float y = 10.0f * scale;
+    std::size_t start = 0;
+    while (start <= text->size()) {
+        const std::size_t end = std::min(text->find('\n', start), text->size());
+        const std::string line = text->substr(start, end - start);
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 200));
+        nvgText(vg, 13.0f * scale, y + 1.5f * scale, line.c_str(), nullptr);
+        nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
+        nvgText(vg, 12.0f * scale, y, line.c_str(), nullptr);
+        y += 22.0f * scale;
+        start = end + 1;
+    }
+    nvgEndFrame(vg);
+
+    auto frame = std::make_shared<VideoCore::HostScreen::Frame>();
+    frame->width = static_cast<u32>(width);
+    frame->height = static_cast<u32>(height);
+    frame->rgba.resize(static_cast<std::size_t>(width) * height * 4);
+    std::vector<u8> rows(frame->rgba.size());
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rows.data());
+    const std::size_t stride = static_cast<std::size_t>(width) * 4;
+    for (int row = 0; row < height; row++) {
+        std::memcpy(frame->rgba.data() + static_cast<std::size_t>(row) * stride,
+                    rows.data() + static_cast<std::size_t>(height - 1 - row) * stride, stride);
+    }
+    VideoCore::HostScreen::PublishOverlay(std::move(frame));
+    hud_shown = true;
+}
+
 void Run() {
     Common::SetCurrentThreadName("HarborMenu");
     if (!CreateGlContext() || !InitBorealis()) {
@@ -553,8 +609,16 @@ void Run() {
         if (!want_open) {
             lk.unlock();
             CloseNow();
+            if (menu_host->HasHud()) {
+                DrawHud();
+            }
             lk.lock();
-            cv.wait(lk, [] { return stopping || want_open; });
+            if (menu_host->HasHud()) {
+                // The FPS line is redrawn twice a second.
+                cv.wait_for(lk, std::chrono::milliseconds(500), [] { return stopping || want_open; });
+            } else {
+                cv.wait(lk, [] { return stopping || want_open; });
+            }
             continue;
         }
         const auto page = want_page;
@@ -584,6 +648,11 @@ void MenuSetHost(MenuHost& host) {
     menu_host = &host;
     StartPowerKey(host.System());
     StartControllerWatcher(host);
+    if (host.HasHud()) {
+        // The FPS line is drawn by the menu's thread, so it starts now (closed).
+        std::scoped_lock lk{mutex};
+        thread = std::thread(Run);
+    }
 }
 
 void MenuOpen(MenuPage page) {

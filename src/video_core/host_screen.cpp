@@ -12,6 +12,7 @@ namespace VideoCore::HostScreen {
 namespace {
 std::mutex mutex;
 std::shared_ptr<const Frame> current;
+std::shared_ptr<const Frame> overlay;
 std::atomic_bool active{false};
 std::atomic_bool changed{false};
 } // namespace
@@ -64,6 +65,36 @@ Tegra::FramebufferConfig MakeLayer(const Frame& frame) {
     layer.crop_rect = {0, 0, static_cast<int>(frame.width), static_cast<int>(frame.height)};
     layer.blending = Tegra::BlendMode::Opaque;
     return layer;
+}
+
+void PublishOverlay(std::shared_ptr<const Frame> frame) {
+    {
+        std::scoped_lock lk{mutex};
+        overlay = std::move(frame);
+    }
+    changed = true;
+}
+
+std::shared_ptr<const Frame> CurrentOverlay() {
+    std::scoped_lock lk{mutex};
+    return overlay;
+}
+
+Tegra::FramebufferConfig MakeOverlayLayer(const Frame& frame) {
+    auto layer = MakeLayer(frame);
+    layer.address = HostOverlayAddress;
+    layer.blending = Tegra::BlendMode::Premultiplied;
+    return layer;
+}
+
+std::shared_ptr<const Frame> FrameAt(u64 address) {
+    if (address == HostAddress) {
+        return Current();
+    }
+    if (address == HostOverlayAddress) {
+        return CurrentOverlay();
+    }
+    return nullptr;
 }
 
 } // namespace VideoCore::HostScreen

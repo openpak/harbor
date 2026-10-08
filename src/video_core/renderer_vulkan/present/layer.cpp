@@ -90,7 +90,8 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
                           const Tegra::FramebufferConfig& framebuffer,
                           const Layout::FramebufferLayout& layout) {
     // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
-    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress;
+    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress ||
+                             framebuffer.address == VideoCore::HostScreen::HostOverlayAddress;
     const auto texture_info =
         host_screen ? std::nullopt
                     : rasterizer.AccelerateDisplay(framebuffer, framebuffer.address + framebuffer.offset,
@@ -344,8 +345,10 @@ void Layer::UpdateRawImage(const Tegra::FramebufferConfig& framebuffer, size_t i
     const u64 image_offset = GetRawImageOffset(framebuffer, image_index);
 
     // Harbor's host screen: linear RGBA rows, copied as they are.
-    if (framebuffer.address == VideoCore::HostScreen::HostAddress) {
-        const auto frame = VideoCore::HostScreen::Current();
+    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress ||
+                             framebuffer.address == VideoCore::HostScreen::HostOverlayAddress;
+    if (host_screen) {
+        const auto frame = VideoCore::HostScreen::FrameAt(framebuffer.address);
         const u64 size = u64{framebuffer.width} * framebuffer.height * 4;
         if (frame && frame->width == framebuffer.width && frame->height == framebuffer.height &&
             frame->rgba.size() >= size) {
@@ -354,9 +357,7 @@ void Layer::UpdateRawImage(const Tegra::FramebufferConfig& framebuffer, size_t i
         }
     }
     const DAddr framebuffer_addr = framebuffer.address + framebuffer.offset;
-    const u8* const host_ptr = framebuffer.address == VideoCore::HostScreen::HostAddress
-                                   ? nullptr
-                                   : device_memory.GetPointer<u8>(framebuffer_addr);
+    const u8* const host_ptr = host_screen ? nullptr : device_memory.GetPointer<u8>(framebuffer_addr);
 
     // TODO(Rodrigo): Read this from HLE
     constexpr u32 block_height_log2 = 4;

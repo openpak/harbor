@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -14,10 +15,6 @@ namespace InputCommon {
 class InputSubsystem;
 }
 
-/// Harbor Settings' "device and driver under the FPS" on desktop (harbor.ini in the config
-/// directory; off by default).
-bool HarborDeviceLineShown();
-
 /// The desktop's side of the Harbor menu (harbor_setup/menu.h): the menu draws onto the console's
 /// screen; this opens it (F1, Plus and Minus together) and carries out what it asks for.
 class HarborMenu final : public HarborSetup::MenuHost {
@@ -27,12 +24,9 @@ public:
         std::function<void()> restart;            ///< stop the console and boot HOME again
         std::function<void()> exit;               ///< close Harbor
         std::function<void()> save_config;        ///< write qt-config.ini
-        std::function<bool()> fps_shown;          ///< the performance overlay is on
-        std::function<void(bool)> show_fps;       ///< turn it on or off
         std::function<void(bool)> joycons;        ///< detach (true) or attach the Joy-Cons
         std::function<void(std::function<void()>)> change_dll; ///< a Lossless.dll change, console stopped
         std::function<void(const std::string&)> console_action; ///< backup, restore, new-console
-        std::function<void()> device_line_changed; ///< the line under the FPS was turned on or off
     };
 
     HarborMenu(QWidget* window, InputCommon::InputSubsystem& input, Hooks hooks);
@@ -44,6 +38,12 @@ public:
     bool IsAndroid() const override {
         return false;
     }
+    bool HasHud() const override {
+        return true;
+    }
+    std::optional<std::string> HudText() override;
+    /// The latest performance figures (MainWindow's statsUpdated, twice a second).
+    void SetStats(double fps, double speed);
     Core::System& System() override;
     InputCommon::InputSubsystem& Input() override;
     bool PlatformDarkTheme() override;
@@ -77,6 +77,11 @@ private:
     QWidget* window;
     InputCommon::InputSubsystem& input;
     Hooks hooks;
+    // Harbor Settings' Show FPS and device line, kept in harbor.ini (off by default).
+    std::atomic_bool show_fps{false};
+    std::atomic_bool show_device_line{false};
+    std::atomic<double> fps{0.0};
+    std::atomic<double> speed{0.0};
     int player1_callback = -1;
     int handheld_callback = -1;
 };
