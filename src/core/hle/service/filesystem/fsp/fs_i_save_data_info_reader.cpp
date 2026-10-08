@@ -116,6 +116,13 @@ void ISaveDataInfoReader::FindNormalSaves(std::vector<SaveDataInfo>& info,
         if (save_id->GetName().starts_with('.')) {
             continue;
         }
+        // Eden's newer layout for user saves (SaveDataFactory::GetFullPath prefers it when it
+        // exists): account/<user>/<title>/0 and device/<title>/0.
+        if (space == FileSys::SaveDataSpaceId::User &&
+            (save_id->GetName() == "account" || save_id->GetName() == "device")) {
+            FindNewLayoutSaves(info, space, save_id);
+            continue;
+        }
         for (const auto& user_id : save_id->GetSubdirectories()) {
             // Skip non user id subdirectories
             if (user_id->GetName().size() != 0x20) {
@@ -161,6 +168,48 @@ void ISaveDataInfoReader::FindNormalSaves(std::vector<SaveDataInfo>& info,
                 });
             }
         }
+    }
+}
+
+void ISaveDataInfoReader::FindNewLayoutSaves(std::vector<SaveDataInfo>& info,
+                                             FileSys::SaveDataSpaceId space,
+                                             const FileSys::VirtualDir& layout) {
+    const bool device = layout->GetName() == "device";
+    const auto add_title_saves = [&](const FileSys::VirtualDir& titles, std::string_view user_name,
+                                     const std::array<u8, 0x10>& user_id) {
+        for (const auto& title_id : titles->GetSubdirectories()) {
+            if (title_id->GetName().size() != 0x10 || title_id->GetSubdirectory("0") == nullptr) {
+                continue;
+            }
+            // The layout tag keeps these ids apart from a save of the same title and user in
+            // the older layout.
+            info.emplace_back(SaveDataInfo{
+                MakeSaveDataId(space, fmt::format("{}/{}", layout->GetName(), user_name),
+                               title_id->GetName()),
+                space,
+                device ? FileSys::SaveDataType::Device : FileSys::SaveDataType::Account,
+                {},
+                user_id,
+                0,
+                stoull_be(title_id->GetName()),
+                title_id->GetSize(),
+                {},
+                {},
+            });
+        }
+    };
+
+    if (device) {
+        add_title_saves(layout, {}, {});
+        return;
+    }
+    for (const auto& user_dir : layout->GetSubdirectories()) {
+        // The user directory is Common::UUID::RawString: the id's bytes in memory order.
+        if (user_dir->GetName().size() != 0x20) {
+            continue;
+        }
+        add_title_saves(user_dir, user_dir->GetName(),
+                        Common::HexStringToArray<0x10>(user_dir->GetName()));
     }
 }
 

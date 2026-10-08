@@ -44,6 +44,8 @@ public:
 private:
     static void FindNormalSaves(std::vector<SaveDataInfo>& info, FileSys::SaveDataSpaceId space,
                                 const FileSys::VirtualDir& type);
+    static void FindNewLayoutSaves(std::vector<SaveDataInfo>& info, FileSys::SaveDataSpaceId space,
+                                   const FileSys::VirtualDir& layout);
     static void FindTemporaryStorageSaves(std::vector<SaveDataInfo>& info,
                                           FileSys::SaveDataSpaceId space,
                                           const FileSys::VirtualDir& type);
