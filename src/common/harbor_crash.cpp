@@ -206,6 +206,7 @@ std::string RedactEmails(std::string text) {
         while (end > search + 1 && text[end - 1] == '.') {
             --end;
         }
+        last_dot = text.rfind('.', end - 1);
         if (begin == search || last_dot == std::string::npos || last_dot <= search + 1 ||
             last_dot + 1 >= end) {
             search += 1;
