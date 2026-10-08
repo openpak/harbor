@@ -23,6 +23,9 @@
 #include "core/file_sys/sdmc_factory.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_offset.h"
+#include "core/file_sys/vfs/vfs_vector.h"
+#include "core/harbor_calibration/calibration.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp/fsp_ldr.h"
 #include "core/hle/service/filesystem/fsp/fsp_pr.h"
@@ -429,6 +432,19 @@ Result FileSystemController::OpenBISPartition(FileSys::VirtualDir* out_bis_parti
 Result FileSystemController::OpenBISPartitionStorage(
     FileSys::VirtualFile* out_bis_partition_storage, FileSys::BisPartitionId id) const {
     LOG_TRACE(Service_FS, "Opening BIS Partition Storage with id={:08X}", id);
+
+    // A HOME session is a console of its own: its calibration partition is this NAND's
+    // calibration, never a dumped PRODINFO of the user's real console.
+    if (id == FileSys::BisPartitionId::CalibrationBinary &&
+        system.GetAppletManager().IsHomeSession()) {
+        const auto binary = Harbor::Calibration::Get().Binary();
+        if (binary.empty()) {
+            return FileSys::ResultTargetNotFound;
+        }
+        *out_bis_partition_storage = std::make_shared<FileSys::VectorVfsFile>(
+            std::vector<u8>(binary.begin(), binary.end()), "PRODINFO");
+        return ResultSuccess;
+    }
 
     if (bis_factory == nullptr) {
         return FileSys::ResultTargetNotFound;
