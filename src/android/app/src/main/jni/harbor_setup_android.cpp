@@ -573,6 +573,13 @@ JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_consoleTheme(
     return color == Service::Set::ColorSet::BasicBlack ? 1 : 0;
 }
 
+/// The console's saved colour set for Harbor's own screens: 1 Basic Black, 0 Basic White, -1 before
+/// the console has booted once (the phone's theme then).
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_savedConsoleTheme(JNIEnv*, jobject) {
+    const auto dark = HarborSetup::SavedConsoleDarkTheme();
+    return dark ? (*dark ? 1 : 0) : -1;
+}
+
 /// Where the console's picture is on the emulation surface: left, top, right, bottom in pixels, or
 /// an empty array while no console runs. Touches outside it are not the touch screen.
 JNIEXPORT jintArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pictureRect(JNIEnv* env, jobject) {

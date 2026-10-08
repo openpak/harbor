@@ -15,6 +15,7 @@
 #include <SDL3/SDL.h>
 
 #include "common/logging.h"
+#include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/view.h"
 
 namespace HarborSetup {
@@ -280,7 +281,10 @@ bool SystemDarkTheme() {
     if (const char* forced = std::getenv("HARBOR_SETUP_THEME")) {
         return std::strcmp(forced, "dark") == 0;
     }
-    return SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK;
+    // The console's saved colour set once it has booted (it cannot change while the setup runs),
+    // the phone's or desktop's before.
+    static const auto console = SavedConsoleDarkTheme();
+    return console.value_or(SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK);
 }
 
 const Palette& CurrentPalette() {
