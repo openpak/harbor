@@ -66,6 +66,10 @@ public:
     std::optional<u64> RegisterDownload(const Common::UUID& user, u64 archive_id);
 
     std::vector<TransferTask> Tasks() const;
+    /// DeleteTransferTask: a queued or finished task goes; a running one stays.
+    void Delete(u64 task_id);
+    /// RaiseTransferTaskPriority: a queued task moves to the front.
+    void Raise(u64 task_id);
     std::optional<TransferTask> Current() const;
 
     void AddStartEvent(std::shared_ptr<OpenPak::HostEvent> event);

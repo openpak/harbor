@@ -270,6 +270,23 @@ std::vector<TransferTask> TransferQueue::Tasks() const {
     return {tasks.begin(), tasks.end()};
 }
 
+void TransferQueue::Delete(u64 task_id) {
+    std::lock_guard lock{mutex};
+    std::erase_if(tasks, [task_id](const TransferTask& t) { return t.id == task_id && !t.running; });
+}
+
+void TransferQueue::Raise(u64 task_id) {
+    std::lock_guard lock{mutex};
+    const auto it = std::find_if(tasks.begin(), tasks.end(), [task_id](const TransferTask& t) {
+        return t.id == task_id && !t.running;
+    });
+    if (it != tasks.end()) {
+        TransferTask task = *it;
+        tasks.erase(it);
+        tasks.push_front(task);
+    }
+}
+
 std::optional<TransferTask> TransferQueue::Current() const {
     std::lock_guard lock{mutex};
     for (const auto& task : tasks) {
@@ -370,12 +387,18 @@ void TransferQueue::Execute(TransferTask& task) {
         ManagerFs fs{system, task.user, info ? u64{info->save_id_unknown} : 0};
         outcome = tr::Download(rest, fs, task.application_id, task.archive_id, &task.progress);
     }
-    task.last_result = static_cast<u32>(outcome.error);
+    // The task's result as olsc keeps it: 2179-<description>; an HTTP failure without a server
+    // code is 2155-<status> on a console (olsc-transfer.md §5). Fs failures carry fs's own
+    // result on a console; Harbor reports them as 2179-9100 (logged with fs's result above).
+    task.last_result = outcome.error == tr::Error::None
+                           ? 0
+                           : static_cast<u32>(Result{ErrorModule::OLSC,
+                                                     static_cast<u32>(outcome.error)}.raw);
     if (outcome.error == tr::Error::None) {
         LOG_INFO(Service_OLSC, "save data cloud: task {} done", task.id);
     } else {
         LOG_WARNING(Service_OLSC, "save data cloud: task {} failed, 2179-{:04}: {}", task.id,
-                    task.last_result, outcome.detail);
+                    static_cast<u32>(outcome.error), outcome.detail);
     }
     // The cloud changed: the archive list and newness follow.
     OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid);

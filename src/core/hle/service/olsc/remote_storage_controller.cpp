@@ -89,7 +89,7 @@ IRemoteStorageController::IRemoteStorageController(Core::System& system_, Common
       worker{std::move(worker_)}, queue{std::move(queue_)}, user{user_id_} {
     // clang-format off
     static const FunctionInfo functions[] = {
-        {0, nullptr, "GetSaveDataArchiveInfoBySaveDataId"},
+        {0, D<&IRemoteStorageController::RegisterUploadTaskForApplication>, "RegisterUploadTask"},
         {1, D<&IRemoteStorageController::RegisterDownloadTask>, "RegisterDownloadTask"},
         {3, nullptr, "GetSaveDataArchiveCount"},
         {6, nullptr, "CleanupSaveDataArchives"},
@@ -160,6 +160,15 @@ Result IRemoteStorageController::RegisterDownloadTask(Out<u64> out_task_id, u64 
     const auto task = queue->RegisterDownload(user, archive_id);
     R_UNLESS(task.has_value(), ResultDataInfoNotFound);
     *out_task_id = *task;
+    R_SUCCEED();
+}
+
+Result IRemoteStorageController::RegisterUploadTaskForApplication(Out<u64> out_task_id,
+                                                                  u64 application_id) {
+    // 0x224460 -> 0x1fe520 -> the same registration as 12 (0x1fe530) with its defaults: u64
+    // application id in, the task id out. "Back Up Save Data" on a title sends it.
+    LOG_INFO(Service_OLSC, "called, app={:016X}", application_id);
+    *out_task_id = queue->RegisterUpload(user, application_id, false);
     R_SUCCEED();
 }
 

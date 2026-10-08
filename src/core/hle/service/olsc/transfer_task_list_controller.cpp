@@ -52,11 +52,11 @@ ITransferTaskListController::ITransferTaskListController(
         {16, D<&ITransferTaskListController::GetTransferTaskCount>, "GetTransferTaskCount"},
         {17, D<&ITransferTaskListController::GetTransferTaskInfo>, "GetTransferTaskInfo"},
         {18, D<&ITransferTaskListController::ListTransferTaskInfo>, "ListTransferTaskInfo"},
-        {19, nullptr, "DeleteTransferTask"},
-        {20, nullptr, "RaiseTransferTaskPriority"},
+        {19, D<&ITransferTaskListController::DeleteTransferTask>, "DeleteTransferTask"},
+        {20, D<&ITransferTaskListController::RaiseTransferTaskPriority>, "RaiseTransferTaskPriority"},
         {21, D<&ITransferTaskListController::GetTransferTaskProgress>, "GetTransferTaskProgress"}, //10.1.0+
-        {22, nullptr, "GetTransferTaskLastResult"},
-        {23, nullptr, "SuspendTransferTask"},
+        {22, D<&ITransferTaskListController::GetTransferTaskLastResult>, "GetTransferTaskLastResult"},
+        {23, D<&ITransferTaskListController::SuspendTransferTask>, "SuspendTransferTask"},
         {24, D<&ITransferTaskListController::GetCurrentTransferTaskInfo>, "GetCurrentTransferTaskInfo"},
         {25, D<&ITransferTaskListController::FindTransferTaskInfo>, "FindTransferTaskInfo"},
         {26, nullptr, "Unknown26"}, //20.1.0+
@@ -138,6 +138,44 @@ Result ITransferTaskListController::ListTransferTaskInfo(
         out_infos[written++] = PackTaskInfo(matching[i]);
     }
     *out_count = written;
+    R_SUCCEED();
+}
+
+Result ITransferTaskListController::DeleteTransferTask(u8 filter, u64 task_id) {
+    // 0x1a9f20: {u8 filter, u64 task id}, nothing out, success even for an unknown task.
+    for (const auto& task : queue->Tasks()) {
+        if (task.id == task_id && MatchesFilter(task, filter)) {
+            queue->Delete(task_id);
+        }
+    }
+    R_SUCCEED();
+}
+
+Result ITransferTaskListController::RaiseTransferTaskPriority(u8 filter, u64 task_id) {
+    // 0x1aa0a0: {u8 filter, u64 task id}, nothing out, success.
+    for (const auto& task : queue->Tasks()) {
+        if (task.id == task_id && MatchesFilter(task, filter)) {
+            queue->Raise(task_id);
+        }
+    }
+    R_SUCCEED();
+}
+
+Result ITransferTaskListController::GetTransferTaskLastResult(u8 filter, u64 task_id) {
+    // 0x1aa350: the task's last result is the command's result; 0 for an unknown task.
+    for (const auto& task : queue->Tasks()) {
+        if (task.id == task_id && MatchesFilter(task, filter) && task.last_result != 0) {
+            Result result{};
+            result.raw = task.last_result;
+            R_RETURN(result);
+        }
+    }
+    R_SUCCEED();
+}
+
+Result ITransferTaskListController::SuspendTransferTask(u8 filter, u64 task_id) {
+    // 0x1a9ff0: success; Harbor's tasks are not suspended (a running one runs to its end).
+    LOG_DEBUG(Service_OLSC, "called, filter={} task={:#x}", filter, task_id);
     R_SUCCEED();
 }
 

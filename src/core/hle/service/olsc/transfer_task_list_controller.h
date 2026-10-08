@@ -45,6 +45,10 @@ private:
     Result ListTransferTaskInfo(Out<s32> out_count,
                                 OutArray<TransferTaskInfo, BufferAttr_HipcMapAlias> out_infos,
                                 u8 filter, s32 offset);
+    Result DeleteTransferTask(u8 filter, u64 task_id);
+    Result RaiseTransferTaskPriority(u8 filter, u64 task_id);
+    Result GetTransferTaskLastResult(u8 filter, u64 task_id);
+    Result SuspendTransferTask(u8 filter, u64 task_id);
     Result GetTransferTaskProgress(Out<std::array<u8, 0x18>> out_progress, u8 filter, u64 task_id);
     Result GetCurrentTransferTaskInfo(Out<TransferTaskInfo> out_info, u8 filter);
     Result FindTransferTaskInfo(Out<TransferTaskInfo> out_info, std::array<u64, 4> query);
