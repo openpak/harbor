@@ -4,11 +4,12 @@
 // The console's sleep and wake, as am does them on firmware 23.0.1 (addresses are in the 23.0.1
 // am main, flat at 0x08500000).
 //
-// - A short power press reaches am as an spsm notification (ReceiveNotificationMessage, 0x0859357c)
-//   and goes to the applets that listen for it as DetectShortPressingPowerButton. am never starts
-//   sleep on its own: the only callers of the sequence (0x08577f48) are IGlobalStateController 2
-//   StartSleepSequence, 3/4 (shutdown, reboot) and IApplicationFunctions 70-72. The HOME menu
-//   answers the press, and its power menu's Sleep Mode, with StartSleepSequence.
+// - A short power press reaches am as an spsm notification (ReceiveNotificationMessage 5,
+//   0x0859357c) and goes to the applets that listen for it as DetectShortPressingPowerButton. am
+//   never starts sleep on its own: the only callers of the sequence (0x08577f48) are
+//   IGlobalStateController 2 StartSleepSequence, 3/4 (shutdown, reboot) and IApplicationFunctions
+//   70-72. The HOME menu answers the press, its power menu's Sleep Mode and idle's auto-sleep
+//   (AutoPowerDown) with StartSleepSequence.
 // - StartSleepSequence runs the shutdown sequence instead when IsSleepEnabled is false.
 // - The sequence puts am's sleep window in front of everything (every applet loses the foreground),
 //   asks each sleep-lock holder to get ready (RequestToPrepareSleep) and waits for its release,
@@ -30,6 +31,7 @@
 #include "core/hle/service/am/event_observer.h"
 #include "core/hle/service/am/sleep_sequence.h"
 #include "core/hle/service/am/window_system.h"
+#include "core/hle/service/omm/idle_policy.h"
 #include "core/hle/service/psc/pm_state.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
@@ -242,6 +244,50 @@ void WindowSystem::WakeLocked(const char* reason) {
         }
     }
     sleep.idle_event.Signal(m_system.Kernel());
+    // The press that woke the console is the user's: the idle timer starts over.
+    if (auto* idle = OMM::GetIdlePolicy()) {
+        idle->ReportUserIsActive();
+    }
+    if (m_event_observer) {
+        m_event_observer->RequestUpdate();
+    }
+}
+
+void WindowSystem::GetIdleHandlingContext(OMM::IdleHandlingContext& out_context) {
+    std::scoped_lock lk{m_lock};
+    out_context = {};
+    out_context.sequence_running =
+        m_sleep->IsActive() || m_shutdown_stage != ShutdownStage::None;
+    Applet* const front = m_foreground_requested_applet;
+    if (!m_system.GetAppletManager().IsHomeSession() || front == nullptr) {
+        return;
+    }
+    std::scoped_lock lk2{front->lock};
+    out_context.valid = true;
+    out_context.sleep_handheld_s = front->auto_sleep_time_override[0];
+    out_context.sleep_console_s = front->auto_sleep_time_override[1];
+    out_context.dim_handheld_s = front->auto_sleep_time_override[2];
+    out_context.dim_console_s = front->auto_sleep_time_override[3];
+    out_context.extension = static_cast<u32>(front->idle_time_detection_extension);
+    out_context.auto_sleep_disabled = front->auto_sleep_disabled;
+    out_context.media_playing = front->media_playback_state;
+}
+
+// idle's auto-sleep time: on a console omm's idle signals it, spsm notifies am (notification 3,
+// 0x0859357c) and am sets AutoPowerDown for the applets that listen (0x0855456c); HOME answers
+// with the sleep sequence.
+void WindowSystem::OnAutoPowerDown() {
+    std::scoped_lock lk{m_lock};
+    if (m_home_menu == nullptr || m_sleep->IsActive()) {
+        return;
+    }
+    LOG_WARNING(Service_AM, "unknown contract: am AutoPowerDown routing (sent to the HOME menu "
+                            "only)");
+    {
+        std::scoped_lock lk2{m_home_menu->lock};
+        m_home_menu->lifecycle_manager.RequestAutoPowerDown(m_system.Kernel());
+    }
+    LOG_INFO(Service_AM, "am: -> pid {} AutoPowerDown", m_home_menu->aruid.pid);
     if (m_event_observer) {
         m_event_observer->RequestUpdate();
     }
@@ -262,8 +308,9 @@ void WindowSystem::OnPowerButtonShortPressLocked() {
         LOG_INFO(Service_AM, "am: power button ignored: no home menu is running");
         return;
     }
-    // am hands the press to the applets whose listener takes it (per-applet flags set from the
-    // applet's kind, not traced); the HOME menu is the one that answers it with sleep.
+    // spsm's notifications 5-7 are the power button's presses; am hands a short one to each applet
+    // whose listener takes it (a per-applet flag, listener +0x72, set from the applet's kind, not
+    // traced: 0x085537b0); the HOME menu is the one that answers it with sleep.
     LOG_WARNING(Service_AM, "unknown contract: am DetectShortPressingPowerButton routing (sent to "
                             "the HOME menu only)");
     this->PushButtonMessageLocked(m_home_menu, AppletMessage::DetectShortPressingPowerButton);

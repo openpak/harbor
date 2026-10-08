@@ -329,6 +329,18 @@ void AppletManager::OnSleepStateChanged(bool sleeping) {
     }
 }
 
+void AppletManager::SetDimHandler(std::function<void(bool)> handler) {
+    std::scoped_lock lk{m_sleep_lock};
+    m_dim_handler = std::move(handler);
+}
+
+void AppletManager::OnDimChanged(bool dimmed) {
+    std::scoped_lock lk{m_sleep_lock};
+    if (m_dim_handler) {
+        m_dim_handler(dimmed);
+    }
+}
+
 void AppletManager::ForceTerminateApplication() {
     std::scoped_lock lk{m_lock};
     LOG_INFO(Service_AM, "host: force-terminate application");

@@ -35,11 +35,15 @@ private:
     // any key or controller button wakes it.
     void ApplySleep(bool sleeping);
     void PollWake();
+    // idle:sys dims the screen after the dimming time and brings it back on input: a translucent
+    // black layer over the picture.
+    void ApplyDim(bool dimmed);
 
     InputCommon::InputSubsystem& input_subsystem;
     QTimer* power_hold{};
     bool power_down{};
     QWidget* sleep_screen{};
+    QWidget* dim_screen{};
     QTimer* wake_poll{};
     bool wake_armed{};
     bool paused_for_sleep{};

@@ -84,6 +84,7 @@ private:
     brls::View* last_content_focus = nullptr;
     brls::View* advance = nullptr;
     std::string shown_status;
+    std::size_t shown_downloads = 0;
     Step rendered_step = Step::Welcome;
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
     bool reveal_end = false;

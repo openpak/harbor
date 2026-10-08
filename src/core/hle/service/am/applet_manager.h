@@ -85,6 +85,10 @@ public:
     void SetSleepHandler(std::function<void(bool)> handler);
     // From the window system's sleep sequence: the console reached its deepest state, or woke.
     void OnSleepStateChanged(bool sleeping);
+    // idle:sys dims the screen (true) after the dimming time and brings it back on input. The
+    // handler is called with idle's lock held and must only queue its work.
+    void SetDimHandler(std::function<void(bool)> handler);
+    void OnDimChanged(bool dimmed);
 
     // The guest asked for a reboot or a shutdown (IGlobalStateController 3/4, IOverlayFunctions
     // 10/11). In a HOME session the applets end first (the window system's shutdown sequence),
@@ -116,6 +120,7 @@ private:
     std::atomic<bool> m_sleeping{};
     std::mutex m_sleep_lock;
     std::function<void(bool)> m_sleep_handler;
+    std::function<void(bool)> m_dim_handler;
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};

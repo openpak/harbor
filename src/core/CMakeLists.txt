@@ -979,6 +979,8 @@ add_library(core STATIC
     hle/service/olsc/transfer_runner.h
     hle/service/olsc/transfer_task_list_controller.cpp
     hle/service/olsc/transfer_task_list_controller.h
+    hle/service/omm/idle_policy.cpp
+    hle/service/omm/idle_policy.h
     hle/service/omm/omm.cpp
     hle/service/omm/omm.h
     hle/service/omm/operation_mode_manager.cpp

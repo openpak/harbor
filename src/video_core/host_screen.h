@@ -28,6 +28,8 @@ struct Frame {
 
 /// The framebuffer address the presenter sees for the host screen (never a guest address).
 constexpr u64 HostAddress = ~u64{0};
+/// ... and for the host overlay: a picture with alpha drawn over the console's (the FPS line).
+constexpr u64 HostOverlayAddress = ~u64{0} - 1;
 
 /// Starts showing the host screen (the next published frame).
 void Show();
@@ -47,5 +49,14 @@ bool TakeChanged();
 
 /// The single layer that stands for the host screen, sized to `frame`.
 Tegra::FramebufferConfig MakeLayer(const Frame& frame);
+
+/// The host overlay: premultiplied RGBA over the console's picture, shown while the host screen
+/// is not. Null clears it.
+void PublishOverlay(std::shared_ptr<const Frame> frame);
+std::shared_ptr<const Frame> CurrentOverlay();
+Tegra::FramebufferConfig MakeOverlayLayer(const Frame& frame);
+
+/// The picture behind a host address (the screen or the overlay), or null.
+std::shared_ptr<const Frame> FrameAt(u64 address);
 
 } // namespace VideoCore::HostScreen

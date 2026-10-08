@@ -275,8 +275,11 @@ public:
                   VirtualFile file);
     void AddEntryWithVersion(TitleType title_type, ContentRecordType content_type, u64 title_id,
                              u32 version, const std::string& version_string, VirtualFile file);
+    // source_path names the host file or split-file folder the container came from, when the
+    // file itself has no host path (a split NSP's concatenated parts).
     bool AddEntriesFromContainer(VirtualFile file, bool only_content = false,
-                                 std::optional<u64> base_program_id = std::nullopt);
+                                 std::optional<u64> base_program_id = std::nullopt,
+                                 std::string source_path = {});
     void ClearAllEntries();
 
     void Refresh() override;

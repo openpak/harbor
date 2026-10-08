@@ -1292,7 +1292,8 @@ void ManualContentProvider::AddEntryWithVersion(TitleType title_type, ContentRec
 }
 
 bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_content,
-                                                    std::optional<u64> base_program_id) {
+                                                    std::optional<u64> base_program_id,
+                                                    std::string source_path) {
     const auto nsp = OpenContainerAsNsp(file, Loader::FileType::Unknown);
     if (!nsp) {
         return false;
@@ -1301,10 +1302,17 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
     std::set<u64> title_ids;
     const bool added = ForEachContainerEntry(
         nsp, only_content, base_program_id,
-        [this, &title_ids](TitleType title_type, ContentRecordType content_type, u64 title_id,
+        [this, &title_ids, &file](TitleType title_type, ContentRecordType content_type, u64 title_id,
                            const VirtualFile& entry_file, u32 version,
                            const std::string& version_string) {
             title_ids.insert(title_id);
+            // A title found in two files (the same game in two folders): the last one scanned
+            // is used, as the Ryujinx Harbor's library does; HOME still gets one tile.
+            if (title_type == TitleType::Application && content_type == ContentRecordType::Meta &&
+                entries.contains({title_type, content_type, title_id})) {
+                LOG_INFO(Service_FS, "Library: {:016X} found in a second file ({}); that one is used",
+                         title_id, file->GetName());
+            }
             if (title_type == TitleType::Update) {
                 AddEntryWithVersion(title_type, content_type, title_id, version, version_string,
                                     entry_file);
@@ -1312,7 +1320,8 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
                 AddEntry(title_type, content_type, title_id, entry_file);
             }
         });
-    if (auto path = HostPathOf(file); added && !path.empty()) {
+    if (auto path = source_path.empty() ? HostPathOf(file) : std::move(source_path);
+        added && !path.empty()) {
         sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
     }
     return added;

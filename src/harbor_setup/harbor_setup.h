@@ -71,6 +71,10 @@ PowerRequest ConsolePowerRequest(Core::System& system);
 /// Basic White, nullopt before the console has booted once (the host then follows the phone or
 /// desktop). Read from the NAND's system settings file; needs no Core::System.
 std::optional<bool> SavedConsoleDarkTheme();
+/// Whether the firmware's first-time setup has finished, from a set:sys settings.dat (nullopt
+/// when there is none yet).
+std::optional<bool> ReadInitialSetupDone(const std::filesystem::path& path);
+
 /// The running console's colour set (set:sys), nullopt while none runs.
 std::optional<bool> LiveConsoleDarkTheme(Core::System& system);
 /// The same, from a given set:sys settings.dat (the self-check's sample).

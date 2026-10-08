@@ -30,6 +30,10 @@ namespace Kernel {
 class KReadableEvent;
 }
 
+namespace Service::OMM {
+struct IdleHandlingContext;
+}
+
 namespace Service::AM {
 
 struct Applet;
@@ -119,6 +123,9 @@ public:
     void RequestToAcquireSleepLock(Applet& applet);
     Result ReleaseSleepLock(Applet& applet);
     Result ReleaseSleepLockTransiently(Applet& applet);
+    // idle:sys: the context of the applet in front, and its auto-sleep time being reached.
+    void GetIdleHandlingContext(OMM::IdleHandlingContext& out_context);
+    void OnAutoPowerDown();
 
 private:
     void UpdateCurrentApplicationLocked();

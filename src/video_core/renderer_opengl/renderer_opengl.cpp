@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include <glad/glad.h>
 
@@ -146,9 +147,15 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // Harbor: the host screen (the Harbor menu) is presented in place of the console's picture.
     const auto host_frame = VideoCore::HostScreen::Current();
     std::array<Tegra::FramebufferConfig, 1> host_layer{};
+    std::vector<Tegra::FramebufferConfig> with_overlay;
     if (host_frame) {
         host_layer[0] = VideoCore::HostScreen::MakeLayer(*host_frame);
         framebuffers = host_layer;
+    } else if (const auto overlay = VideoCore::HostScreen::CurrentOverlay()) {
+        // The host overlay (the FPS line) on top of the console's own layers.
+        with_overlay.assign(framebuffers.begin(), framebuffers.end());
+        with_overlay.push_back(VideoCore::HostScreen::MakeOverlayLayer(*overlay));
+        framebuffers = with_overlay;
     }
     RenderScreenshot(framebuffers);
 

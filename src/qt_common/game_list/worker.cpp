@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -151,6 +153,16 @@ void GetMetadataFromControlNCA(const FileSys::PatchManager& patch_manager, const
 bool HasSupportedFileExtension(const std::string& file_name) {
     const QFileInfo file = QFileInfo(QString::fromStdString(file_name));
     return QtCommon::supported_file_extensions.contains(file.suffix(), Qt::CaseInsensitive);
+}
+
+bool IsSplitFirstPart(const std::filesystem::path& path) {
+    if (path.filename() != "00") {
+        return false;
+    }
+    auto extension = Common::FS::PathToUTF8String(path.parent_path().extension());
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension == ".nsp" || extension == ".xci";
 }
 
 bool IsExtractedNCAMain(const std::string& file_name) {
@@ -342,9 +354,13 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
 
         const auto physical_name = Common::FS::PathToUTF8String(path);
         const auto is_dir = Common::FS::IsDir(path);
+        // A split NSP/XCI: a folder named like the file with its parts 00, 01, ... inside; its
+        // first part stands for the whole (Core::GetGameFileFromPath joins them). Its folder is
+        // the content's source, so Delete Software removes the parts and that folder.
+        const bool split_part = !is_dir && IsSplitFirstPart(path);
 
-        if (!is_dir &&
-            (HasSupportedFileExtension(physical_name) || IsExtractedNCAMain(physical_name))) {
+        if (!is_dir && (split_part || HasSupportedFileExtension(physical_name) ||
+                        IsExtractedNCAMain(physical_name))) {
             // A broken or unreadable file is logged once (by the first pass) and left out; the
             // library goes on with the rest.
             const auto skip = [&](std::string_view why) {
@@ -355,7 +371,8 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
                 return true;
             };
 
-            const auto file = vfs->OpenFile(physical_name, FileSys::OpenMode::Read);
+            const auto file = split_part ? Core::GetGameFileFromPath(vfs, physical_name)
+                                         : vfs->OpenFile(physical_name, FileSys::OpenMode::Read);
             if (!file) {
                 return skip("not readable");
             }
@@ -387,7 +404,10 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
                 } else if (Settings::values.ext_content_from_game_dirs.GetValue() &&
                            (file_type == Loader::FileType::XCI ||
                             file_type == Loader::FileType::NSP)) {
-                    void(provider->AddEntriesFromContainer(file));
+                    void(provider->AddEntriesFromContainer(
+                        file, false, std::nullopt,
+                        split_part ? Common::FS::PathToUTF8String(path.parent_path())
+                                   : std::string{}));
                 }
             } else {
                 std::vector<u64> program_ids;

@@ -71,6 +71,7 @@ jmethodID select_driver = nullptr;
 jmethodID finish_setup = nullptr;
 jclass sleep_class = nullptr;
 jmethodID sleep_changed = nullptr;
+jmethodID dim_changed = nullptr;
 
 std::mutex picks_mutex;
 std::map<int, PickCallback> picks;
@@ -403,11 +404,18 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     sleep_class = static_cast<jclass>(env->NewGlobalRef(sleep_local));
     env->DeleteLocalRef(sleep_local);
     sleep_changed = env->GetStaticMethodID(sleep_class, "onSleepChanged", "(Z)V");
-    // am calls this when the console goes to sleep or wakes (a short power press): HarborSleep
-    // pauses the guest and blanks the screen on the UI thread.
+    dim_changed = env->GetStaticMethodID(sleep_class, "onDimChanged", "(Z)V");
+    // am calls this at the sleep sequence's deepest point and on wake: HarborSleep pauses the guest
+    // and blanks the screen on the UI thread.
     EmulationSession::GetInstance().System().GetAppletManager().SetSleepHandler([](bool sleeping) {
         JNIEnv* thread_env = Common::Android::GetEnvForThread();
         thread_env->CallStaticVoidMethod(sleep_class, sleep_changed, sleeping ? JNI_TRUE : JNI_FALSE);
+        ClearException(thread_env);
+    });
+    // idle:sys dims the screen after the dimming time and brings it back on input.
+    EmulationSession::GetInstance().System().GetAppletManager().SetDimHandler([](bool dimmed) {
+        JNIEnv* thread_env = Common::Android::GetEnvForThread();
+        thread_env->CallStaticVoidMethod(sleep_class, dim_changed, dimmed ? JNI_TRUE : JNI_FALSE);
         ClearException(thread_env);
     });
 }

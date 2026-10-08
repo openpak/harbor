@@ -3,12 +3,14 @@
 
 #include <QCoreApplication>
 #include <QKeyEvent>
+#include <QMainWindow>
 #include <QPalette>
 #include <QTimer>
 #include <QWidget>
 
 #include "core/core.h"
 #include "common/logging.h"
+#include "common/settings.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
@@ -50,6 +52,40 @@ HarborSystemKeys::HarborSystemKeys(InputCommon::InputSubsystem& input_subsystem_
         QMetaObject::invokeMethod(this, [this, sleeping] { ApplySleep(sleeping); },
                                   Qt::QueuedConnection);
     });
+    QtCommon::system->GetAppletManager().SetDimHandler([this](bool dimmed) {
+        QMetaObject::invokeMethod(this, [this, dimmed] { ApplyDim(dimmed); },
+                                  Qt::QueuedConnection);
+    });
+}
+
+// The picture is a native child surface; a layer above it has to be native too (a plain child
+// widget is painted into the main window's own surface, underneath).
+void HarborSystemKeys::ApplyDim(bool dimmed) {
+    auto* const window = qobject_cast<QMainWindow*>(parent());
+    QWidget* const picture = window != nullptr ? window->centralWidget() : nullptr;
+    if (!dimmed || picture == nullptr) {
+        if (dim_screen != nullptr) {
+            dim_screen->deleteLater();
+            dim_screen = nullptr;
+        }
+        return;
+    }
+    if (dim_screen == nullptr) {
+        dim_screen = new QWidget(window);
+        dim_screen->setAttribute(Qt::WA_NativeWindow);
+        dim_screen->setAttribute(Qt::WA_TranslucentBackground);
+        dim_screen->setAttribute(Qt::WA_TransparentForMouseEvents);
+        dim_screen->setAutoFillBackground(true);
+    }
+    // omm dims the LCD (backlight down, luma -0.1) or the TV (luma -0.7): darker docked.
+    const bool docked =
+        Settings::values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
+    QPalette palette = dim_screen->palette();
+    palette.setColor(QPalette::Window, QColor(0, 0, 0, docked ? 178 : 128));
+    dim_screen->setPalette(palette);
+    dim_screen->setGeometry(QRect(picture->mapTo(window, QPoint(0, 0)), picture->size()));
+    dim_screen->show();
+    dim_screen->raise();
 }
 
 void HarborSystemKeys::ApplySleep(bool sleeping) {
@@ -64,6 +100,8 @@ void HarborSystemKeys::ApplySleep(bool sleeping) {
             QtCommon::system->Pause();
         }
         sleep_screen = new QWidget(window);
+        // Above the picture's native surface (see ApplyDim).
+        sleep_screen->setAttribute(Qt::WA_NativeWindow);
         sleep_screen->setAutoFillBackground(true);
         QPalette palette = sleep_screen->palette();
         palette.setColor(QPalette::Window, Qt::black);
