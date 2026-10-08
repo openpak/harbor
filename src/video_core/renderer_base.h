@@ -51,6 +51,11 @@ public:
 
     [[nodiscard]] virtual std::string GetDeviceVendor() const = 0;
 
+    /// Harbor: the GPU and its driver in one line, for the device line under the FPS.
+    [[nodiscard]] virtual std::string GetDeviceDescription() const {
+        return GetDeviceVendor();
+    }
+
     // Getter/setter functions:
     // ------------------------
 

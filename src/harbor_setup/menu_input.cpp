@@ -10,6 +10,7 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "common/thread.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "harbor_setup/menu.h"
@@ -156,6 +157,7 @@ void InputStore::Load() {
 }
 
 bool InputStore::Save() const {
+    std::scoped_lock lk{mutex};
     nlohmann::json json;
     json["power"] = power;
     auto& out = json["profiles"] = nlohmann::json::object();
@@ -183,6 +185,7 @@ bool InputStore::Save() const {
 }
 
 std::optional<InputStore::Profile> InputStore::Find(const std::string& key) const {
+    std::scoped_lock lk{mutex};
     for (const auto& [k, profile] : profiles) {
         if (k == key) {
             return profile;
@@ -192,6 +195,7 @@ std::optional<InputStore::Profile> InputStore::Find(const std::string& key) cons
 }
 
 void InputStore::Put(const std::string& key, const Profile& profile) {
+    std::scoped_lock lk{mutex};
     for (auto& [k, existing] : profiles) {
         if (k == key) {
             existing = profile;
@@ -202,10 +206,12 @@ void InputStore::Put(const std::string& key, const Profile& profile) {
 }
 
 std::string InputStore::Power() const {
+    std::scoped_lock lk{mutex};
     return power;
 }
 
 void InputStore::SetPower(const std::string& param) {
+    std::scoped_lock lk{mutex};
     power = param;
 }
 
@@ -359,14 +365,19 @@ void InputMapping::SetConnected(int player, bool connected) {
     // configuration mode: the change takes effect when the menu closes.
     controller->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
     connected ? controller->Connect(true) : controller->Disconnect();
-    auto& settings = Settings::values.players.GetValue()[static_cast<std::size_t>(player)];
-    settings.connected = connected;
-    settings.controller_type = Settings::ControllerType::ProController;
+    for (const bool global : {false, true}) {
+        auto& settings = Settings::values.players.GetValue(global)[static_cast<std::size_t>(player)];
+        settings.connected = connected;
+        settings.controller_type = Settings::ControllerType::ProController;
+    }
     LOG_INFO(Frontend, "harbor: player {} {}", player + 1, connected ? "connected" : "disconnected");
     host.SaveConfig();
 }
 
-std::optional<InputDevice> InputMapping::CurrentDevice(int player) const {
+std::optional<InputDevice> InputMapping::CurrentDevice(int player, bool* connected) const {
+    if (connected) {
+        *connected = false;
+    }
     for (const auto& mappable : MappableButtons) {
         auto param = ButtonParam(player, mappable.index);
         if (param.Get("engine", "") == "analog_from_button") {
@@ -383,6 +394,9 @@ std::optional<InputDevice> InputMapping::CurrentDevice(int player) const {
             }
             if (engine == "keyboard" ||
                 (d.Get("guid", "") == param.Get("guid", "") && d.Get("port", 0) == param.Get("port", 0))) {
+                if (connected) {
+                    *connected = true;
+                }
                 return device;
             }
         }
@@ -617,6 +631,15 @@ void InputMapping::Commit(int player) {
             controller->SaveCurrentConfig();
             settings.connected = connected;
             settings.controller_type = type;
+            // A console's controllers are console-wide: with a title's own settings loaded the
+            // mapping lands in its custom copy, so it goes to the global one too (what is saved).
+            auto& players = Settings::values.players;
+            if (!players.UsingGlobal()) {
+                auto& global = players.GetValue(true)[index];
+                global.buttons = settings.buttons;
+                global.analogs = settings.analogs;
+                global.motions = settings.motions;
+            }
         }
     }
     host.SaveConfig();
@@ -631,6 +654,36 @@ void InputMapping::Commit(int player) {
         store.Put(InputStore::DeviceKey(device->params), profile);
         store.Save();
     }
+}
+
+bool InputMapping::ApplySaved(int player) {
+    bool connected = false;
+    const auto device = CurrentDevice(player, &connected);
+    if (!device || !connected || device->params.Get("engine", "") == "keyboard") {
+        return false;
+    }
+    const auto saved = store.Find(InputStore::DeviceKey(device->params));
+    if (!saved) {
+        return false;
+    }
+    InputStore::Profile wanted = *saved;
+    bool differs = false;
+    for (int i = 0; i < NativeButton::NumButtons; i++) {
+        wanted.buttons[i] = RetargetParam(wanted.buttons[i], device->params);
+        differs |= Common::ParamPackage{wanted.buttons[i]}.Serialize() != ButtonParam(player, i).Serialize();
+    }
+    for (int i = 0; i < NativeAnalog::NumAnalogs; i++) {
+        wanted.analogs[i] = RetargetParam(wanted.analogs[i], device->params);
+        differs |= Common::ParamPackage{wanted.analogs[i]}.Serialize() != StickParam(player, i).Serialize();
+    }
+    if (!differs) {
+        return false;
+    }
+    Apply(player, wanted);
+    Commit(player);
+    LOG_INFO(Frontend, "harbor: player {}: a known controller came back, its saved mapping is applied",
+             player + 1);
+    return true;
 }
 
 // ---- InputCapture ----
@@ -695,6 +748,56 @@ void InputCapture::End() {
 InputStore& HarborInputStore() {
     static InputStore store{Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor-input.json"};
     return store;
+}
+
+namespace {
+std::thread watcher;
+std::mutex watcher_mutex;
+std::condition_variable watcher_cv;
+bool watcher_stop = false;
+} // namespace
+
+void StartControllerWatcher(MenuHost& host) {
+    if (watcher.joinable()) {
+        return;
+    }
+    watcher = std::thread([&host] {
+        Common::SetCurrentThreadName("HarborPads");
+        InputMapping mapping{host, HarborInputStore()};
+        // What each player was on at the last look: a new device, port or player is a connect.
+        std::array<std::string, InputMapping::Players> seen;
+        std::unique_lock lk{watcher_mutex};
+        while (!watcher_cv.wait_for(lk, std::chrono::seconds(1), [] { return watcher_stop; })) {
+            lk.unlock();
+            for (int player = 0; player < InputMapping::Players; player++) {
+                bool connected = false;
+                const auto device = mapping.CurrentDevice(player, &connected);
+                const std::string now = device && connected
+                                            ? InputStore::DeviceKey(device->params) + "@" +
+                                                  device->params.Get("port", "0")
+                                            : std::string{};
+                if (now == seen[player]) {
+                    continue;
+                }
+                seen[player] = now;
+                if (!now.empty()) {
+                    mapping.ApplySaved(player);
+                }
+            }
+            lk.lock();
+        }
+    });
+}
+
+void StopControllerWatcher() {
+    {
+        std::scoped_lock lk{watcher_mutex};
+        watcher_stop = true;
+    }
+    watcher_cv.notify_all();
+    if (watcher.joinable()) {
+        watcher.join();
+    }
 }
 
 void StartPowerKey(Core::System& system) {

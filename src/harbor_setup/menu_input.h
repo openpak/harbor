@@ -78,6 +78,7 @@ public:
 private:
     void Load();
 
+    mutable std::mutex mutex; // the menu and the controller watcher both use the store
     std::filesystem::path path;
     std::string power;
     std::vector<std::pair<std::string, Profile>> profiles;
@@ -153,12 +154,17 @@ public:
     /// Saves the player's mapping to the configuration and to its controller's store entry.
     void Commit(int player);
 
+    /// The device the player's mapping uses; `connected` is false for a pad that is not there now.
+    std::optional<InputDevice> CurrentDevice(int player, bool* connected = nullptr) const;
+    /// A known controller on `player`: its saved mapping (moved to its port) when the mapping
+    /// differs from it. Whether anything changed.
+    bool ApplySaved(int player);
+
 private:
     Common::ParamPackage ButtonParam(int player, int button) const;
     Common::ParamPackage StickParam(int player, int stick) const;
     void Apply(int player, const InputStore::Profile& profile);
     std::optional<InputStore::Profile> Defaults(const InputDevice& device) const;
-    std::optional<InputDevice> CurrentDevice(int player) const;
 
     MenuHost& host;
     InputStore& store;
@@ -199,5 +205,11 @@ InputStore& HarborInputStore();
 
 /// Binds the Power button from the store for this console session (call when a console boots).
 void StartPowerKey(Core::System& system);
+
+/// As a console remembers pads: whenever a controller connects or comes back, on whichever player
+/// it lands (a pad the frontend binds, or one a player was already mapped to), its saved mapping
+/// is applied. Checks once a second; stops with StopControllerWatcher.
+void StartControllerWatcher(MenuHost& host);
+void StopControllerWatcher();
 
 } // namespace HarborSetup

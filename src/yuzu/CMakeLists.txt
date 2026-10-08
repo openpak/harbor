@@ -166,6 +166,8 @@ add_executable(yuzu
     harbor_control.h
     harbor_menu.cpp
     harbor_menu.h
+    harbor_test_pad.cpp
+    harbor_test_pad.h
     harbor_system_keys.cpp
     harbor_system_keys.h
     hotkeys.cpp

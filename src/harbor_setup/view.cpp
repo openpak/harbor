@@ -322,8 +322,9 @@ void WizardActivity::Render() {
         last_content_focus->setCustomNavigationRoute(brls::FocusDirection::DOWN, advance);
         advance->setCustomNavigationRoute(brls::FocusDirection::UP, last_content_focus);
     }
-    if (scroll && same_page) {
-        scroll->setContentOffsetY(offset, false);
+    if (scroll) {
+        // Each new page starts at its top.
+        scroll->setContentOffsetY(same_page ? offset : 0.0f, false);
     }
 
     brls::View* focus = nullptr;
@@ -340,16 +341,36 @@ void WizardActivity::Render() {
     }
     rendering = false;
 
-    // A new result strip or progress bar below the fold is scrolled into view.
+    // A new result strip, progress bar or download list (below the fold in landscape) is scrolled
+    // into view and takes the focus. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+    // base), FirstRunView.OnPagePropertyChanged.
     const std::string now_status = model.Status() + (model.Busy() ? "\x01busy" : "");
-    if (now_status != shown_status && (!model.Status().empty() || model.Busy())) {
-        brls::delay(80, [this, alive = std::weak_ptr<bool>(alive)] {
-            if (!alive.expired() && scroll) {
+    const std::size_t download_count = model.step() == Step::Driver ? model.Downloads().size() : 0;
+    std::string reveal;
+    if (download_count > 0 && shown_downloads == 0) {
+        reveal = "download:" + model.Downloads().front().download_url;
+    } else if (now_status != shown_status && !model.Status().empty()) {
+        reveal = "status";
+    } else if (now_status != shown_status && model.Busy()) {
+        reveal = "progress";
+    }
+    if (!reveal.empty()) {
+        brls::delay(80, [this, reveal, alive = std::weak_ptr<bool>(alive)] {
+            if (alive.expired() || !scroll) {
+                return;
+            }
+            // The status and the progress bar are the page's last lines; a download row is
+            // scrolled to by the focus itself.
+            if (!reveal.starts_with("download:")) {
                 scroll->ScrollToEnd();
+            }
+            if (const auto it = by_key.find(reveal); it != by_key.end()) {
+                brls::Application::giveFocus(it->second);
             }
         });
     }
     shown_status = now_status;
+    shown_downloads = download_count;
 }
 
 void WizardActivity::UpdateProgress() {
@@ -524,6 +545,12 @@ brls::View* WizardActivity::ProgressPanel() {
     const auto& p = CurrentPalette();
     auto* panel = new brls::Box(brls::Axis::COLUMN);
     panel->setMarginTop(20);
+    // Focusable like the status strip, so it can take the focus as it appears.
+    panel->setFocusable(true);
+    panel->setHighlightCornerRadius(0);
+    panel->setHighlightPadding(-3);
+    panel->addGestureRecognizer(new brls::TapGestureRecognizer(panel, [] {}));
+    Remember(panel, "progress");
     progress_label = Text(model.ProgressText(), 18, p.ink2, true);
     panel->addView(progress_label);
     Wizard* wizard = &model;

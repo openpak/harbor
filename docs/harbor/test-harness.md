@@ -53,7 +53,11 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
 | `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
-| `menu <name>` | opens a Harbor menu entry (console mode): `frame-gen`; while its dialog (or any modal host dialog) is open, `key` and `type` go to it |
+| `menu <name>` | the Harbor menu, drawn on the console's screen (screenshots show it): `harbor` (the menu), `settings`, `frame-gen` (Display & Performance), `controllers`, `back`, `close`; and the console entries `backup`, `restore`, `new-console`, whose host dialogs then take `key` and `type` |
+| `hostkey <name> [ms]` | a key as the render window passes it on (the keyboard engine: controller mappings and the Harbor menu, which reads Enter, Space, Escape, Backspace, the arrows and X), not the guest's USB keyboard: `Enter`, `Escape`, `Backspace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Tab`, a letter or a digit |
+| `pad plug` / `pad unplug` | an SDL virtual gamepad, "Harbor test pad", that Eden's SDL driver finds as it finds a real pad (its own GUID): for press-to-assign, per-controller mappings and reconnects |
+| `pad tap <button> [ms]`, `pad down <button>`, `pad up <button>` | its buttons by SDL's names (`a b x y back guide start leftstick rightstick leftshoulder rightshoulder dpup dpdown dpleft dpright misc1`) or numbers |
+| `pad axis <n> <value> [ms]` | its axes by SDL's numbers (0-1 left stick, 2-3 right stick, 4-5 triggers), -1 to 1 |
 | `threads` | guest thread dump to the log |
 | `quit` | closes the main window (clean shutdown, about 10 s) |
 
@@ -96,6 +100,22 @@ values never appear on a command line, in the log (only `harbor: scripted text`)
 field order is the page's: email, password, then (create mode) nickname, birthday, country. Fields
 are opened with A (Return) on their row. A screenshot of a filled form shows the email address: crop
 it out or take none.
+
+## The Harbor menu in scripted runs
+
+The menu takes over the console's own picture (video_core/host_screen.h), so `screenshot` captures it.
+It reads the console's controllers: `press` (the virtual gamepad) navigates it, A confirms and B goes
+back. The virtual gamepad is not a mappable device, so assignment is tested with the test pad:
+
+```
+drive.sh m1 pad plug menu controllers sleep 2 press RIGHT press A        # Player 1
+drive.sh m1 press A sleep 1                                              # Controller: pick the test pad
+drive.sh m1 press DOWN press A pad tap b sleep 1 screenshot shots/a.png   # A assigned to the pad's B
+drive.sh m1 pad unplug sleep 2 pad plug sleep 3                          # it comes back mapped
+```
+
+The pad's mapping is kept in `user/config/harbor-input.json`, by its GUID; the log says
+`harbor: player 1: a known controller came back, its saved mapping is applied` when it is applied again.
 
 ## Thread dump and svcBreak
 

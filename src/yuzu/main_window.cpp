@@ -407,6 +407,12 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     setAcceptDrops(true);
     ui->setupUi(this);
     statusBar()->hide();
+    // Harbor: the window is the console's screen and nothing else, as a Switch on a TV. Eden's menu
+    // bar and status bar never show (no height, whatever later code shows them); the Harbor menu
+    // (F1, Plus and Minus) has what Harbor needs from them.
+    ui->menubar->hide();
+    ui->menubar->setFixedHeight(0);
+    statusBar()->setFixedHeight(0);
 
     startup_icon_theme = QIcon::themeName();
     // fallback can only be set once, colorful theme icons are okay on both light/dark
@@ -591,14 +597,6 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 },
             .exit = [this] { close(); },
             .save_config = [this] { OnSaveConfig(); },
-            .fps_shown = [] { return UISettings::values.show_perf_overlay.GetValue(); },
-            .show_fps =
-                [this](bool show) {
-                    ui->action_Show_Performance_Overlay->setChecked(show);
-                    UISettings::values.show_perf_overlay = show;
-                    OnTogglePerfOverlay();
-                    OnSaveConfig();
-                },
             .joycons = [](bool detached) { HarborSetJoyconsDetached(detached); },
             .change_dll =
                 [this](std::function<void()> change) {
@@ -611,6 +609,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 },
             .console_action = [this](const std::string& name) { HarborConsoleAction(name); },
         });
+    connect(this, &MainWindow::statsUpdated, this,
+            [this](const Core::PerfStatsResults& results, const VideoCore::ShaderNotify&) {
+                harbor_menu->SetStats(results.average_game_fps, results.emulation_speed);
+            });
     auto* menu_shortcut = new QShortcut(QKeySequence(Qt::Key_F1), this);
     menu_shortcut->setContext(Qt::ApplicationShortcut);
     connect(menu_shortcut, &QShortcut::activated, this, [this] {
@@ -696,7 +698,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             ui->action_Fullscreen->setChecked(lp.fullscreen);
         }
 
-        if (!lp.filepath.empty()) {
+        if (harbor_console) {
+            // The console boots HOME itself, once the library and OpenPak are ready; a game or
+            // applet on the command line is not booted around it.
+        } else if (!lp.filepath.empty()) {
             BootGame(QString::fromStdString(lp.filepath), ApplicationAppletParameters());
         } else if (lp.launch_setup) {
             LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::Starter), std::nullopt);
@@ -1591,6 +1596,12 @@ void MainWindow::InitializeRecentFileMenuActions() {
 void MainWindow::LinkActionShortcut(QAction* action, const QString& action_name,
                                     const bool tas_allowed) {
     static const auto main_window = std::string("Main Window");
+    // Harbor has no Eden menus: of their actions only Fullscreen keeps its key (F11). Loading
+    // files, Eden's configuration, rooms, TAS and the rest are not reachable.
+    if (action_name != QStringLiteral("Fullscreen")) {
+        action->setShortcut(QKeySequence{});
+        return;
+    }
     action->setShortcut(hotkey_registry.GetKeySequence(main_window, action_name.toStdString()));
     action->setShortcutContext(
         hotkey_registry.GetShortcutContext(main_window, action_name.toStdString()));
@@ -1739,8 +1750,9 @@ void MainWindow::RestoreUIState() {
     ui->action_Show_Status_Bar->setChecked(UISettings::values.show_status_bar.GetValue());
     statusBar()->setVisible(ui->action_Show_Status_Bar->isChecked());
 
-    ui->action_Show_Performance_Overlay->setChecked(
-        UISettings::values.show_perf_overlay.GetValue());
+    // Harbor: Eden's floating performance window never shows; Show FPS is a line on the console's
+    // screen (Harbor Settings).
+    ui->action_Show_Performance_Overlay->setChecked(false);
     if (perf_overlay)
         perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
     Debugger::ToggleConsole();
