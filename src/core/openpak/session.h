@@ -54,6 +54,14 @@ struct Invitation {
 /// changing the server starts different device accounts, as it must.
 void Configure(std::string server_host, int port, std::string ca_path);
 
+/// Where this console's own TLS client identity comes from (DER certificate and DER private key;
+/// Harbor's calibration). Used for a server this install has no certificate for yet; one that has
+/// keeps its own, so existing device accounts carry on. Without a source a self-signed
+/// certificate is made, as before.
+void SetClientIdentitySource(
+    std::function<bool(std::vector<std::uint8_t>& certificate, std::vector<std::uint8_t>& key)>
+        source);
+
 /// Whether a server has been configured.
 bool Enabled();
 
