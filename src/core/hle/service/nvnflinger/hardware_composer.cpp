@@ -8,6 +8,7 @@
 
 #include <boost/container/small_vector.hpp>
 
+#include "video_core/host_screen.h"
 #include "core/hle/service/nvdrv/devices/nvdisp_disp0.h"
 #include "core/hle/service/nvnflinger/buffer_item.h"
 #include "core/hle/service/nvnflinger/buffer_item_consumer.h"
@@ -139,8 +140,11 @@ u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
         }
     }
 
-    // If any new buffers were acquired, we can present.
-    if (has_acquired_buffer && !composition_stack.empty()) {
+    // If any new buffers were acquired, we can present. Harbor: also when the host screen (the
+    // Harbor menu) has a new picture, or was shown or hidden, while the guest queued nothing new.
+    const bool host_screen_changed =
+        !composition_stack.empty() && VideoCore::HostScreen::TakeChanged();
+    if ((has_acquired_buffer || host_screen_changed) && !composition_stack.empty()) {
         // Sort back-to-front: lower z first, higher z last so top-most draws last (on top).
         std::stable_sort(composition_stack.begin(), composition_stack.end(),
                          [&](const HwcLayer& l, const HwcLayer& r) { return l.z_index < r.z_index; });

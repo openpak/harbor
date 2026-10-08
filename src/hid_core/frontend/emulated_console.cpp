@@ -275,6 +275,18 @@ ConsoleMotion EmulatedConsole::GetMotion() const {
 }
 
 TouchFingerState EmulatedConsole::GetTouch() const {
+    if (host_owns_touch) {
+        return {};
+    }
+    std::scoped_lock lock{mutex};
+    return console.touch_state;
+}
+
+void EmulatedConsole::SetHostOwnsTouch(bool host) {
+    host_owns_touch = host;
+}
+
+TouchFingerState EmulatedConsole::GetHostTouch() const {
     std::scoped_lock lock{mutex};
     return console.touch_state;
 }
