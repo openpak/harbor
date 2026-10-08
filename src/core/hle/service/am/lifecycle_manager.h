@@ -127,6 +127,12 @@ public:
         this->SignalSystemEventIfNeeded(kernel);
     }
 
+    // idle's auto-sleep time was reached (spsm's notification 3 on a console).
+    void RequestAutoPowerDown(Kernel::KernelCore& kernel) {
+        m_has_auto_power_down = true;
+        this->SignalSystemEventIfNeeded(kernel);
+    }
+
     void ClearRequestToPrepareSleep(Kernel::KernelCore& kernel) {
         m_has_requested_request_to_prepare_sleep = false;
         m_has_acknowledged_request_to_prepare_sleep = false;

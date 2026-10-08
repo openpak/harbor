@@ -12,6 +12,7 @@
 #include "core/hle/service/caps/caps_su.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/nvnflinger/nvnflinger.h"
+#include "core/hle/service/omm/idle_policy.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/vi/vi_results.h"
 
@@ -293,15 +294,16 @@ Result ISelfController::ApproveToDisplay() {
 }
 
 Result ISelfController::SetMediaPlaybackState(bool state) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, state={}", state);
+    LOG_DEBUG(Service_AM, "called, state={}", state);
+    // idle's media timings (Sleep Mode's "while playing media") follow it.
+    std::scoped_lock lk{m_applet->lock};
+    m_applet->media_playback_state = state;
     R_SUCCEED();
 }
 
-// Idle detection, auto-dimming and auto-sleep: a console's idle timer dims the screen and then
-// sleeps after the times in System Settings, which these commands override or extend while the
-// applet is in front. This system never dims or sleeps on idle (sleep is not emulated), so the
-// values are kept for the applet and answered back. Behaviour follows the Ryujinx Harbor
-// (MIT-licensed Ryujinx base).
+// Idle detection, auto-dimming and auto-sleep: idle:sys (omm, IdlePolicy) dims the screen and then
+// asks HOME to sleep after the times in System Settings, which these commands override or extend
+// while the applet is in front; am reads them back from the applet in front for the timer.
 Result ISelfController::OverrideAutoSleepTimeAndDimmingTime(s32 auto_sleep_handheld,
                                                             s32 auto_sleep_console,
                                                             s32 dimming_handheld,
@@ -336,11 +338,16 @@ Result ISelfController::GetIdleTimeDetectionExtension(
 }
 
 Result ISelfController::ReportUserIsActive() {
-    // Restarts the idle timer on a console; with no idle timer here it only marks the time.
+    // Restarts the idle timer (idle:sys 5 on a console).
     LOG_DEBUG(Service_AM, "called");
 
-    std::scoped_lock lk{m_applet->lock};
-    m_applet->last_user_activity = std::chrono::steady_clock::now();
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->last_user_activity = std::chrono::steady_clock::now();
+    }
+    if (auto* const idle = OMM::GetIdlePolicy()) {
+        idle->ReportUserIsActive();
+    }
     R_SUCCEED();
 }
 
