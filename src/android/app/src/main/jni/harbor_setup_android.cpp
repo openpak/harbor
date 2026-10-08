@@ -5,6 +5,7 @@
 // mode switches. The wizard runs in this library on the SDL thread of HarborSetupActivity (an
 // SDLActivity), with the same SDL3 Eden's audio uses: one SDL copy, one org.libsdl.app.
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -20,6 +21,10 @@
 #include "common/logging.h"
 #include "common/param_package.h"
 #include "common/settings.h"
+#include "core/hle/service/am/applet_manager.h"
+#include "core/hle/service/am/window_system.h"
+#include "core/hle/service/set/system_settings_server.h"
+#include "core/hle/service/sm/sm.h"
 #include "core/openpak/boot_connection.h"
 #include "frontend_common/joycon_rails.h"
 #include "harbor_setup/harbor_setup.h"
@@ -385,18 +390,21 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     finish_setup = env->GetStaticMethodID(bridge_class, "finishSetup", "(Z)V");
 }
 
-JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_isConsoleReady(JNIEnv*, jobject) {
+/// "" when the console can boot, "setup" when the setup must run first, else why the check itself
+/// failed (the launcher's "Harbor cannot start").
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkConsole(JNIEnv* env, jobject) {
     HarborSetup::Readiness readiness;
     try {
         readiness = HarborSetup::CheckReadiness();
     } catch (const std::exception& e) {
         LOG_ERROR(Frontend, "harbor: readiness check failed: {}", e.what());
-        return JNI_FALSE;
+        return Common::Android::ToJString(env, std::string{e.what()}.empty() ? "The readiness check failed."
+                                                                             : e.what());
     }
     LOG_INFO(Frontend, "harbor: readiness keys={} firmware={} qlaunch={} record_completed={}",
              readiness.keys_usable, readiness.firmware_version.empty() ? "none" : readiness.firmware_version,
              readiness.qlaunch, readiness.record_completed);
-    return readiness.Ready() ? JNI_TRUE : JNI_FALSE;
+    return Common::Android::ToJString(env, readiness.Ready() ? "" : "setup");
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(JNIEnv* env, jobject, jint id,
@@ -418,6 +426,13 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(JNIE
     const auto location = Common::Android::GetJString(env, uri);
     done(Picked{name ? Common::Android::GetJString(env, name) : location, location,
                 location.rfind("content://", 0) != 0});
+}
+
+/// A picker that could not open: the wizard says why and keeps the earlier choice.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPickFailed(JNIEnv* env, jobject, jint id,
+                                                                               jstring message) {
+    Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(env, nullptr, id, nullptr, nullptr);
+    HarborSetup::ReportPickerFailure(message ? Common::Android::GetJString(env, message) : std::string{});
 }
 
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_downloadProgress(JNIEnv*, jobject,
@@ -507,6 +522,70 @@ JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkGpuDr
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {
     return FrontendCommon::JoyconsDetached(EmulationSession::GetInstance().System().HIDCore()) ? JNI_TRUE
                                                                                              : JNI_FALSE;
+}
+
+/// The console's power button held (a middle press: the overlay's power menu with Restart and Power
+/// Off), as the Ryujinx Harbor's F5. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pressPower(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        LOG_INFO(Frontend, "harbor: power button ignored: the console is not running");
+        return;
+    }
+    auto* const window_system = session.System().GetAppletManager().GetWindowSystem();
+    if (window_system == nullptr) {
+        LOG_INFO(Frontend, "harbor: power button ignored: no window system");
+        return;
+    }
+    LOG_INFO(Frontend, "harbor: power button held (power menu)");
+    window_system->OnPowerButtonPressed(Service::AM::ButtonPressDuration::MiddlePressing);
+}
+
+/// Android's audio focus as a gain on the console's output (1 full, 0.25 ducked, 0 muted). The
+/// saved volume is untouched: a lower gain is the setting's per-session value, which the global
+/// config never writes, and every new session starts from the saved one.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setHostGain(JNIEnv*, jobject, jfloat gain) {
+    auto& volume = Settings::values.volume;
+    if (gain >= 1.0f) {
+        volume.SetGlobal(true);
+        return;
+    }
+    const auto saved = volume.GetValue(true);
+    volume.SetGlobal(false);
+    volume.SetValue(static_cast<u8>(static_cast<float>(saved) * std::clamp(gain, 0.0f, 1.0f)));
+}
+
+/// The console's theme for the touch controls: 1 Basic Black, 0 Basic White, -1 while no console runs.
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_consoleTheme(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        return -1;
+    }
+    const auto set_sys = session.System().ServiceManager().GetService<Service::Set::ISystemSettingsServer>(
+        "set:sys", false);
+    if (!set_sys) {
+        return -1;
+    }
+    Service::Set::ColorSet color{};
+    if (set_sys->GetColorSetId(&color).IsError()) {
+        return -1;
+    }
+    return color == Service::Set::ColorSet::BasicBlack ? 1 : 0;
+}
+
+/// Where the console's picture is on the emulation surface: left, top, right, bottom in pixels, or
+/// an empty array while no console runs. Touches outside it are not the touch screen.
+JNIEXPORT jintArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pictureRect(JNIEnv* env, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        return env->NewIntArray(0);
+    }
+    const auto& screen = session.Window().GetFramebufferLayout().screen;
+    const jint rect[4] = {static_cast<jint>(screen.left), static_cast<jint>(screen.top),
+                          static_cast<jint>(screen.right), static_cast<jint>(screen.bottom)};
+    jintArray out = env->NewIntArray(4);
+    env->SetIntArrayRegion(out, 0, 4, rect);
+    return out;
 }
 
 } // extern "C"

@@ -5,10 +5,13 @@ package org.yuzu.yuzu_emu.harbor
 
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowManager
+import android.window.OnBackInvokedDispatcher
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -44,6 +47,15 @@ class HarborSetupActivity : SDLActivity() {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         hideSystemBars()
+        // The volume keys set the media volume (the setup's step sounds), as on the console screen.
+        volumeControlStream = AudioManager.STREAM_MUSIC
+        // Android 13 and later deliver back here (the manifest opts into predictive back), not to
+        // onBackPressed: the wizard's Back, which on Welcome leaves the app.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) {
+                HarborNative.onBackPressed()
+            }
+        }
         Log.info("[Harbor] setup activity created")
     }
 
@@ -84,8 +96,9 @@ class HarborSetupActivity : SDLActivity() {
         try {
             startActivityForResult(intent, requestCode)
         } catch (e: Exception) {
-            Log.warning("[Harbor] picker could not open: ${e.message}")
-            HarborNative.onPicked(pendingPick, null, null)
+            Log.warning("[Harbor] picker could not open: ${e.javaClass.simpleName}")
+            // The wizard says so and keeps the earlier choice.
+            HarborNative.onPickFailed(pendingPick, e.message ?: e.javaClass.simpleName)
             pendingPick = 0
         }
     }
