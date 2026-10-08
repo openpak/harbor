@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
@@ -22,6 +23,18 @@
 
 namespace AudioCore::Sink {
 
+namespace {
+std::atomic<f32> console_output_gain{1.0f};
+} // namespace
+
+void SetConsoleOutputGain(f32 gain) {
+    console_output_gain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
+}
+
+f32 GetConsoleOutputGain() {
+    return console_output_gain.load(std::memory_order_relaxed);
+}
+
 void SinkStream::AppendBuffer(SinkBuffer& buffer, std::span<s16> samples) {
     if (type == StreamType::In)
         return;
@@ -32,7 +45,7 @@ void SinkStream::AppendBuffer(SinkBuffer& buffer, std::span<s16> samples) {
     auto yuzu_volume = Settings::Volume();
     if (yuzu_volume > 1.0f)
         yuzu_volume = 0.6f + 20.0f * std::log10(yuzu_volume);
-    auto const volume = system_volume * device_volume * yuzu_volume;
+    auto const volume = system_volume * device_volume * yuzu_volume * GetConsoleOutputGain();
 
     if (system_channels > device_channels) {
         static constexpr std::array<f32, 4> tcoeff{1.0f, 0.596f, 0.354f, 0.707f};
