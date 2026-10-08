@@ -105,6 +105,11 @@ Result IOlscServiceForSystemService::GetTransferTaskListController(
 Result IOlscServiceForSystemService::GetRemoteStorageController(
     Out<SharedPointer<IRemoteStorageController>> out_interface, Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called");
+    // The sysmodule keeps its archive cache in its system save; Harbor keeps it beside the NAND
+    // saves, so the Save Data Cloud page lists the last known archives before a fetch lands.
+    OpenPak::Olsc::ArchiveCache::Instance().SetStore(
+        Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
+        "olsc-archives.json");
     // The controller speaks for one user (the sysmodule's takes the Uid here, 0x10 bytes in).
     *out_interface = std::make_shared<IRemoteStorageController>(system, user_id, worker);
     R_SUCCEED();
