@@ -36,6 +36,24 @@ public:
     Result DeleteSystemSaveData(u64 save_id);
     bool SystemSaveDataExists(u64 save_id) const;
 
+    /// The attribute of the save that save_id names in the space. fs indexes system saves under
+    /// their static id; saves in the other spaces have no id here.
+    Result FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
+                            FileSys::SaveDataSpaceId space, u64 save_id) const;
+    /// The save's extra data. A save made before extra data was kept gets one built from what
+    /// is known of it (attribute, owner); its sizes read 0 until it is extended.
+    Result ReadSaveDataExtraData(FileSys::SaveDataExtraData* out_extra_data,
+                                 FileSys::SaveDataSpaceId space,
+                                 const FileSys::SaveDataAttribute& attribute) const;
+    Result WriteSaveDataExtraData(FileSys::SaveDataSpaceId space,
+                                  const FileSys::SaveDataAttribute& attribute,
+                                  const FileSys::SaveDataExtraData& extra_data);
+    /// The extra data fs writes when it creates a save.
+    void InitializeSaveDataExtraData(FileSys::SaveDataSpaceId space,
+                                     const FileSys::SaveDataAttribute& attribute, u64 owner_id,
+                                     u32 flags, s64 size, s64 journal_size,
+                                     FileSys::SaveDataFormatType format_type);
+
 private:
     Core::System& system;
     const std::shared_ptr<FileSys::SaveDataFactory> factory;
