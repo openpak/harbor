@@ -6,8 +6,9 @@
 
 #include "common/hex_util.h"
 #include "common/logging.h"
-#include "common/uuid.h"
+#include <atomic>
 #include <cstring>
+#include <string>
 
 #include "core/core.h"
 #include "core/hle/service/acc/profile_manager.h"
@@ -21,7 +22,8 @@ namespace Service::PlayReport {
 
 class PlayReport final : public ServiceFramework<PlayReport> {
 public:
-    explicit PlayReport(const char* name, Core::System& system_) : ServiceFramework{system_, name} {
+    explicit PlayReport(const char* name, Core::System& system_)
+        : ServiceFramework{system_, name}, name_{name} {
         // clang-format off
         static const FunctionInfo functions[] = {
             {10100, &PlayReport::SaveReport<Core::Reporter::PlayReportType::Old>, "SaveReportOld"},
@@ -48,8 +50,8 @@ public:
             {30401, nullptr, "GetThroughputHistory"},
             {30500, nullptr, "GetLastUploadError"},
             {30600, nullptr, "GetApplicationUploadSummary"},
-            {40100, nullptr, "IsUserAgreementCheckEnabled"},
-            {40101, nullptr, "SetUserAgreementCheckEnabled"},
+            {40100, &PlayReport::IsUserAgreementCheckEnabled, "IsUserAgreementCheckEnabled"},
+            {40101, &PlayReport::SetUserAgreementCheckEnabled, "SetUserAgreementCheckEnabled"},
             {50100, nullptr, "ReadAllApplicationReportFiles"},
             {90100, nullptr, "ReadAllReportFiles"},
             {90101, nullptr, "Unknown90101"},
@@ -87,20 +89,20 @@ private:
     template <Core::Reporter::PlayReportType Type>
     void SaveReportWithUser(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        const auto user_id = rp.PopRaw<u128>();
+        rp.Skip(4, false); // the user id: no report or log keeps it (privacy)
         const auto process_id = rp.PopRaw<u64>();
 
         const auto data1 = ctx.ReadBufferA(0);
         const auto data2 = ctx.ReadBufferX(0);
 
         LOG_DEBUG(Service_PREPO,
-                  "called, type={:02X}, user_id={:016X}{:016X}, process_id={:016X}, "
-                  "data1_size={:016X}, data2_size={:016X}",
-                  Type, user_id[1], user_id[0], process_id, data1.size(), data2.size());
+                  "called, type={:02X}, process_id={:016X}, data1_size={:016X}, "
+                  "data2_size={:016X}",
+                  Type, process_id, data1.size(), data2.size());
 
         const auto& reporter{system.GetReporter()};
         reporter.SavePlayReport(Type, system.ResolveCallerProgramId(process_id), {data1, data2},
-                                process_id, user_id);
+                                process_id);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -148,22 +150,17 @@ private:
 
     void SaveSystemReportWithUserOld(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
-        const auto user_id = rp.PopRaw<u128>();
+        rp.Skip(4, false); // the user id: no report or log keeps it (privacy)
         const auto title_id = rp.PopRaw<u64>();
 
         const auto data1 = ctx.ReadBufferA(0);
         const auto data2 = ctx.ReadBufferX(0);
 
-        Common::UUID uuid{};
-        std::memcpy(uuid.uuid.data(), user_id.data(), sizeof(Common::UUID));
-
-        LOG_DEBUG(Service_PREPO,
-                  "called, user_id={}, title_id={:016X}, data1_size={:016X}, data2_size={:016X}",
-                  uuid.FormattedString(), title_id, data1.size(), data2.size());
+        LOG_DEBUG(Service_PREPO, "called, title_id={:016X}, data1_size={:016X}, data2_size={:016X}",
+                  title_id, data1.size(), data2.size());
 
         const auto& reporter{system.GetReporter()};
-        reporter.SavePlayReport(Core::Reporter::PlayReportType::System, title_id, {data1, data2},
-                                std::nullopt, user_id);
+        reporter.SavePlayReport(Core::Reporter::PlayReportType::System, title_id, {data1, data2});
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -193,28 +190,66 @@ private:
     void SaveSystemReportWithUser(HLERequestContext& ctx) {
         IPC::RequestParser rp{ctx};
 
-        // 21.0.0+: field0 (u64), user_id (u128), title_id (u64)
+        // 21.0.0+: field0 (u64), the user id (u128), title_id (u64)
         const auto field0 = rp.PopRaw<u64>();
-        const auto user_id = rp.PopRaw<u128>();
+        rp.Skip(4, false); // the user id: no report or log keeps it (privacy)
         const auto title_id = rp.PopRaw<u64>();
 
         const auto data_x = ctx.ReadBufferX(0);
         const auto data_a = ctx.ReadBufferA(0);
 
-        Common::UUID uuid{};
-        std::memcpy(uuid.uuid.data(), user_id.data(), sizeof(Common::UUID));
-
-        LOG_DEBUG(Service_PREPO,
-                  "called, user_id={}, field0={:016X}, title_id={:016X}, data_a_size={}, data_x_size={}",
-                  uuid.FormattedString(), field0, title_id, data_a.size(), data_x.size());
+        LOG_DEBUG(Service_PREPO, "called, field0={:016X}, title_id={:016X}, data_a_size={}, data_x_size={}",
+                  field0, title_id, data_a.size(), data_x.size());
 
         const auto& reporter{system.GetReporter()};
-        reporter.SavePlayReport(Core::Reporter::PlayReportType::System, title_id, {data_a, data_x},
-                                std::nullopt, user_id);
+        reporter.SavePlayReport(Core::Reporter::PlayReportType::System, title_id, {data_a, data_x});
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
     }
+
+    // 40100/40101: only prepo:u and prepo:s may use them. The flag lives in memory (a console keeps
+    // it in prepo-sys:/is_user_agreement_check_enabled.bin), starts enabled, and is shared by every
+    // prepo port. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), PrepoService.cs.
+    bool MayUseAgreementCheck() const {
+        return name_ == "prepo:u" || name_ == "prepo:s";
+    }
+
+    void IsUserAgreementCheckEnabled(HLERequestContext& ctx) {
+        if (!MayUseAgreementCheck()) {
+            LOG_WARNING(Service_PREPO, "{} IsUserAgreementCheckEnabled: permission denied", name_);
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ResultPermissionDenied);
+            return;
+        }
+        const bool enabled = user_agreement_check_enabled.load();
+        LOG_DEBUG(Service_PREPO, "called, enabled={}", enabled);
+
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(enabled);
+    }
+
+    void SetUserAgreementCheckEnabled(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const auto enabled = rp.Pop<bool>();
+        if (!MayUseAgreementCheck()) {
+            LOG_WARNING(Service_PREPO, "{} SetUserAgreementCheckEnabled: permission denied", name_);
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ResultPermissionDenied);
+            return;
+        }
+        LOG_INFO(Service_PREPO, "called, enabled={}", enabled);
+        user_agreement_check_enabled.store(enabled);
+
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    static constexpr Result ResultPermissionDenied{ErrorModule::PlayReport, 90};
+    static inline std::atomic<bool> user_agreement_check_enabled{true};
+
+    std::string name_;
 };
 
 void LoopProcess(Core::System& system) {

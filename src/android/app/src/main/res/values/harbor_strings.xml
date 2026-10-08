@@ -13,7 +13,7 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_menu_exit">Exit</string>
     <string name="harbor_menu_detach_joycons">Detach Joy-Con</string>
     <string name="harbor_menu_attach_joycons">Attach Joy-Con</string>
-    <string name="harbor_menu_frame_gen">Frame generation</string>
+    <string name="harbor_menu_frame_gen">Frame generation (experimental)</string>
     <string name="harbor_menu_restart">Restart</string>
     <string name="harbor_menu_driver">Graphics driver</string>
     <string name="harbor_driver_system">The phone\'s own driver</string>
@@ -48,4 +48,10 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_driver_installed">%1$s is installed. It is chosen; the console uses it from its next start.</string>
     <string name="harbor_driver_install_failed">The driver could not be installed: %1$s</string>
     <string name="harbor_driver_api">%1$s requires Android API %2$s; this phone has API %3$d. Choose another driver.</string>
+    <string name="harbor_menu_touch_controls">Touch controls</string>
+    <string name="harbor_pad_hide">Hide touch controls</string>
+    <string name="harbor_pad_show">Show touch controls</string>
+    <string name="harbor_pad_edit">Edit layout</string>
+    <string name="harbor_pad_adjust">Size and opacity</string>
+    <string name="harbor_pad_reset">Reset layout</string>
 </resources>

@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <fstream>
 
 #include "common/assert.h"
@@ -32,6 +33,8 @@ namespace Service::Set {
 
 namespace {
 constexpr u32 SETTINGS_VERSION{4u};
+// set:sys 0 with a code outside the language list (2105-0625).
+constexpr Result ResultLanguageOutOfRange{ErrorModule::Settings, 625};
 constexpr auto SETTINGS_MAGIC = Common::MakeMagic('y', 'u', 'z', 'u', '_', 's', 'e', 't');
 struct SettingsHeader {
     u64 magic;
@@ -473,6 +476,17 @@ bool ISystemSettingsServer::StoreSettingsFile(std::filesystem::path& path, auto&
 
 Result ISystemSettingsServer::SetLanguageCode(LanguageCode language_code) {
     LOG_INFO(Service_SET, "called, language_code={}", language_code);
+
+    // A code outside the console's language list is refused and nothing is stored, as the Ryujinx
+    // Harbor answers (ISystemSettingsServer.cs SetLanguageCode).
+    if (std::find(available_language_codes.begin(), available_language_codes.end(),
+                  language_code) == available_language_codes.end()) {
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys SetLanguageCode(0x{:016X}) is not a known language code; not "
+                             "stored, answered LanguageOutOfRange",
+                             static_cast<u64>(language_code));
+        R_THROW(ResultLanguageOutOfRange);
+    }
 
     m_system_settings.language_code = language_code;
     SyncGlobalLanguageFromCode(language_code);
@@ -920,6 +934,16 @@ Result ISystemSettingsServer::SetDeviceTimeZoneLocationName(
 
 Result ISystemSettingsServer::SetRegionCode(SystemRegionCode region_code) {
     LOG_INFO(Service_SET, "called, region_code={}", region_code);
+
+    // A region outside Japan..Taiwan (0-6) is not stored and still answers success, as the Ryujinx
+    // Harbor answers (ISystemSettingsServer.cs SetRegionCode).
+    if (static_cast<u32>(region_code) > static_cast<u32>(::Settings::Region::Taiwan)) {
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys SetRegionCode({}) is outside the known region codes; not "
+                             "stored, answered Success",
+                             static_cast<s32>(region_code));
+        R_SUCCEED();
+    }
 
     m_system_settings.region_code = region_code;
     SyncGlobalRegionFromCode(region_code);

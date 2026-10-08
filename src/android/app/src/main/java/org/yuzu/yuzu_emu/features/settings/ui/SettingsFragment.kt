@@ -8,10 +8,7 @@ package org.yuzu.yuzu_emu.features.settings.ui
 
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.provider.Settings as AndroidSettings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -37,7 +34,6 @@ import org.yuzu.yuzu_emu.utils.PathUtil
 import org.yuzu.yuzu_emu.utils.ViewUtils.updateMargins
 import org.yuzu.yuzu_emu.utils.*
 import java.io.File
-import androidx.core.net.toUri
 
 class SettingsFragment : Fragment() {
     private lateinit var presenter: SettingsFragmentPresenter
@@ -49,20 +45,6 @@ class SettingsFragment : Fragment() {
     private val args by navArgs<SettingsFragmentArgs>()
 
     private val settingsViewModel: SettingsViewModel by activityViewModels()
-
-    private val requestAllFilesPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        if (hasAllFilesPermission()) {
-            showPathPickerDialog()
-        } else {
-            Toast.makeText(
-                requireContext(),
-                R.string.all_files_permission_required,
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -232,34 +214,8 @@ private fun getPlayerIndex(): Int =
         }
     }
 
-    private fun hasAllFilesPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Environment.isExternalStorageManager()
-        } else {
-            true
-        }
-    }
-
-    private fun requestAllFilesPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val intent = Intent(AndroidSettings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-            intent.data = "package:${requireContext().packageName}".toUri()
-            requestAllFilesPermissionLauncher.launch(intent)
-        }
-    }
-
+    // Harbor: no "All files access"; a folder is picked through the Storage Access Framework.
     private fun handlePathPickerRequest() {
-        if (!hasAllFilesPermission()) {
-            MaterialAlertDialogBuilder(requireContext())
-                .setTitle(R.string.all_files_permission_required)
-                .setMessage(R.string.all_files_permission_required)
-                .setPositiveButton(R.string.grant_permission) { _, _ ->
-                    requestAllFilesPermission()
-                }
-                .setNegativeButton(R.string.cancel, null)
-                .show()
-            return
-        }
         showPathPickerDialog()
     }
 

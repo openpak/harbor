@@ -56,6 +56,12 @@ struct SinkBuffer {
  * If the buffers appear to be stuck, you can stop and re-open an IAudioIn/IAudioOut service (this
  * is what games do), or call ClearQueue to flush all of the buffers without a full restart.
  */
+/// The console's own output volume (audctl's active target in a HOME session): a gain from 0 to 1
+/// applied to every output stream after the mix, apart from the host's volume. 1 unless audctl set
+/// it. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), ConsoleOutputVolume.cs.
+void SetConsoleOutputGain(f32 gain);
+f32 GetConsoleOutputGain();
+
 class SinkStream {
 public:
     explicit SinkStream(Core::System& system_, StreamType type_) : system{system_}, type{type_} {}

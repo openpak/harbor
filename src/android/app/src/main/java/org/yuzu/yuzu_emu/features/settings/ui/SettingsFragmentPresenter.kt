@@ -472,16 +472,8 @@ class SettingsFragmentPresenter(
                     menuKey = MenuTag.SECTION_APPLETS
                 )
             )
-            if (!NativeConfig.isPerGameConfigLoaded()) {
-                add(
-                    SubmenuSetting(
-                        titleId = R.string.preferences_custom_paths,
-                        descriptionId = R.string.preferences_custom_paths_description,
-                        iconId = R.drawable.ic_folder_open,
-                        menuKey = MenuTag.SECTION_CUSTOM_PATHS
-                    )
-                )
-            }
+            // Harbor: no custom data paths. They are raw storage paths, which need "All files
+            // access"; Harbor keeps its data in its own app storage and reads only picked folders.
             add(
                 RunnableSetting(
                     titleId = R.string.reset_to_default,

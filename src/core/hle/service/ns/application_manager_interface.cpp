@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+
 #include "common/redact.h"
 #include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
@@ -720,9 +722,15 @@ Result IApplicationManagerInterface::IsGameCardApplicationRunning(Out<bool> out_
 Result IApplicationManagerInterface::Unknown936(Out<UnknownCountedRecord> out_record) {
     // Unnamed; the qlaunch proxy stub is "no input -> (s32, 0x80-byte record)". Nothing to report.
     // Shape follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
-    LOG_WARNING(Service_NS,
-                "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
-                "0x80-byte record");
+    // qlaunch polls this about once a second from boot, whatever HOME shows: warn once.
+    static std::atomic_bool warned{false};
+    if (!warned.exchange(true)) {
+        LOG_WARNING(Service_NS,
+                    "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
+                    "0x80-byte record (logged once; qlaunch polls it every second)");
+    } else {
+        LOG_DEBUG(Service_NS, "called");
+    }
     *out_record = {};
     R_SUCCEED();
 }

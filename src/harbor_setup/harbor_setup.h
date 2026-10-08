@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
 
 #include "core/openpak/boot_connection.h"
@@ -64,6 +66,13 @@ OpenPak::BootResult ConnectOpenPak();
 /// What the HOME menu asked for when it stopped the console (its power menu).
 enum class PowerRequest { None, Shutdown, Reboot };
 PowerRequest ConsolePowerRequest(Core::System& system);
+
+/// The console's saved colour set (System Settings > Themes): true for Basic Black, false for
+/// Basic White, nullopt before the console has booted once (the host then follows the phone or
+/// desktop). Read from the NAND's system settings file; needs no Core::System.
+std::optional<bool> SavedConsoleDarkTheme();
+/// The same, from a given set:sys settings.dat (the self-check's sample).
+std::optional<bool> ReadConsoleDarkTheme(const std::filesystem::path& path);
 
 /// Android back: Back on the wizard's current page; on Welcome it closes the setup (the app is
 /// left). Safe from any thread.

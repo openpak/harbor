@@ -8,9 +8,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "audio_core/audio_core.h"
+#include "audio_core/sink/sink_stream.h"
 #include "core/hle/service/audio/audio_controller.h"
 #include "core/hle/service/audio/audio_out_manager.h"
 #include "core/core.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/set/system_settings_server.h"
@@ -88,6 +90,9 @@ IAudioController::IAudioController(Core::System& system_)
     // clang-format on
 
     RegisterHandlers(functions);
+
+    // A new session starts at the console's full volume; audctl lowers it in a HOME session.
+    AudioCore::Sink::SetConsoleOutputGain(1.0f);
 
     m_set_sys =
         system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", true);
@@ -232,8 +237,44 @@ Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_au
     R_SUCCEED();
 }
 
+// In a HOME session HOME's volume slider sets the active target's volume (0-15) and mute, and that
+// is what the console hears: a gain after the mix, linear in the step and 0 when muted, apart from
+// the host's own volume. Outside a HOME session Eden's stock path (the host volume mapped onto the
+// sink and audout volumes) applies unchanged.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), AudioController.cs.
+bool IAudioController::UseConsoleGain() {
+    if (!m_console_gain) {
+        m_console_gain = system.GetAppletManager().IsHomeSession();
+        if (*m_console_gain) {
+            // The constructor seeded the targets and the sink from the host's volume: a console
+            // starts at its own full volume, unmuted, and the host's volume applies on its own.
+            m_target_volumes.fill(15);
+            m_target_muted.fill(false);
+            try {
+                auto& sink = system.AudioCore().GetOutputSink();
+                sink.SetSystemVolume(1.0f);
+                sink.SetDeviceVolume(1.0f);
+            } catch (...) {
+                LOG_WARNING(Audio, "Failed to reset the sink volume for the console volume");
+            }
+            ApplyConsoleGain();
+        }
+    }
+    return *m_console_gain;
+}
+
+void IAudioController::ApplyConsoleGain() {
+    const auto idx = static_cast<size_t>(m_active_target);
+    const bool muted = m_target_muted[idx];
+    const f32 gain = muted ? 0.0f : static_cast<f32>(m_target_volumes[idx]) / 15.0f;
+    AudioCore::Sink::SetConsoleOutputGain(gain);
+    LOG_INFO(Audio, "audctl: console output gain {:.3f} (volume {}/15{})", gain,
+             m_target_volumes[idx], muted ? ", muted" : "");
+}
+
 Result IAudioController::GetTargetVolume(Out<s32> out_target_volume, Set::AudioOutputModeTarget target) {
     LOG_DEBUG(Audio, "GetTargetVolume called, target={}", target);
+    UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_volumes.size()) {
@@ -247,6 +288,7 @@ Result IAudioController::GetTargetVolume(Out<s32> out_target_volume, Set::AudioO
 
 Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 target_volume) {
     LOG_INFO(Audio, "SetTargetVolume called, target={}, volume={}", target, target_volume);
+    const bool console_gain = UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_volumes.size()) {
@@ -261,6 +303,13 @@ Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 
     }
 
     m_target_volumes[idx] = target_volume;
+
+    if (console_gain) {
+        if (m_active_target == target) {
+            ApplyConsoleGain();
+        }
+        R_SUCCEED();
+    }
 
     if (m_active_target == target && !m_target_muted[idx]) {
         const float vol = static_cast<float>(target_volume) / 15.0f;
@@ -289,6 +338,7 @@ Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 
 
 Result IAudioController::IsTargetMute(Out<bool> out_is_target_muted, Set::AudioOutputModeTarget target) {
     LOG_DEBUG(Audio, "called, target={}", target);
+    UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_muted.size()) {
@@ -302,6 +352,7 @@ Result IAudioController::IsTargetMute(Out<bool> out_is_target_muted, Set::AudioO
 
 Result IAudioController::SetTargetMute(bool is_muted, Set::AudioOutputModeTarget target) {
     LOG_INFO(Audio, "called, target={}, muted={}", target, is_muted);
+    const bool console_gain = UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_muted.size()) {
@@ -310,6 +361,13 @@ Result IAudioController::SetTargetMute(bool is_muted, Set::AudioOutputModeTarget
     }
 
     m_target_muted[idx] = is_muted;
+
+    if (console_gain) {
+        if (m_active_target == target) {
+            ApplyConsoleGain();
+        }
+        R_SUCCEED();
+    }
 
     if (m_active_target == target) {
         try {

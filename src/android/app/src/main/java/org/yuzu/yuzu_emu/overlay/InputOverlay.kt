@@ -355,7 +355,8 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
     }
 
     private fun playHaptics(event: MotionEvent) {
-        if (BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
+        // Harbor console mode: the system's touch-feedback setting decides, as for Android's keys.
+        if (HarborConsole.active || BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN,
                 MotionEvent.ACTION_POINTER_DOWN ->
@@ -576,9 +577,7 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         button.setPressed(true)
         if (count == 1) {
             NativeInput.onOverlayButtonEvent(port, button.button, NativeInput.ButtonState.PRESSED)
-            if (BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            }
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         }
     }
 
@@ -591,9 +590,7 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         harborHeld.remove(button.button)
         button.setPressed(false)
         NativeInput.onOverlayButtonEvent(port, button.button, NativeInput.ButtonState.RELEASED)
-        if (BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
-            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
-        }
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
     }
 
     /** Lets go of every button and the touch screen (the view goes, the controls are rebuilt). */
@@ -1153,6 +1150,17 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
 
     fun setIsInEditMode(editMode: Boolean) {
         inEditMode = editMode
+        if (HarborConsole.active) {
+            // Editing stays fully visible; the fade resumes when it ends.
+            removeCallbacks(harborFade)
+            animate().cancel()
+            alpha = 1f
+            if (!editMode) {
+                harborWake()
+            } else {
+                harborReleaseAll()
+            }
+        }
         if (!editMode) {
             scaleDialog?.dismiss()
             scaleDialog = null

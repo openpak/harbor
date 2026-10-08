@@ -5,8 +5,6 @@ package org.yuzu.yuzu_emu.harbor
 
 import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
-import android.graphics.Color
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -55,11 +53,18 @@ class HarborStoppedActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The console's saved colour set (the phone's before a first boot), buttons included.
+        val dark = HarborTheme.dark(this)
+        setTheme(
+            if (dark) {
+                android.R.style.Theme_DeviceDefault_NoActionBar_Fullscreen
+            } else {
+                android.R.style.Theme_DeviceDefault_Light_NoActionBar_Fullscreen
+            }
+        )
         super.onCreate(savedInstanceState)
         volumeControlStream = AudioManager.STREAM_MUSIC
-        val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-            Configuration.UI_MODE_NIGHT_YES
-        val ink = if (dark) INK_DARK else INK_LIGHT
+        val ink = if (dark) HarborTheme.INK_DARK else HarborTheme.INK_LIGHT
         headingView = TextView(this).apply {
             setTextColor(ink)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
@@ -79,7 +84,7 @@ class HarborStoppedActivity : ComponentActivity() {
             addView(actions)
         }
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(if (dark) PAPER_DARK else PAPER_LIGHT)
+            setBackgroundColor(if (dark) HarborTheme.PAPER_DARK else HarborTheme.PAPER_LIGHT)
             isFillViewport = true
             addView(
                 FrameLayout(this@HarborStoppedActivity).apply {
@@ -247,10 +252,6 @@ class HarborStoppedActivity : ComponentActivity() {
         private const val EXTRA_REASON = "harborStopReason"
         private const val EXTRA_CANNOT_START = "harborCannotStart"
         private const val MAX_WIDTH_DP = 560
-        private val PAPER_LIGHT = Color.rgb(0xeb, 0xeb, 0xeb)
-        private val PAPER_DARK = Color.rgb(0x2d, 0x2d, 0x2d)
-        private val INK_LIGHT = Color.rgb(0x2d, 0x2d, 0x2d)
-        private val INK_DARK = Color.rgb(0xeb, 0xeb, 0xeb)
 
         /** "Harbor stopped" with `reason`; the caller finishes its own screen. */
         fun stopped(context: Context, reason: String): Intent =
