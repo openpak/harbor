@@ -38,9 +38,19 @@ has run on every device in its tag and tobagin has validated it (G5.REL.7).
 - Rows added on 2026-10-08 come from a sweep of the Ryujinx Harbor for behaviour the first draft did not list; their
   `Harbor:` text cites the Ryujinx source. "Harbor correction" notes fix `Harbor:` texts that were stale against the
   Ryujinx code and docs.
-- Unmerged stream work that changes rows: p3/olsc (`9c9d1d46e8`, `79ea925cc3`, `43f396112a`: olsc 209/1001, persisted
-  daemon settings, archive list) and p3/social (`7aad0541e7`, `6a00c5b898`: friend-code lookup 30500/30501).
-- Count: 84 done, 138 partial, 40 missing, 10 unproven, 3 not applicable of 275 rows; 83 carry PC evidence, 10 phone evidence. Phone evidence is one HOME-session cold boot (driver load, secret store, boot connection);
+- Statuses are those of `1ccd8d1eb2`. Since then `harbor` has merged p3/olsc and p3/social and gained fixes for many
+  ranked gaps; their rows keep the old status until the next audit: `0bd972dae6` (stopped and cannot-start screens,
+  audio focus, power button, driver limits), `484a9e1983` (touch controls as the Ryujinx Harbor's pad), `56f09b3703`
+  (wizard Back, picker errors, no GitHub request before Browse), `a5358bcaca` and `9ad618a600` (500 ms HOME long
+  press, non-fatal overlay exit, host power and force-terminate, F5/F10, F7 ignored while docked, no Qt multiplayer
+  menu), `4316cd1afb` (one library applet per caller), `456ca21d4e`, `bbe9fed02e`, `4da8ec1d44` (unknown contracts,
+  am 240), `eecdaba1ce`, `4a0778a305` (privacy leftovers), `9c9d1d46e8`, `1f60816f0f`, `ac00647e16`, `d8acdf2c4a`
+  (olsc 209/1001 and the read path), `7aad0541e7`, `6a00c5b898` (friend-code lookup), and the NAND identity work
+  (`7d7707b63f` and its consumers).
+- Owner decisions, 2026-10-08: see "Eden additions" below, G1.ID.2, G3.BOOT.2, G4.WIZ.6, "NAND identity" and "Not
+  carried over". AI-assisted work is allowed in this fork; Eden's contribution policy files are replaced by the fork's
+  own note (`75008b0c58`).
+- Count at `1ccd8d1eb2`: 84 done, 138 partial, 40 missing, 10 unproven, 3 not applicable of 275 rows; 83 carry PC evidence, 10 phone evidence (the four NAND identity rows came later). Phone evidence is one HOME-session cold boot (driver load, secret store, boot connection);
   nothing past it has run on the phone.
 
 ### Gaps, ranked
@@ -62,7 +72,7 @@ Blockers for retiring the Ryujinx Harbor (it does these, on the phone tobagin us
 6. Privacy leftovers, before any OpenPak data reaches the phone: am uid logs, the applet_general hex dump, swkbd typed
    text, web-browser URLs (the OAuth callback), `service.cpp` raw command words (G3.PRV.2, G3.PRV.4). S, am (and core).
 7. Merge the pending streams: olsc 209/1001 and persisted daemon settings (G3.SAV.2), olsc; the friend-code lookup
-   (G3.SOC.2), friend. S each.
+   (G3.SOC.2), friend. S each. Merged since (p3/olsc, p3/social).
 8. Crash reports: consent-gated, kept locally, offered at the next launch (G3.SAV.4). M, android and qt frontend
    (fatal hook in core).
 9. NAT test in Internet Settings (G3.NET.7, G3.NET.11). M, net (nifm).
@@ -94,26 +104,27 @@ against the servers are what is missing):
 - Online titles and a full traffic capture (G3.NET.3, G3.NET.6, G3.NET.8). M, net.
 - Save Data Cloud upload and download, option A (G3.SAV.1). L, olsc and fs; blocked on M0.
 - Virtual Game Cards, ns 4042 (G3.SHOP.6). M, ns/nim.
-- G3.BOOT.2's "a 404 drops families": neither Harbor does it; keep or drop the clause (owner).
 
-### Eden additions the Ryujinx Harbor does not have (owner to confirm)
+### Eden additions the Ryujinx Harbor does not have (owner decisions, 2026-10-08)
 
-- Frame generation with the user's Lossless.dll in the Harbor menu on Android and Qt (`dd42571f7b`, `a64915fb97`);
-  this contradicts G1.ID.2 and "Not carried over".
-- The wizard's OpenPak account page and the automatic link of the new user (`8994ba86b8`, `e2471bfca9`), and a
-  title.keys pick.
+- Frame generation with the user's Lossless.dll in the Harbor menu on Android and Qt (`dd42571f7b`, `a64915fb97`):
+  **kept as an experimental feature** (G1.ID.2, "Not carried over"); the entries are not labelled experimental yet.
+- The wizard's OpenPak account page and the automatic link of the new user (`8994ba86b8`, `e2471bfca9`): **kept**.
+  The title.keys pick: not decided.
 - Turnip T30 by default on Adreno 6xx, and a failed custom driver refuses to boot instead of falling back
-  (`d6adff5e46`, `7223519427`).
-- A controller's HOME key through an optional accessibility service (`1ccd8d1eb2`); an Exit entry in the Harbor menu.
-- OpenPak identities per uid (`aae344f72a`), beyond the Ryujinx Harbor's single session.
-- acc IAdministrator 290 from 23.0.1 RE (`5387108910`), the Ryujinx Harbor's open blocker.
-- `MANAGE_EXTERNAL_STORAGE` is still declared (`AndroidManifest.xml:31`), against the plan's SAF-only rule.
+  (`d6adff5e46`, `7223519427`): not decided.
+- A controller's HOME key through an optional accessibility service (`1ccd8d1eb2`): **kept**. The Exit entry in the
+  Harbor menu: not decided.
+- OpenPak sessions per user (`aae344f72a`), beyond the Ryujinx Harbor's single session: **kept**.
+- acc IAdministrator 290 from 23.0.1 RE (`5387108910`), the Ryujinx Harbor's open blocker: **kept**.
+- `MANAGE_EXTERNAL_STORAGE` is still declared (`AndroidManifest.xml:31`): **being removed**, SAF tree URIs only, as the
+  plan says (G4.WIZ.6).
 
 ## Gate 1: repo, builds, clean picks (phase 1)
 
 ### Identity and hygiene
 - [ ] **G1.ID.1** [P] The legacy APK installs beside the Ryujinx Harbor as `org.openpak.harbor.eden`, label "Harbor", lighthouse launcher icon (colour and monochrome). Harbor: verified on phone for install-over (HANDOVER); launcher icon on phone unverified (wizard-presentation). Eden: partial, verified on phone for the side-by-side install and label (`fa836edd89`, `e87d9788b9`; gate-1.md); launcher icon on the phone not recorded.
-- [ ] **G1.ID.2** [D P M] The built manifest and APK contain no `genshinSpoof` or `chromeOS` flavour, no `play {}` block, no `REQUEST_INSTALL_PACKAGES`, no Lossless DLL page. Harbor: not applicable, never had them (host.md §4). Eden: done in source, code only (`fa836edd89`, `58c3eae2b7`; `android/app/build.gradle.kts:186-204` has only legacy and mainline); built manifest and APK not inspected. Contradiction: Eden's Harbor menu has a Lossless.dll "Frame generation" page (`dd42571f7b`, `HarborConsole.kt:247-314`; Qt `a64915fb97`), which this row and "Not carried over" exclude: owner decision needed.
+- [ ] **G1.ID.2** [D P M] The built manifest and APK contain no `genshinSpoof` or `chromeOS` flavour, no `play {}` block, no `REQUEST_INSTALL_PACKAGES`; Lossless frame generation appears only as an experimental Harbor-menu feature using the user's own Lossless.dll (owner decision 2026-10-08). Harbor: not applicable, never had them (host.md §4). Eden: done in source, code only (`fa836edd89`, `58c3eae2b7`; `android/app/build.gradle.kts:186-204` has only legacy and mainline); built manifest and APK not inspected. Frame generation is in the Harbor menu on Android and Qt (`dd42571f7b`, `HarborConsole.kt:247-314`; `a64915fb97`) but not yet labelled experimental.
 - [ ] **G1.ID.3** [P M] `allowBackup` is false in the built manifest. Harbor: unverified (plan §5.7). Eden: done in source, code only (`d97dcc88c4`; `AndroidManifest.xml:40`); built manifest not checked.
 - [ ] **G1.ID.4** [D P M] Built with web service, update checker and Discord presence off; a capture of an idle first start shows no connection to Eden, Forgejo, GitHub or any third-party host. Harbor: unverified (by construction no such code; no capture recorded). Eden: partial, code only (`4e85ff5a8a`, `9c9a971f00`, `c2f3afcb55`, `b73222680d`; `scripts/harbor/build-desktop.sh:17`); no idle first-start capture.
 
@@ -253,10 +264,16 @@ against the servers are what is missing):
 
 ### Boot connection
 - [ ] **G3.BOOT.1** [D P] First boot with OpenPak on does the site check, fetches the network profile, keeps the console-facing CA only when its SHA-256 matches the profile, and writes `openpak/server.json`. Harbor: verified on PC; Android code only, not run on device (first-run, checklist M4). Eden: partial, verified on PC (`06fa0aedfc`, `8de71152a0`; `boot_connection.cpp:189-193`, `network_profile.cpp:308-345`; run net-3 fetched the profile, pinned the CA, wrote `server.json`); phone shows a cached boot only.
-- [ ] **G3.BOOT.2** [D P] A failed connect boots offline and retries on the next boot; the signed ceiling is fetched at boot and refreshed every 6 h; a 404 at boot drops those families until the refresh. Harbor: unverified (first-run, plan §6). Harbor correction (2026-10-08): Harbor has no "404 drops families": any failure or a 2 s timeout keeps the cached verified ceiling, else the compiled-in fallback; the 6 h re-check has ±10 % jitter and also runs when the site sign-in changes. Eden: partial, verified on PC for offline-from-cache and never-connected boots (`71ff8e2448`; runs core-2, core-3; `network_ceiling.cpp:550-575`): the 6 h re-check only announces "restart applies"; a 404 dropping families is not implemented (`network_ceiling.cpp:413`), and the Ryujinx Harbor does not do it either (see Harbor text).
+- [ ] **G3.BOOT.2** [D P] A failed connect boots offline and retries on the next boot; the signed ceiling is fetched at boot and refreshed every 6 h. A failed ceiling fetch keeps the last verified ceiling (the compiled-in fallback on a first boot) and never falls back to retail servers: OpenPak serves banned consoles and retired networks that cannot reach Nintendo (owner decision 2026-10-08, replacing "a 404 drops those families"). Harbor: unverified (first-run, plan §6). Harbor correction (2026-10-08): Harbor has no "404 drops families": any failure or a 2 s timeout keeps the cached verified ceiling, else the compiled-in fallback; the 6 h re-check has ±10 % jitter and also runs when the site sign-in changes. Eden: partial, verified on PC for offline-from-cache and never-connected boots (`71ff8e2448`; runs core-2, core-3; `network_ceiling.cpp:550-575`): the 6 h re-check only announces "restart applies"; keeping the cached ceiling on a failed fetch is shown, the first-boot fallback and never falling back to retail are code only (fail-closed, G3.NET.4).
 - [ ] **G3.BOOT.3** [D P] Data files use Harbor's names inside openpak-client: `openpak/server.json`, `ca.pem`, `network-profile.json`, `network-ceiling*`. Harbor: verified on PC (first-run). Harbor correction (2026-10-08): Harbor also writes `device-<server>-<profile>.json`, `penne-<server>-<profile>.json`, `pctl-<server>.json`, `profiles.json` and `crash-reports/` under `openpak/`. Eden: done, verified on PC (`8de71152a0`; `core/openpak/platform.cpp:67-83`; run net-3); Android directory not inspected.
 - [ ] **G3.BOOT.4** [D P] The signed ceiling is checked (Ed25519, pinned key ids); one malformed family rejects the whole file; a version below the highest accepted is refused; with no usable ceiling the compiled-in fallback applies. Harbor: unit tests only (`OpenPakCeiling.cs:132-290`). Eden: done, code only (`core/openpak/network_ceiling.cpp:258-392`).
 - [ ] **G3.BOOT.5** [D P] The profile fetch is conditional (If-None-Match; 304 keeps the stored copy; a failure applies the stored or built-in one); a changed redirect set is logged and applies after a restart; every OpenPak request carries `X-OpenPak-Client: <emu>/<version> (<os>)`. Harbor: unverified (`OpenPakNetworkProfile.cs:245-356`, `OpenPakClientHeader.cs:7-18`). Eden: done, code only (`71ff8e2448`; `network_profile.cpp:363,412`, `network_ceiling.cpp:567,606-623`, `platform.h:43`).
+
+### NAND identity (owner decision 2026-10-08; design in `docs/harbor/calibration.md`)
+- [ ] **G3.ID.1** [D P M] Each NAND gets its own calibration binary on first boot (device id with the 0x7E prefix, an `HBW` serial, its own Wi-Fi MAC) and its device key lives only in the host password store, never on disk or in the log; spl, nsd, wlan, ldn and fs calibration answer this NAND's values. Harbor: no equivalent. Eden: done after this audit, self-check (`7d7707b63f`, `28aba9e4cb`, `d1877b301b`, `7b3e3ade20`, `faea116d3e`, `b8d9ded163`; `core/harbor_calibration/check/calibration_check.cpp`); not re-audited.
+- [ ] **G3.ID.2** [D P M] A NAND backup can carry the device key, encrypted under a passphrase the user types; restoring that backup on another host with the passphrase gives the same console (same device key and key pairs, no re-signing); a wrong passphrase is refused and changes nothing; the passphrase and key are never logged. Harbor: no equivalent. Eden: missing, being built.
+- [ ] **G3.ID.3** [D P M] "Make this a new console" gives a copied or restored NAND a new device id, serial, MAC, device key and key pairs, so it enrols as a different console; the original NAND's identity is untouched. Harbor: no equivalent. Eden: missing, being built.
+- [ ] **G3.ID.4** [D P M] OpenPak device enrolment refuses a second live console with the same device id but other keys (unless the owner re-keys it), so a copied NAND cannot run online beside its original; Harbor says why and points to "Make this a new console". Harbor: no equivalent. Eden: missing, being built (server and client; calibration.md "Certificates").
 
 ### TLS, DNS and sockets
 - [ ] **G3.NET.1** [D P] Guest TLS always verifies: a chain trusted by the host or rooted at the OpenPak CA passes; a wrong host name or an unknown CA fails; the guest's verify option and CA list are ignored. Harbor: positive case verified on PC (web applet TLS 1.3); negative cases unverified (checklist M4). Eden: partial, verified on PC (`0c0a4a3520`, `de4fff22fe`, `60db8c99ee`; run net-4: chain ends at the pinned CA, IP mismatch refused, CA refused for an unredirected name); ignoring the guest's verify option by self-check only; phone not run.
@@ -358,7 +375,7 @@ against the servers are what is missing):
 - [ ] **G4.WIZ.3** [D P M] Device check rows: processor (arm64 or fail), memory (under 4 GB fails, 4 or 6 GB warns), Vulkan (none or under 1.1 fails), driver (non-Adreno warns), system (under API 30 warns), storage (under 4 GB warns); a failed row disables Next, Back works. Harbor: logic verified on PC; Android values unread on a device in Harbor (first-run). Harbor correction (2026-10-08): "arm64 or fail" is Android-only: desktop x86-64 passes and shows only processor, memory and storage. Eden: done, verified on PC; Android values never read on a device (`7d553c67ea`; `harbor_setup/device_check.cpp:19-24,53-135`); thresholds match.
 - [ ] **G4.WIZ.4** [D P M] Keys: picking `prod.keys` stages and verifies it (header_key) before install; a bad file never replaces a good one. Harbor: verified in tests with fake pickers; real SAF picker unverified (first-run). Eden: done, verified on PC with a good file (`harbor_setup/keys.cpp:96-127,145-178`); bad file by self-test only; real SAF picker unverified.
 - [ ] **G4.WIZ.5** [D P M] Firmware: a zip, xci or NCA folder is verified, the version shown, anything but 23.0.1 warns and may still install, install shows progress; a copied import file is deleted after install. Harbor: verified in tests on PC; real picker and xci on phone unverified (first-run). Eden: partial, verified on PC with a 23.0.1 zip (`6996e1275a`, `7d553c67ea`; `frontend_common/firmware_manager.cpp:456-619`): no .xci input; NCA folder only as a desktop path.
-- [ ] **G4.WIZ.6** [P M] Games, DLC and updates folders are picked as SAF tree URIs with no all-files permission, including removable storage; the games appear as HOME tiles and DLC and updates apply. Harbor: not applicable, Harbor uses all-files access (first-run; plan §3). Eden: partial, indirect phone evidence (record with games and add-on folders, add-ons registered; `0047206d53`, `08897cec39`): `MANAGE_EXTERNAL_STORAGE` still declared (`AndroidManifest.xml:31`); removable storage not shown.
+- [ ] **G4.WIZ.6** [P M] Games, DLC and updates folders are picked as SAF tree URIs with no all-files permission, including removable storage; the games appear as HOME tiles and DLC and updates apply. Harbor: not applicable, Harbor uses all-files access (first-run; plan §3). Eden: partial, indirect phone evidence (record with games and add-on folders, add-ons registered; `0047206d53`, `08897cec39`): `MANAGE_EXTERNAL_STORAGE` still declared (`AndroidManifest.xml:31`), being removed (owner 2026-10-08); removable storage not shown.
 - [ ] **G4.WIZ.7** [D] On desktop the folder pages take paths and the same HOME library appears. Harbor: verified on PC with the owner's folders (checklist M1.5). Harbor correction (2026-10-08): the reference is wrong: owner-folder evidence is the HomeMenuScanner headless run (core-integration §3); the desktop wizard's folder pages never ran. Eden: done, verified on PC (`6e8138b09d`, `87ab8ace5b`; `yuzu/main_window.cpp:441-451`; run wizard-l1).
 - [ ] **G4.WIZ.8** [P M] After DLC and updates picks, B Back and A Next stay fully on screen after every picker return, system bars included. Harbor: layout fixed, passes PC tests, phone unverified (first-run). Eden: partial, code only (`HarborSetupActivity.kt:46-60,143`).
 - [ ] **G4.WIZ.9** [D P M] Nothing is written to the record until Next succeeds on its page; resume opens at the first incomplete page judged from the files; "Set up again" reopens on the saved record. Harbor: verified in flow tests on PC (first-run). Harbor correction (2026-10-08): resume is judged from the files only for keys and firmware (missing keys reopen at Welcome); folders and driver resume from the record. Eden: done, self-test (`harbor_setup/selftest.cpp:100-134,242-284`; `wizard.cpp:149-171,405`); no logged self-test run; "Set up again" only on Android.
@@ -460,7 +477,8 @@ against the servers are what is missing):
 
 ## Not carried over on purpose
 
-- Host substitutes: Android keyboard and web host applets, the host PIN applet, built-in news, Eden updater, web service and rooms, Discord presence, multiplayer lobby, game list, `REQUEST_INSTALL_PACKAGES`, the all-files permission (SAF tree URIs instead), the `genshinSpoof` and `chromeOS` flavours, the Lossless DLL page.
+- Host substitutes: Android keyboard and web host applets, the host PIN applet, built-in news, Eden updater, web service and rooms, Discord presence, multiplayer lobby, game list, `REQUEST_INSTALL_PACKAGES`, the all-files permission (SAF tree URIs instead), the `genshinSpoof` and `chromeOS` flavours.
+- Lossless frame generation is not a parity item: it stays as an experimental Harbor-menu feature with the user's own Lossless.dll (owner decision 2026-10-08).
 - No data migration from the Ryujinx Harbor: layouts differ (`bis/` versus `nand/`); the owner reruns firmware setup; the linked profile and saves are lost unless exported first.
 - The old OpenPak Eden fork's host UI (OpenPak windows, toasts, replacement MyPage, invitation dialogs), its identity model tied to the host's selected profile, and its `save_sync` host cloud save; Harbor's `SaveArchive`.
 - Upstream Eden's TLS verify-off, wide DNS blocklist and tracing hooks.
