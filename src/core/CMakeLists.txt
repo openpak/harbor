@@ -1016,6 +1016,8 @@ add_library(core STATIC
     hle/service/psc/pm_module.h
     hle/service/psc/pm_service.cpp
     hle/service/psc/pm_service.h
+    hle/service/psc/pm_state.cpp
+    hle/service/psc/pm_state.h
     hle/service/psc/psc.cpp
     hle/service/psc/psc.h
     hle/service/psc/time/alarms.cpp
