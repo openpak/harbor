@@ -501,7 +501,8 @@ void DrawFrame() {
     const auto [width, height] = ConsoleResolution();
     if (target.width != width || target.height != height) {
         target.Resize(width, height);
-        brls::Application::onWindowResized(width, height);
+        // At once (onWindowResized waits 100 ms): the design canvas scales to the new size.
+        brls::Application::setWindowSize(width, height);
         FitCanvas();
     }
     glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
