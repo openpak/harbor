@@ -22,6 +22,7 @@ private:
     Result StartShutdownSequence();
     Result StartRebootSequence();
     Result IsAutoPowerDownRequested(Out<bool> out_is_requested);
+    Result IsIdleDimmed(Out<bool> out_is_dimmed);
     Result NotifyCecSettingsChanged();
     Result SetDefaultHomeButtonLongPressTime(s64 time_ns);
     Result UpdateDefaultDisplayResolution();
