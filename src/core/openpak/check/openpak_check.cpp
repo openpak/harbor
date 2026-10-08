@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -36,6 +38,7 @@
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_archive.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
 #include "core/openpak/olsc.h"
+#include "core/openpak/olsc_transfer.h"
 #include "core/openpak/platform.h"
 
 namespace np = OpenPak::NetworkProfile;
@@ -525,6 +528,298 @@ void SaveArchiveChecks() {
           "chunks in any order give back the save image stream");
 }
 
+namespace transfer_check {
+
+namespace tr = OpenPak::Olsc::Transfer;
+namespace st = Service::FileSystem::SaveTransfer;
+
+/// The saves server's console protocol as olsc-findings.md §6.1 specifies it, in memory.
+class FakeServer final : public tr::Rest {
+public:
+    struct Part {
+        std::uint64_t id;
+        std::uint32_t index;
+        std::string status = "uploading";
+        tr::Bytes blob;
+    };
+    struct Version {
+        std::uint64_t id;
+        std::string status = "uploading";
+        int partitions;
+        std::vector<Part> parts;
+        std::string key_seed, mac;
+    };
+    std::vector<Version> versions;
+    std::vector<std::string> calls;
+    int partitions = 3;
+    std::uint64_t next_id = 100;
+
+    tr::HttpResponse Request(const std::string& method, const std::string& host,
+                             const std::string& path, const std::string& body) override {
+        calls.push_back(method + " " + path);
+        const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
+        if (host == tr::PolicyHost) {
+            return {200, R"({"policy_type":"ALL_OK"})"};
+        }
+        if (path.find("/save_data_archives?") != std::string::npos) {
+            return {200, R"({"save_data_archives":[]})"};
+        }
+        if (path.ends_with("/save_data_archives/start_upload")) {
+            versions.push_back({next_id++, "uploading", partitions, {}, {}, {}});
+            return {200, Archive(versions.back(), false)};
+        }
+        const auto v = FindVersion(path);
+        const auto p = FindPart(path);
+        if (path.ends_with("/component_files/create") && v) {
+            v->parts.push_back({next_id++, json.value("index", 0u)});
+            return {200, Component(v->parts.back(), "")};
+        }
+        if (path.ends_with("/signed_uri") && p) {
+            const bool write = body.find("write") != std::string::npos;
+            return {200, Component(*p, write ? "put" : "get")};
+        }
+        if (path.ends_with("/finish_upload") && p) {
+            p->status = "fixed";
+            const bool ok = json.value("archive_size", 0ull) == p->blob.size() &&
+                            json.value("encoded_archive_digest", std::string{}) ==
+                                tr::Base64Url(tr::Md5(p->blob));
+            return {ok ? 200 : 400, ok ? "{}" : R"({"code":"0003"})"};
+        }
+        if (path.ends_with("/finish_upload") && v) {
+            v->status = "fixed";
+            v->key_seed = json.value("encoded_key_seed", std::string{});
+            v->mac = json.value("encoded_mac", std::string{});
+            return {200, Archive(*v, false)};
+        }
+        if (path.ends_with("/extend_upload_timeout") && v) {
+            return {200, Archive(*v, false)};
+        }
+        if (path.ends_with("/generate_key_seed_package") && v) {
+            // The fake fs reads this "package" back: challenge ∥ seed ∥ MAC, not the real format.
+            const auto challenge = tr::FromBase64Url(json.value("encoded_challenge", std::string{}));
+            tr::Bytes package(0x200);
+            const auto seed = tr::FromBase64Url(v->key_seed);
+            const auto mac = tr::FromBase64Url(v->mac);
+            std::memcpy(package.data(), challenge->data(), 16);
+            std::memcpy(package.data() + 16, seed->data(), 16);
+            std::memcpy(package.data() + 32, mac->data(), 16);
+            return {200, nlohmann::json{{"encoded_key_seed_package", tr::Base64Url(package)}}.dump()};
+        }
+        if ((path.ends_with("/start_download") || path.ends_with("/finish_download")) && v) {
+            return {200, Archive(*v, true)};
+        }
+        if (method == "GET" && v) {
+            return {200, Archive(*v, true)};
+        }
+        return {404, R"({"code":"0001"})"};
+    }
+
+    tr::HttpResponse Blob(const std::string& method, const std::string& url,
+                          std::span<const std::uint8_t> body) override {
+        const auto id = std::stoull(url.substr(url.rfind('/') + 1));
+        for (auto& v : versions) {
+            for (auto& p : v.parts) {
+                if (p.id == id) {
+                    if (method == "PUT") {
+                        p.blob.assign(body.begin(), body.end());
+                        return {200, {}};
+                    }
+                    return {200, std::string(p.blob.begin(), p.blob.end())};
+                }
+            }
+        }
+        return {404, {}};
+    }
+
+private:
+    Version* FindVersion(const std::string& path) {
+        const auto at = path.find("/save_data_archives/");
+        if (at == std::string::npos) {
+            return nullptr;
+        }
+        const auto id = std::strtoull(path.c_str() + at + 20, nullptr, 10);
+        for (auto& v : versions) {
+            if (v.id == id) {
+                return &v;
+            }
+        }
+        return nullptr;
+    }
+    Part* FindPart(const std::string& path) {
+        const auto at = path.find("/component_files/");
+        if (at == std::string::npos) {
+            return nullptr;
+        }
+        const auto id = std::strtoull(path.c_str() + at + 17, nullptr, 10);
+        for (auto& v : versions) {
+            for (auto& p : v.parts) {
+                if (p.id == id) {
+                    return &p;
+                }
+            }
+        }
+        return nullptr;
+    }
+    static std::string Component(const Part& p, const std::string& url) {
+        nlohmann::json c{{"id", p.id},
+                         {"index", p.index},
+                         {"datatype", p.index == 0 ? "meta" : "save"},
+                         {"status", p.status},
+                         {"archive_size", p.blob.size()}};
+        if (url == "put") {
+            c["put_url"] = fmt::format("https://scsi-upload.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+        } else {
+            c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+        }
+        return nlohmann::json{{"component_file", c}}.dump();
+    }
+    static std::string Archive(const Version& v, bool with_urls) {
+        nlohmann::json parts = nlohmann::json::array();
+        for (const auto& p : v.parts) {
+            nlohmann::json c{{"id", p.id}, {"index", p.index}, {"status", p.status},
+                             {"archive_size", p.blob.size()}};
+            if (with_urls) {
+                c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+            }
+            parts.push_back(c);
+        }
+        return nlohmann::json{{"save_data_archive",
+                               {{"id", v.id}, {"status", v.status},
+                                {"num_of_partitions", v.partitions}, {"component_files", parts}}}}
+            .dump();
+    }
+};
+
+class FakeExporter final : public tr::Exporter {
+public:
+    FakeExporter(const st::ArchiveSource& source, const st::Key128& k, const st::Key128& m,
+                 const tr::Key& seed_)
+        : writer{source, k, m}, seed{seed_} {}
+    bool SetDivisionCount(int count) override { return writer.SetDivisionCount(count); }
+    std::vector<std::uint16_t> ChunkIds() override { return writer.ChunkIds(); }
+    std::optional<tr::Bytes> Chunk(std::uint16_t id) override { return writer.Chunk(id); }
+    void SetAad(const tr::Aad& aad) override { writer.SetAad(aad); }
+    tr::Key KeySeed() override { return seed; }
+    std::optional<tr::Key> InitialDataMac() override { return writer.InitialDataMac(); }
+    bool Finalize() override { return true; }
+    st::ArchiveWriter writer;
+    tr::Key seed;
+};
+
+class FakeImporter final : public tr::Importer {
+public:
+    tr::Aad ImportAad() override { return reader.Content().aad; }
+    std::vector<std::uint16_t> ChunkIds() override { return reader.ChunkIds(); }
+    bool Push(std::uint16_t id, std::span<const std::uint8_t> bytes) override {
+        return reader.Push(id, bytes) == st::ArchiveReader::Error::None;
+    }
+    bool Finalize() override {
+        if (!reader.Complete()) {
+            return false;
+        }
+        *imported = reader.Stream();
+        return true;
+    }
+    st::ArchiveReader reader;
+    tr::Bytes* imported = nullptr;
+};
+
+/// One console: a stream key derived from the seed by a stand-in (the real derivation is
+/// checked above); the transfer flow only needs both ends to agree.
+class FakeFs final : public tr::Fs {
+public:
+    explicit FakeFs(st::ArchiveSource source_) : source{std::move(source_)} {
+        st::RandomBytes(challenge);
+        st::RandomBytes(own_seed);
+        st::RandomBytes(mac_key);
+    }
+    static st::Key128 StreamKey(const tr::Key& seed) {
+        return st::Cmac(seed, std::array<std::uint8_t, 4>{'k', 'e', 'y', '3'});
+    }
+    tr::Key Challenge() override { return challenge; }
+    bool SetKeySeedPackage(std::span<const std::uint8_t> package) override {
+        if (std::memcmp(package.data(), challenge.data(), 16) != 0) {
+            return false;
+        }
+        std::memcpy(package_seed.data(), package.data() + 16, 16);
+        std::memcpy(package_mac.data(), package.data() + 32, 16);
+        has_package = true;
+        return true;
+    }
+    std::unique_ptr<tr::Exporter> OpenFullExporter() override {
+        return std::make_unique<FakeExporter>(source, StreamKey(own_seed), *shared_mac_key,
+                                              own_seed);
+    }
+    std::unique_ptr<tr::Importer> OpenImporter(std::span<const std::uint8_t> meta) override {
+        if (!has_package) {
+            return nullptr;
+        }
+        auto importer = std::make_unique<FakeImporter>();
+        if (importer->reader.Open(meta, StreamKey(package_seed), *shared_mac_key, package_mac) !=
+            st::ArchiveReader::Error::None) {
+            return nullptr;
+        }
+        importer->imported = &imported;
+        return importer;
+    }
+    st::ArchiveSource source;
+    st::Key128 challenge{}, own_seed{}, mac_key{}, package_seed{}, package_mac{};
+    const st::Key128* shared_mac_key = &mac_key;
+    bool has_package = false;
+    tr::Bytes imported;
+};
+
+} // namespace transfer_check
+
+void TransferFlowChecks() {
+    using namespace transfer_check;
+    std::puts("save data cloud transfer");
+    Check(tr::Base64Url(std::array<std::uint8_t, 4>{0xfb, 0xff, 0x00, 0x01}) == "-_8AAQ" &&
+              tr::FromBase64Url("-_8AAQ") == tr::Bytes({0xfb, 0xff, 0x00, 0x01}),
+          "base64url without padding, both ways");
+    tr::LocalSave save;
+    save.application_id = 0x0100A5A020D5E000;
+    save.data_size = 0x80000;
+    save.saved_at = 1700000000;
+    save.commit_id = 0x1122334455667788;
+    save.acd_index = 2;
+    save.launch_required_version = 3;
+    const auto body = tr::StartUploadBody(save, 9);
+    Check(body.starts_with(R"({"application_id":"0100a5a020d5e000","datatype":0,"data_size":524288,)") &&
+              body.find(R"("encoded_digest":"iHdmVUQzIhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",)") !=
+                  std::string::npos &&
+              body.ends_with(R"("has_thumbnail":false,"desc":null,"auto_backup":false,"acd_index":2})"),
+          "start_upload's body has the console's keys, order and digest");
+
+    st::ArchiveSource source;
+    source.stream.resize(7 * 0x4000);
+    st::RandomBytes(source.stream);
+    FakeServer server;
+    FakeFs harbor_a{source};
+    tr::Progress progress;
+    const auto up = tr::Upload(server, harbor_a, save, 0, &progress);
+    Check(up.error == tr::Error::None && server.versions.size() == 1 &&
+              server.versions[0].status == "fixed" && server.versions[0].parts.size() == 4 &&
+              progress.done == progress.total && progress.total > 0,
+          "an upload creates every component (meta included), PUTs them and finishes");
+    Check(server.versions[0].key_seed == tr::Base64Url(harbor_a.own_seed),
+          "finish_upload carries the exporter's key seed and MAC");
+    // Download on a second console of the same account (shares the MAC key: same keys).
+    FakeFs harbor_b{st::ArchiveSource{}};
+    harbor_b.shared_mac_key = &harbor_a.mac_key;
+    const auto down = tr::Download(server, harbor_b, save.application_id, up.archive_id, nullptr);
+    Check(down.error == tr::Error::None && harbor_b.imported == source.stream,
+          "the second console downloads the same save image");
+    FakeFs harbor_c{st::ArchiveSource{}};
+    harbor_c.shared_mac_key = &harbor_a.mac_key;
+    const auto gone = tr::Download(server, harbor_c, save.application_id, 999999, nullptr);
+    Check(gone.error == tr::Error::ArchiveGone, "a missing archive is 2179-2100");
+    server.partitions = 0;
+    FakeFs harbor_d{source};
+    Check(tr::Upload(server, harbor_d, save, 0, nullptr).error == tr::Error::Fs,
+          "num_of_partitions 0 (saves today) fails at SetDivisionCount");
+}
+
 void RedactChecks() {
     std::puts("redaction");
     Check(fmt::format("{}", Common::Redact(0x1234ULL)) == "<redacted>", "Redact hides a value");
@@ -561,6 +856,7 @@ int SelfTest(bool online) {
     OlscChecks(dir);
     SaveTransferChecks(dir);
     SaveArchiveChecks();
+    TransferFlowChecks();
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {

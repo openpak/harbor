@@ -11,6 +11,7 @@
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/service/olsc/remote_storage_controller.h"
+#include "core/hle/service/olsc/transfer_runner.h"
 #include "core/openpak/async_worker.h"
 #include "core/openpak/olsc.h"
 
@@ -81,14 +82,15 @@ Result IAsyncResult::GetSystemEvent(OutCopyHandle<Kernel::KReadableEvent> out_ev
 }
 
 IRemoteStorageController::IRemoteStorageController(Core::System& system_, Common::UUID user_id_,
-                                                   std::shared_ptr<OpenPak::AsyncWorker> worker_)
+                                                   std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                                                   std::shared_ptr<TransferQueue> queue_)
     : ServiceFramework{system_, "IRemoteStorageController"},
       uid{user_id_.IsInvalid() ? std::string{} : user_id_.RawString()},
-      worker{std::move(worker_)} {
+      worker{std::move(worker_)}, queue{std::move(queue_)}, user{user_id_} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, nullptr, "GetSaveDataArchiveInfoBySaveDataId"},
-        {1, nullptr, "GetSaveDataArchiveInfoByApplicationId"},
+        {1, D<&IRemoteStorageController::RegisterDownloadTask>, "RegisterDownloadTask"},
         {3, nullptr, "GetSaveDataArchiveCount"},
         {6, nullptr, "CleanupSaveDataArchives"},
         {7, D<&IRemoteStorageController::CreateSaveDataArchiveCacheUpdationTask>, "CreateSaveDataArchiveCacheUpdationTask"},
@@ -96,7 +98,7 @@ IRemoteStorageController::IRemoteStorageController(Core::System& system_, Common
         {9, nullptr, "Delete"},
         {10, nullptr, "GetSeriesInfo"},
         {11, nullptr, "CreateDeleteDataTask"},
-        {12, nullptr, "DeleteSeriesInfo"},
+        {12, D<&IRemoteStorageController::RegisterUploadTask>, "RegisterUploadTask"},
         {13, D<&IRemoteStorageController::CreateRegisterNotificationTokenTask>, "CreateRegisterNotificationTokenTask"},
         {14, D<&IRemoteStorageController::GetDataNewnessByApplicationId>, "GetDataNewnessByApplicationId"},
         {15, nullptr, "RegisterUploadSaveDataTransferTaskForAutonomyRegistration"},
@@ -149,6 +151,24 @@ Result IRemoteStorageController::GetDataNewnessByApplicationId(Out<u8> out_newne
         archives && OpenPak::Olsc::LatestFor(*archives, application_id).has_value();
     LOG_DEBUG(Service_OLSC, "called, app={:016X} in_cloud={}", application_id, in_cloud);
     *out_newness = in_cloud ? 1 : 0;
+    R_SUCCEED();
+}
+
+Result IRemoteStorageController::RegisterDownloadTask(Out<u64> out_task_id, u64 archive_id) {
+    // 0x2245e0 -> 0x1fe980: u64 archive id in, the task id out; the archive must be in the
+    // cache (2179-1200 otherwise).
+    const auto task = queue->RegisterDownload(user, archive_id);
+    R_UNLESS(task.has_value(), ResultDataInfoNotFound);
+    *out_task_id = *task;
+    R_SUCCEED();
+}
+
+Result IRemoteStorageController::RegisterUploadTask(Out<u64> out_task_id, u8 unknown, bool flag,
+                                                    u64 application_id) {
+    // 0x224e10 -> 0x1fe530: {u8, bool flag, u64 application id} in, the task id out. The u8's
+    // meaning was not read (GUESS: a priority).
+    LOG_UNKNOWN_CONTRACT(Service_OLSC, "olsc RSC 12 first byte {} not read", unknown);
+    *out_task_id = queue->RegisterUpload(user, application_id, flag);
     R_SUCCEED();
 }
 

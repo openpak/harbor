@@ -27,6 +27,8 @@ class AsyncWorker;
 
 namespace Service::OLSC {
 
+class TransferQueue;
+
 /// The sysmodule's IAsyncResult (0x21df40): 0 GetResult, 1 Cancel, 2 HasDone, 3 GetSystemEvent,
 /// answered by work on an OpenPak::AsyncWorker.
 class IAsyncResult final : public ServiceFramework<IAsyncResult> {
@@ -50,13 +52,16 @@ private:
 class IRemoteStorageController final : public ServiceFramework<IRemoteStorageController> {
 public:
     IRemoteStorageController(Core::System& system_, Common::UUID user_id_,
-                             std::shared_ptr<OpenPak::AsyncWorker> worker_);
+                             std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                             std::shared_ptr<TransferQueue> queue_);
     ~IRemoteStorageController() override;
 
 private:
     Result GetSecondarySave(Out<bool> out_has_secondary_save, Out<std::array<u64, 3>> out_unknown,
                             u64 application_id);
     Result GetDataNewnessByApplicationId(Out<u8> out_newness, u64 application_id);
+    Result RegisterDownloadTask(Out<u64> out_task_id, u64 archive_id);
+    Result RegisterUploadTask(Out<u64> out_task_id, u8 unknown, bool flag, u64 application_id);
     Result CreateSaveDataArchiveCacheUpdationTask(Out<SharedPointer<IAsyncResult>> out_task);
     Result CreateSaveDataArchiveCacheUpdationForSpecifiedApplicationTask(
         Out<SharedPointer<IAsyncResult>> out_task, u64 application_id);
@@ -73,6 +78,8 @@ private:
     /// The user this controller speaks for, as the 32 hex digits the OpenPak layer names it by.
     std::string uid;
     std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::shared_ptr<TransferQueue> queue;
+    Common::UUID user;
 };
 
 } // namespace Service::OLSC

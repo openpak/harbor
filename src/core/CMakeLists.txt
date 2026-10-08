@@ -969,6 +969,8 @@ add_library(core STATIC
     hle/service/olsc/remote_storage_controller.h
     hle/service/olsc/stopper_object.cpp
     hle/service/olsc/stopper_object.h
+    hle/service/olsc/transfer_runner.cpp
+    hle/service/olsc/transfer_runner.h
     hle/service/olsc/transfer_task_list_controller.cpp
     hle/service/olsc/transfer_task_list_controller.h
     hle/service/omm/omm.cpp

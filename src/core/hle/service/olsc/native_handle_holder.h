@@ -6,6 +6,9 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
 
@@ -16,11 +19,20 @@ class KReadableEvent;
 class KEvent;
 }
 
+namespace OpenPak {
+class AsyncWorker;
+class HostEvent;
+} // namespace OpenPak
+
 namespace Service::OLSC {
 
 class INativeHandleHolder final : public ServiceFramework<INativeHandleHolder> {
 public:
     explicit INativeHandleHolder(Core::System& system_);
+    /// An event host threads raise: `attach` receives it (e.g. the transfer queue's start or
+    /// end event list); it is detached when the holder goes.
+    INativeHandleHolder(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker,
+                        const std::function<void(std::shared_ptr<OpenPak::HostEvent>)>& attach);
     ~INativeHandleHolder() override;
 
 private:
@@ -28,6 +40,7 @@ private:
 
     Service::KernelHelpers::ServiceContext service_context;
     Kernel::KEvent* event{};
+    std::shared_ptr<OpenPak::HostEvent> host_event;
 };
 
 } // namespace Service::OLSC

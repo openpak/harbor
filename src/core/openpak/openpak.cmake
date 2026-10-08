@@ -28,6 +28,8 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/network_profile.h
     openpak/olsc.cpp
     openpak/olsc.h
+    openpak/olsc_transfer.cpp
+    openpak/olsc_transfer.h
     openpak/platform.cpp
     openpak/platform.h
     openpak/presence_state.cpp
