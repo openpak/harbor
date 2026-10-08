@@ -77,6 +77,27 @@ object HarborNative {
     /** The console's theme: 1 Basic Black, 0 Basic White, -1 while no console runs. */
     external fun consoleTheme(): Int
 
+    /** The console's NAND directory, which a console backup holds. */
+    external fun nandDirectory(): String
+
+    /** The device key sealed with `passphrase` into the NAND for a backup about to be taken. */
+    external fun sealDeviceKey(passphrase: String): Boolean
+
+    /** The sealed device key out of the live NAND again. */
+    external fun removeSealedDeviceKey()
+
+    /** Read the calibration again (the NAND was replaced). */
+    external fun reloadCalibration()
+
+    /** A restored NAND whose device key waits for its backup's passphrase. */
+    external fun deviceKeyRestorePending(): Boolean
+
+    /** 0 restored, 1 wrong passphrase, 2 no sealed key in the NAND, 3 the key could not be kept. */
+    external fun restoreDeviceKey(passphrase: String): Int
+
+    /** A fresh calibration and device key; this console's OpenPak credentials dropped. */
+    external fun makeNewConsole(): Boolean
+
     /** The console's picture on the emulation surface (left, top, right, bottom), empty while none runs. */
     external fun pictureRect(): IntArray
 }
