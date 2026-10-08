@@ -4,6 +4,11 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
+#include <fmt/format.h>
+
+#include "core/harbor_calibration/calibration.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/sockets/nsd.h"
 #include "core/hle/service/sockets/sfdnsres_redirect.h"
@@ -35,7 +40,7 @@ NSD::NSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {5, nullptr, "GetSettingUrl"},
         {10, nullptr, "GetSettingName"},
         {11, &NSD::GetEnvironmentIdentifier, "GetEnvironmentIdentifier"},
-        {12, nullptr, "GetDeviceId"},
+        {12, &NSD::GetDeviceId, "GetDeviceId"},
         {13, nullptr, "DeleteSettings"},
         {14, nullptr, "ImportSettings"},
         {15, &NSD::SetChangeEnvironmentIdentifierDisabled, "SetChangeEnvironmentIdentifierDisabled"},
@@ -125,6 +130,17 @@ void NSD::GetEnvironmentIdentifier(HLERequestContext& ctx) {
     constexpr EnvironmentIdentifier lp1 = {
         .identifier = {'l', 'p', '1', '\0', '\0', '\0', '\0', '\0'}};
     ctx.WriteBuffer(lp1);
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
+void NSD::GetDeviceId(HLERequestContext& ctx) {
+    // The device id as 16 hex digits, the form the device certificate names it in.
+    LOG_WARNING(Service, "unknown contract: nsd GetDeviceId (buffer {} bytes); 16 hex digits",
+                ctx.GetWriteBufferSize());
+    const std::string id = fmt::format("{:016X}", Harbor::Calibration::Get().DeviceId());
+    ctx.WriteBuffer(id.data(), std::min(id.size(), ctx.GetWriteBufferSize()));
 
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
