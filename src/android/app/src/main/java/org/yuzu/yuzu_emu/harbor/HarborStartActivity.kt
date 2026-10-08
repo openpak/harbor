@@ -57,7 +57,8 @@ class HarborStartActivity : Activity() {
 
         HarborNative.initialize()
         val afterSetup = intent.getBooleanExtra(EXTRA_AFTER_SETUP, false)
-        thread(name = "HarborStart") {
+        // Crash reports: asked once, or last time's report offered, before the console boots.
+        HarborCrashReports.onLaunch(this) { thread(name = "HarborStart") {
             val check = HarborNative.checkConsole()
             val ready = check.isEmpty()
             Log.info("[Harbor] start: ready=$ready afterSetup=$afterSetup")
@@ -75,7 +76,7 @@ class HarborStartActivity : Activity() {
                     }
                 }
             }
-        }
+        } }
     }
 
     private lateinit var status: TextView

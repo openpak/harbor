@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 tobagin
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+<resources>
+    <string name="harbor_crash_consent_title">Crash reports</string>
+    <string name="harbor_crash_consent_message">If Harbor or a game crashes, Harbor can save a report on this phone: what crashed and the last lines of its log, with account ids, names, tokens and typed text removed. Nothing is sent anywhere. At the next start Harbor offers the report: you can read it, share it yourself, or delete it.\n\nKeep crash reports?</string>
+    <string name="harbor_crash_consent_keep">Keep reports</string>
+    <string name="harbor_crash_consent_decline">Don\'t keep</string>
+    <string name="harbor_crash_offer_title">Harbor crashed last time</string>
+    <string name="harbor_crash_offer_message">Harbor saved a crash report: %1$s (%2$s).\n\nIt is kept on this phone only; nothing has been sent. View it, share it yourself, or delete it.</string>
+    <string name="harbor_crash_view">View</string>
+    <string name="harbor_crash_share">Share</string>
+    <string name="harbor_crash_delete">Delete</string>
+</resources>
