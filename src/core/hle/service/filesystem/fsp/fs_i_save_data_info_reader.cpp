@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string>
+#include <string_view>
+
 #include "common/hex_util.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -39,6 +42,25 @@ static u64 stoull_be(std::string_view str) {
     std::memcpy(&out, bytes.data(), sizeof(u64));
 
     return Common::swap64(out);
+}
+
+// fs gives every save that has no static id an id of its own in its index. Saves here have no
+// index, so the id is derived from the save's location: stable across restarts, below the
+// system save range (top bit clear) and never 0.
+static u64 MakeSaveDataId(FileSys::SaveDataSpaceId space, std::string_view user_id,
+                          std::string_view title_id) {
+    u64 hash = 0xCBF29CE484222325ULL;
+    const auto mix = [&hash](std::string_view text) {
+        for (const char c : text) {
+            hash = (hash ^ static_cast<u8>(c)) * 0x100000001B3ULL;
+        }
+        hash = (hash ^ u8{'/'}) * 0x100000001B3ULL;
+    };
+    mix(std::to_string(static_cast<u32>(space)));
+    mix(user_id);
+    mix(title_id);
+    const u64 id = hash & 0x7FFFFFFFFFFFFFFFULL;
+    return id != 0 ? id : 1;
 }
 
 Result ISaveDataInfoReader::ReadSaveDataInfo(
@@ -126,7 +148,7 @@ void ISaveDataInfoReader::FindNormalSaves(std::vector<SaveDataInfo>& info,
                 const auto device = std::all_of(user_id_numeric.begin(), user_id_numeric.end(),
                                                 [](u8 val) { return val == 0; });
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    MakeSaveDataId(space, user_id->GetName(), title_id->GetName()),
                     space,
                     device ? FileSys::SaveDataType::Device : FileSys::SaveDataType::Account,
                     {},
@@ -156,7 +178,7 @@ void ISaveDataInfoReader::FindTemporaryStorageSaves(std::vector<SaveDataInfo>& i
                 std::reverse(user_id_numeric.begin(), user_id_numeric.end());
 
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    MakeSaveDataId(space, user_id->GetName(), title_id->GetName()),
                     space,
                     FileSys::SaveDataType::Temporary,
                     {},
