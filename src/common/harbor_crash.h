@@ -38,6 +38,24 @@ Consent GetConsent();
 /// every report kept so far.
 void SetConsent(bool accepted);
 
+/// For the Harbor menu's consent row (MenuHost::CrashReportConsent / SetCrashReportConsent on
+/// every platform): nullopt while the question has not been answered, else whether reports are kept.
+inline std::optional<bool> CrashReportConsent() {
+    switch (GetConsent()) {
+    case Consent::Accepted:
+        return true;
+    case Consent::Declined:
+        return false;
+    case Consent::Unasked:
+        break;
+    }
+    return std::nullopt;
+}
+
+inline void SetCrashReportConsent(bool accepted) {
+    SetConsent(accepted);
+}
+
 /// Whether log lines are being kept for a report (consent given and Install called).
 bool Recording();
 
