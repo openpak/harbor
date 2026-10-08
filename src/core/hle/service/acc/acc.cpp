@@ -185,9 +185,9 @@ public:
             {100, nullptr, "SetSystemProgramIdentification"},
             {101, nullptr, "RefreshNotificationTokenAsync"}, // 7.0.0+
             {110, nullptr, "GetServiceEntryRequirementCache"}, // 4.0.0+
-            {111, nullptr, "InvalidateServiceEntryRequirementCache"}, // 4.0.0+
+            {111, &IManagerForSystemService::InvalidateServiceEntryRequirementCache, "InvalidateServiceEntryRequirementCache"}, // 4.0.0+
             {112, nullptr, "InvalidateTokenCache"}, // 4.0.0 - 6.2.0
-            {113, nullptr, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
+            {113, &IManagerForSystemService::GetServiceEntryRequirementCacheForOnlinePlay, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
             {120, &IManagerForSystemService::GetNintendoAccountId, "GetNintendoAccountId"},
             {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
             {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
@@ -226,8 +226,8 @@ public:
             {280, nullptr, "ProxyProcedureToAcquireApplicationAuthorizationForNintendoAccount"},
             {290, &IManagerForSystemService::GetRequestForNintendoAccountUserResourceView, "GetRequestForNintendoAccountUserResourceView"}, // 8.0.0+
             {300, nullptr, "TryRecoverNintendoAccountUserStateAsync"}, // 6.0.0+
-            {400, nullptr, "IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay"}, // 6.1.0+
-            {401, nullptr, "RefreshServiceEntryRequirementCacheForOnlinePlayAsync"}, // 6.1.0+
+            {400, &IManagerForSystemService::IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay, "IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay"}, // 6.1.0+
+            {401, &IManagerForSystemService::RefreshServiceEntryRequirementCacheForOnlinePlayAsync, "RefreshServiceEntryRequirementCacheForOnlinePlayAsync"}, // 6.1.0+
             {900, nullptr, "GetAuthenticationInfoForWin"}, // 9.0.0+
             {901, nullptr, "ImportAsyncForWin"}, // 9.0.0+
             {997, nullptr, "DebugUnlinkNintendoAccountAsync"},
@@ -281,6 +281,39 @@ private:
                          signed_in ? "registered" : "failed");
                 return signed_in ? ResultSuccess : ResultInternetRequestDenied;
             });
+    }
+
+    // 111, 113, 400 and 401: the online-play entitlement check PlayerSelect runs before a game
+    // hosts or joins online (401, 113, then 111). OpenPak entitles every linked account, so the
+    // cache never needs a refresh, a refresh completes at once, the cache holds no requirement
+    // and there is nothing to invalidate.
+    void InvalidateServiceEntryRequirementCache(HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC, "unknown contract: acc IAdministrator 111, nothing to invalidate");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetServiceEntryRequirementCacheForOnlinePlay(HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC, "unknown contract: acc IAdministrator 113, answering 0");
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<u32>(0);
+    }
+
+    void IsServiceEntryRequirementCacheRefreshRequiredForOnlinePlay(HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC, "unknown contract: acc IAdministrator 400, answering false");
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push(false);
+    }
+
+    void RefreshServiceEntryRequirementCacheForOnlinePlayAsync(HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC,
+                    "unknown contract: acc IAdministrator 401, an async context already done");
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker,
+                                                 OpenPakAsyncContext::Done(ResultSuccess));
     }
 
     bool IsRegisteredAtBaas() const {
