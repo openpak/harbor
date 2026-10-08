@@ -29,7 +29,11 @@ object HarborPanelInput {
 
     /** Puts `dialog`'s window under this input. Call after show(). */
     fun attach(dialog: Dialog) {
-        val window = dialog.window ?: return
+        attach(dialog.window ?: return)
+    }
+
+    /** Puts a whole screen's window (Harbor's stopped screen) under this input. */
+    fun attach(window: Window) {
         val current = window.callback ?: return
         if (current !is PanelCallback) {
             window.callback = PanelCallback(current)

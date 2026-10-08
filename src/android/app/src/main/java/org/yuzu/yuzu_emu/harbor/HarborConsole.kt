@@ -155,6 +155,13 @@ object HarborConsole {
      * HOME runs with it. Returns its name for the log.
      */
     private fun ensureDriver(): String {
+        // Only an Adreno GPU loads another driver: elsewhere a saved choice is ignored (G4.GPU.1).
+        if (!GpuDriverHelper.isAdrenoGpu()) {
+            if (GpuDriverHelper.installedCustomDriverData.name != null) {
+                GpuDriverHelper.installDefaultDriver()
+            }
+            return "the phone's (not an Adreno GPU)"
+        }
         val chosen = GpuDriverHelper.customDriverSettingData
         if (GpuDriverHelper.installedCustomDriverData != chosen) {
             val path = StringSetting.DRIVER_PATH.getString()
@@ -209,7 +216,7 @@ object HarborConsole {
     /**
      * The console stopped on its own (not through the Harbor menu). HOME's power menu: a restart boots
      * the console again through the launcher (library scan, OpenPak, HOME), turning it off closes
-     * Harbor; anything else leaves the emulation screen as Eden does.
+     * Harbor; anything else is the "Harbor stopped" screen.
      */
     fun onConsoleStopped(activity: EmulationActivity) {
         when (HarborNative.powerRequest()) {
@@ -222,15 +229,25 @@ object HarborConsole {
                 HarborNative.stopOpenPak()
                 activity.finishAndRemoveTask()
             }
-            else -> activity.finish()
+            else -> showStopped(activity, activity.getString(R.string.harbor_stop_root_exited))
         }
+    }
+
+    /** "Harbor stopped" with `reason` in place of `activity` (the emulation screen). */
+    fun showStopped(activity: Activity, reason: String) {
+        Log.info("[Harbor] the console stopped: $reason")
+        HarborAudioFocus.release()
+        activity.startActivity(HarborStoppedActivity.stopped(activity, reason))
+        @Suppress("DEPRECATION")
+        activity.overridePendingTransition(0, 0)
+        activity.finish()
     }
 
     private const val POWER_OFF = 1
     private const val POWER_REBOOT = 2
 
     /** Boots the console again through the launcher: library scan, OpenPak, HOME. */
-    private fun restartConsole(activity: Activity) {
+    fun restartConsole(activity: Activity) {
         activity.startActivity(
             Intent(activity, HarborStartActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -333,6 +350,7 @@ object HarborConsole {
             add(R.string.harbor_menu_resume to {})
             add(R.string.harbor_menu_home to { pressHome(HOME_SHORT_MS) })
             add(R.string.harbor_menu_home_hold to { pressHome(HOME_HOLD_MS) })
+            add(R.string.harbor_menu_power to { pressPower() })
             add(
                 (if (HarborNative.joyconsDetached()) R.string.harbor_menu_attach_joycons else R.string.harbor_menu_detach_joycons) to {
                     HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
@@ -344,8 +362,11 @@ object HarborConsole {
                     activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 })
             }
-            add(R.string.harbor_menu_restart to { activity.harborStop { restartConsole(activity) } })
-            add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
+            add(R.string.harbor_menu_restart to { stopThen(activity) { restartConsole(activity) } })
+            // Only an Adreno GPU can load another driver (G4.GPU.1).
+            if (GpuDriverHelper.isAdrenoGpu()) {
+                add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
+            }
             add(
                 (if (fps) R.string.harbor_menu_hide_fps else R.string.harbor_menu_show_fps) to {
                     activity.harborEmulationFragment()?.harborShowStats(!fps)
@@ -357,7 +378,7 @@ object HarborConsole {
             }
             add(
                 R.string.harbor_menu_setup_again to {
-                    activity.harborStop {
+                    stopThen(activity) {
                         HarborNative.stopOpenPak()
                         restartIntoSetup(activity)
                     }
@@ -432,7 +453,7 @@ object HarborConsole {
     }
 
     /** Harbor in a fresh process, straight back to the console (a new graphics driver loads then). */
-    private fun restartProcess(from: Activity) {
+    fun restartProcess(from: Activity) {
         Log.info("[Harbor] restarting the process")
         from.startActivity(
             Intent(from, HarborRestartActivity::class.java)
@@ -490,6 +511,27 @@ object HarborConsole {
                 NativeInput.onOverlayButtonEvent(port, NativeButton.Home, NativeInput.ButtonState.RELEASED)
             }, holdMs)
         }, HOME_AFTER_MENU_MS)
+    }
+
+    /**
+     * The console's power button from the Harbor menu, as the Ryujinx Harbor's F5: held, so HOME's
+     * overlay opens its power menu (Sleep Mode, Restart, Power Off). Sent after the menu has closed.
+     */
+    private fun pressPower() {
+        Log.info("[Harbor] power button from the menu")
+        Handler(Looper.getMainLooper()).postDelayed({ HarborNative.pressPower() }, HOME_AFTER_MENU_MS)
+    }
+
+    /** "Stopping the console…" while the session stops, then `next` (Restart, Set up again). */
+    private fun stopThen(activity: EmulationActivity, next: () -> Unit) {
+        val notice = MaterialAlertDialogBuilder(activity)
+            .setMessage(R.string.harbor_stopping)
+            .setCancelable(false)
+            .show()
+        activity.harborStop {
+            if (notice.isShowing) notice.dismiss()
+            next()
+        }
     }
 
     private const val HOME_SHORT_MS = 100L

@@ -2558,7 +2558,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             toggleOverlay(true)
             controllerInputReceived = false
         }
-        if (!BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
+        // Harbor: the controls fade (InputOverlay) instead of Eden's auto-hide.
+        if (HarborConsole.active || !BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
         // failsafe
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         if (autoHideSeconds == 0) {
@@ -2579,7 +2580,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         val autoHideEnabled = BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()
         val showInputOverlay = BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()
-        if (autoHideEnabled && showInputOverlay) {
+        if (autoHideEnabled && showInputOverlay && !HarborConsole.active) {
             toggleOverlay(true)
             startOverlayAutoHideTimer(autoHideSeconds)
         }
