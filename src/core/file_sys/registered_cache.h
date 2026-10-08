@@ -8,8 +8,10 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 #include "common/container/unordered_map.h"
@@ -247,6 +249,9 @@ public:
     [[nodiscard]] inline const ContentProvider* GetSlotProvider(ContentProviderUnionSlot slot) const {
         return providers[size_t(slot)];
     }
+    [[nodiscard]] inline ContentProvider* GetSlotProvider(ContentProviderUnionSlot slot) {
+        return providers[size_t(slot)];
+    }
 
     std::vector<std::pair<ContentProviderUnionSlot, ContentProviderEntry>> ListEntriesFilterOrigin(
         std::optional<ContentProviderUnionSlot> origin = {},
@@ -257,6 +262,10 @@ public:
 private:
     std::array<ContentProvider*, size_t(ContentProviderUnionSlot::Count)> providers;
 };
+
+/// The host files a provider's entries came from (NSP, XCI or loose NCA paths; content URIs on
+/// Android), with the title ids each one holds.
+using ContentSourceFiles = std::map<std::string, std::set<u64>>;
 
 class ManualContentProvider : public ContentProvider {
 public:
@@ -283,9 +292,16 @@ public:
     std::vector<ExternalUpdateEntry> ListUpdateVersions(u64 title_id) const;
     VirtualFile GetEntryForVersion(u64 title_id, ContentRecordType type, u32 version) const;
 
+    const ContentSourceFiles& GetSourceFiles() const {
+        return sources;
+    }
+    /// Drops every entry of an application (base, update, DLC) and the files they came from.
+    void RemoveApplication(u64 application_id);
+
 private:
     std::map<std::tuple<TitleType, ContentRecordType, u64>, VirtualFile> entries;
     std::vector<ExternalUpdateEntry> multi_version_entries;
+    ContentSourceFiles sources;
 };
 
 class ExternalContentProvider : public ContentProvider {
@@ -309,10 +325,18 @@ public:
     std::vector<ExternalUpdateEntry> ListUpdateVersions(u64 title_id) const;
     VirtualFile GetEntryForVersion(u64 title_id, ContentRecordType type, u32 version) const;
 
+    const ContentSourceFiles& GetSourceFiles() const {
+        return sources;
+    }
+    /// Drops every entry of an application (update, DLC) and the files they came from.
+    void RemoveApplication(u64 application_id);
+
 private:
     void ScanDirectory(const VirtualDir& dir);
     void ProcessNSP(const VirtualFile& file);
     void ProcessXCI(const VirtualFile& file);
+
+    ContentSourceFiles sources;
 
     std::vector<VirtualDir> load_dirs;
     ::Common::unordered_map<std::tuple<u64, ContentRecordType, TitleType>, VirtualFile> entries;

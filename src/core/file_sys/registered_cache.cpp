@@ -286,17 +286,37 @@ static void UpsertExternalVersionEntry(std::vector<ExternalUpdateEntry>& multi_v
     }
 }
 
+// The host path of a file opened from the host filesystem; empty for a file inside a container.
+static std::string HostPathOf(const VirtualFile& file) {
+    return file != nullptr ? file->GetHostPath() : std::string{};
+}
+
+static bool BelongsTo(u64 title_id, u64 application_id) {
+    return GetBaseTitleID(title_id) == GetBaseTitleID(application_id);
+}
+
+// Forgets the source files that hold nothing but the application's titles.
+static void RemoveApplicationSources(ContentSourceFiles& sources, u64 application_id) {
+    std::erase_if(sources, [application_id](const auto& source) {
+        return std::all_of(source.second.begin(), source.second.end(),
+                           [application_id](u64 id) { return BelongsTo(id, application_id); });
+    });
+}
+
 template <typename EntryMap, typename VersionMap>
 static bool AddExternalEntriesFromContainer(const std::shared_ptr<NSP>& nsp, EntryMap& entries,
                                             VersionMap& versions,
-                                            std::vector<ExternalUpdateEntry>& multi_version_entries) {
+                                            std::vector<ExternalUpdateEntry>& multi_version_entries,
+                                            std::set<u64>* title_ids = nullptr) {
     return ForEachContainerEntry(
         nsp, true, std::nullopt,
-        [&entries, &versions,
-         &multi_version_entries](TitleType title_type, ContentRecordType content_type, u64 title_id,
-                                 const VirtualFile& file, u32 version,
-                                 const std::string& version_string) {
+        [&entries, &versions, &multi_version_entries,
+         title_ids](TitleType title_type, ContentRecordType content_type, u64 title_id,
+                    const VirtualFile& file, u32 version, const std::string& version_string) {
             entries[{title_id, content_type, title_type}] = file;
+            if (title_ids != nullptr) {
+                title_ids->insert(title_id);
+            }
 
             if (title_type == TitleType::Update) {
                 versions[title_id] = version;
@@ -1222,6 +1242,11 @@ const ExternalContentProvider* ContentProviderUnion::GetExternalProvider() const
 ManualContentProvider::~ManualContentProvider() = default;
 
 void ManualContentProvider::AddEntry(TitleType title_type, ContentRecordType content_type, u64 title_id, VirtualFile file) {
+    // A loose NCA opened from the host is its own source file; a container's NCAs are recorded
+    // under the container by AddEntriesFromContainer.
+    if (auto path = HostPathOf(file); !path.empty()) {
+        sources[std::move(path)].insert(title_id);
+    }
     entries.insert_or_assign({title_type, content_type, title_id}, file);
 }
 
@@ -1273,10 +1298,13 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
         return false;
     }
 
-    return ForEachContainerEntry(
+    std::set<u64> title_ids;
+    const bool added = ForEachContainerEntry(
         nsp, only_content, base_program_id,
-        [this](TitleType title_type, ContentRecordType content_type, u64 title_id,
-               const VirtualFile& entry_file, u32 version, const std::string& version_string) {
+        [this, &title_ids](TitleType title_type, ContentRecordType content_type, u64 title_id,
+                           const VirtualFile& entry_file, u32 version,
+                           const std::string& version_string) {
+            title_ids.insert(title_id);
             if (title_type == TitleType::Update) {
                 AddEntryWithVersion(title_type, content_type, title_id, version, version_string,
                                     entry_file);
@@ -1284,11 +1312,26 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
                 AddEntry(title_type, content_type, title_id, entry_file);
             }
         });
+    if (auto path = HostPathOf(file); added && !path.empty()) {
+        sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
+    }
+    return added;
 }
 
 void ManualContentProvider::ClearAllEntries() {
     entries.clear();
     multi_version_entries.clear();
+    sources.clear();
+}
+
+void ManualContentProvider::RemoveApplication(u64 application_id) {
+    std::erase_if(entries, [application_id](const auto& entry) {
+        return BelongsTo(std::get<2>(entry.first), application_id);
+    });
+    std::erase_if(multi_version_entries, [application_id](const ExternalUpdateEntry& entry) {
+        return BelongsTo(entry.title_id, application_id);
+    });
+    RemoveApplicationSources(sources, application_id);
 }
 
 void ManualContentProvider::Refresh() {}
@@ -1388,12 +1431,28 @@ void ExternalContentProvider::ClearDirectories() {
     entries.clear();
     versions.clear();
     multi_version_entries.clear();
+    sources.clear();
+}
+
+void ExternalContentProvider::RemoveApplication(u64 application_id) {
+    // Common::unordered_map is boost's flat map, which has its own erase_if.
+    boost::unordered::erase_if(entries, [application_id](const auto& entry) {
+        return BelongsTo(std::get<0>(entry.first), application_id);
+    });
+    boost::unordered::erase_if(versions, [application_id](const auto& entry) {
+        return BelongsTo(entry.first, application_id);
+    });
+    std::erase_if(multi_version_entries, [application_id](const ExternalUpdateEntry& entry) {
+        return BelongsTo(entry.title_id, application_id);
+    });
+    RemoveApplicationSources(sources, application_id);
 }
 
 void ExternalContentProvider::Refresh() {
     entries.clear();
     versions.clear();
     multi_version_entries.clear();
+    sources.clear();
     for (const auto& dir : load_dirs) {
         if (dir != nullptr) {
             ScanDirectory(dir);
@@ -1438,7 +1497,11 @@ void ExternalContentProvider::ProcessNSP(const VirtualFile& file) {
     }
 
     LOG_DEBUG(Service_FS, "Processing NSP file: {}", file->GetName());
-    AddExternalEntriesFromContainer(nsp, entries, versions, multi_version_entries);
+    std::set<u64> title_ids;
+    AddExternalEntriesFromContainer(nsp, entries, versions, multi_version_entries, &title_ids);
+    if (auto path = HostPathOf(file); !path.empty() && !title_ids.empty()) {
+        sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
+    }
 }
 
 void ExternalContentProvider::ProcessXCI(const VirtualFile& file) {
@@ -1449,7 +1512,11 @@ void ExternalContentProvider::ProcessXCI(const VirtualFile& file) {
         return;
     }
 
-    AddExternalEntriesFromContainer(nsp, entries, versions, multi_version_entries);
+    std::set<u64> title_ids;
+    AddExternalEntriesFromContainer(nsp, entries, versions, multi_version_entries, &title_ids);
+    if (auto path = HostPathOf(file); !path.empty() && !title_ids.empty()) {
+        sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
+    }
 }
 
 bool ExternalContentProvider::HasEntry(u64 title_id, ContentRecordType type) const {

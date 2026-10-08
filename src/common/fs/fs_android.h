@@ -18,6 +18,8 @@ static jmethodID s_get_size;
 static jmethodID s_is_directory;
 static jmethodID s_file_exists;
 static jmethodID s_open_content_uri;
+static jmethodID s_can_delete_document;
+static jmethodID s_delete_document;
 
 enum class OpenMode {
     Read,
@@ -42,5 +44,10 @@ bool IsDirectory(const std::string& filepath);
 bool Exists(const std::string& filepath);
 std::string GetParentDirectory(const std::string& filepath);
 std::string GetFilename(const std::string& filepath);
+
+/// Whether the document can be deleted (the SAF grant allows it and its provider supports it).
+bool CanDeleteDocument(const std::string& filepath);
+/// Deletes one document (a file, never a folder). Returns false when it was not deleted.
+bool DeleteDocument(const std::string& filepath);
 
 } // namespace Common::FS::Android
