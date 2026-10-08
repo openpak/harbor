@@ -7,6 +7,7 @@
 #include <openssl/evp.h>
 
 #include "common/hex_util.h"
+#include "common/redact.h"
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/file_sys/common_funcs.h"
@@ -155,7 +156,7 @@ Result IApplicationFunctions::PopLaunchParameter(Out<SharedPointer<IStorage>> ou
 }
 
 Result IApplicationFunctions::EnsureSaveData(Out<u64> out_size, Common::UUID user_id) {
-    LOG_INFO(Service_AM, "called, uid={}", user_id.FormattedString());
+    LOG_INFO(Service_AM, "called, uid={}", Common::Redact(user_id));
 
     FileSys::SaveDataAttribute attribute{};
     attribute.program_id = m_applet->program_id;
@@ -249,7 +250,7 @@ Result IApplicationFunctions::ExtendSaveData(Out<u64> out_required_size, FileSys
                                              Common::UUID user_id, u64 normal_size,
                                              u64 journal_size) {
     LOG_DEBUG(Service_AM, "called with type={} user_id={} normal={:#x} journal={:#x}",
-              static_cast<u8>(type), user_id.FormattedString(), normal_size, journal_size);
+              static_cast<u8>(type), Common::Redact(user_id), normal_size, journal_size);
 
     system.GetFileSystemController().OpenSaveDataController()->WriteSaveDataSize(
         type, m_applet->program_id, user_id.AsU128(), {normal_size, journal_size});
@@ -263,7 +264,7 @@ Result IApplicationFunctions::ExtendSaveData(Out<u64> out_required_size, FileSys
 
 Result IApplicationFunctions::GetSaveDataSize(Out<u64> out_normal_size, Out<u64> out_journal_size,
                                               FileSys::SaveDataType type, Common::UUID user_id) {
-    LOG_DEBUG(Service_AM, "called with type={} user_id={}", type, user_id.FormattedString());
+    LOG_DEBUG(Service_AM, "called with type={} user_id={}", type, Common::Redact(user_id));
 
     const auto size = system.GetFileSystemController().OpenSaveDataController()->ReadSaveDataSize(
         type, m_applet->program_id, user_id.AsU128());

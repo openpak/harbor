@@ -1560,11 +1560,11 @@ void QtSoftwareKeyboard::InitializeKeyboard(
 
     LOG_INFO(Service_AM,
              "\nKeyboardInitializeParameters:"
-             "\nok_text={}"
-             "\nheader_text={}"
-             "\nsub_text={}"
-             "\nguide_text={}"
-             "\ninitial_text={}"
+             "\nok_text={} characters"
+             "\nheader_text={} characters"
+             "\nsub_text={} characters"
+             "\nguide_text={} characters"
+             "\ninitial_text={} characters"
              "\nmax_text_length={}"
              "\nmin_text_length={}"
              "\ninitial_cursor_position={}"
@@ -1576,11 +1576,10 @@ void QtSoftwareKeyboard::InitializeKeyboard(
              "\nenable_backspace_button={}"
              "\nenable_return_button={}"
              "\ndisable_cancel_button={}",
-             Common::UTF16ToUTF8(initialize_parameters.ok_text),
-             Common::UTF16ToUTF8(initialize_parameters.header_text),
-             Common::UTF16ToUTF8(initialize_parameters.sub_text),
-             Common::UTF16ToUTF8(initialize_parameters.guide_text),
-             Common::UTF16ToUTF8(initialize_parameters.initial_text),
+             // The texts can hold names and what was typed before: their lengths only.
+             initialize_parameters.ok_text.size(), initialize_parameters.header_text.size(),
+             initialize_parameters.sub_text.size(), initialize_parameters.guide_text.size(),
+             initialize_parameters.initial_text.size(),
              initialize_parameters.max_text_length, initialize_parameters.min_text_length,
              initialize_parameters.initial_cursor_position, initialize_parameters.type,
              initialize_parameters.password_mode, initialize_parameters.text_draw_type,
@@ -1636,9 +1635,9 @@ void QtSoftwareKeyboard::InlineTextChanged(
     Core::Frontend::InlineTextParameters text_parameters) const {
     LOG_INFO(Service_AM,
              "\nInlineTextParameters:"
-             "\ninput_text={}"
+             "\ninput_text={} characters"
              "\ncursor_position={}",
-             Common::UTF16ToUTF8(text_parameters.input_text), text_parameters.cursor_position);
+             text_parameters.input_text.size(), text_parameters.cursor_position);
 
     emit MainWindowInlineTextChanged(std::move(text_parameters));
 }

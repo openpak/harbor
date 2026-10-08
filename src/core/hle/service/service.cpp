@@ -22,15 +22,13 @@
 
 namespace Service {
 
-/// @brief Creates a function string for logging, complete with the name (or header code, depending
-/// on what's passed in) the port name, and all the cmd_buf arguments.
+/// @brief Creates a function string for logging: the name (or header code, depending on what's
+/// passed in), the port name and the number of argument words. The words themselves are left out:
+/// they can hold user ids.
 [[maybe_unused]] static std::string MakeFunctionString(std::string_view name, std::string_view port_name, const u32* cmd_buf) {
     // Number of params == bits 0-5 + bits 6-11
-    int num_params = (cmd_buf[0] & 0x3F) + ((cmd_buf[0] >> 6) & 0x3F);
-    std::string function_string = fmt::format("fn '{}': port={}", name, port_name);
-    for (int i = 1; i <= num_params; ++i)
-        function_string += fmt::format(", cmd_buf[{}]={:#x}", i, cmd_buf[i]);
-    return function_string;
+    const int num_params = (cmd_buf[0] & 0x3F) + ((cmd_buf[0] >> 6) & 0x3F);
+    return fmt::format("fn '{}': port={}, {} argument words", name, port_name, num_params);
 }
 
 ServiceFrameworkBase::ServiceFrameworkBase(Core::System& system_, const char* service_name_, u32 max_sessions_, InvokerFn* handler_invoker_)
@@ -63,17 +61,14 @@ void ServiceFrameworkBase::RegisterHandlersBaseTipc(const FunctionInfoBase* func
 
 void ServiceFrameworkBase::ReportUnimplementedFunction(HLERequestContext& ctx,
                                                        const FunctionInfoBase* info) {
-    auto cmd_buf = ctx.CommandBuffer();
     std::string function_name = info == nullptr ? "<unknown>" : info->name;
 
-    fmt::memory_buffer buf;
-    fmt::format_to(std::back_inserter(buf), "function '{}({})': port='{}' cmd_buf={{[0]={:#x}", ctx.GetCommand(), function_name, service_name, cmd_buf[0]);
-    for (int i = 1; i <= 8; ++i)
-        fmt::format_to(std::back_inserter(buf), ", [{}]={:#x}", i, cmd_buf[i]);
-    buf.push_back('}');
+    // The command id and the port only: the argument words can hold user ids.
+    const std::string description =
+        fmt::format("function '{}({})': port='{}'", ctx.GetCommand(), function_name, service_name);
 
     system.GetReporter().SaveUnimplementedFunctionReport(ctx, ctx.GetCommand(), function_name, service_name);
-    UNIMPLEMENTED_MSG("Unknown / unimplemented {}", fmt::to_string(buf));
+    UNIMPLEMENTED_MSG("Unknown / unimplemented {}", description);
     if (Settings::values.use_auto_stub) {
         LOG_WARNING(Service, "Using auto stub fallback!");
         IPC::ResponseBuilder rb{ctx, 2};
