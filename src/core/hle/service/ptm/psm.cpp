@@ -4,16 +4,22 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <chrono>
 #include <memory>
+#include <string_view>
 
 #include "common/common_funcs.h"
 #include "common/device_power_state.h"
 #include "common/logging.h"
 #include "core/core.h"
+#include "core/core_timing.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/result.h"
 #include "core/hle/service/ipc_helpers.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/kernel_helpers.h"
+#include "core/hle/service/psc/ovln/ovln_types.h"
 #include "core/hle/service/ptm/psm.h"
 
 namespace Service::PTM {
@@ -55,6 +61,13 @@ public:
 
     void SignalBatteryVoltageStateChanged() {
         if (should_signal && should_signal_battery_voltage) {
+            state_change_event->Signal(system.Kernel());
+        }
+    }
+
+    /// The host battery changed: a bound session's event is signalled, as the Ryujinx Harbor does.
+    void SignalBatteryChanged() {
+        if (should_signal) {
             state_change_event->Signal(system.Kernel());
         }
     }
@@ -147,46 +160,148 @@ PSM::PSM(Core::System& system_) : ServiceFramework{system_, "psm"} {
     // clang-format on
 
     RegisterHandlers(functions);
+
+    battery_poll_event = Core::Timing::CreateEvent(
+        "PSM::BatteryPoll",
+        [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+            PollBattery();
+            return std::nullopt;
+        });
+    constexpr std::chrono::nanoseconds battery_poll_interval = std::chrono::seconds{1};
+    system.CoreTiming().ScheduleLoopingEvent(battery_poll_interval, battery_poll_interval,
+                                             battery_poll_event);
 }
 
-PSM::~PSM() = default;
+PSM::~PSM() {
+    system.CoreTiming().UnscheduleEvent(battery_poll_event);
+}
+
+BatteryState PSM::ReadBattery() const {
+    const Common::PowerStatus power_status = Common::GetPowerStatus();
+    if (system.GetAppletManager().IsHomeSession()) {
+        // A console's battery: the host's where it has one (Android, fed by the frontend's
+        // NativeLibrary.updatePowerState), else a full battery on a charger.
+#ifdef __ANDROID__
+        if (power_status.has_battery && power_status.percentage >= 0) {
+            return ClampBattery(power_status.percentage, power_status.charging
+                                                             ? ChargerType::RegularCharger
+                                                             : ChargerType::Unplugged);
+        }
+#endif
+        return {100, ChargerType::RegularCharger};
+    }
+    BatteryState state{100, ChargerType::Unplugged};
+    if (power_status.has_battery && power_status.percentage >= 0) {
+        state.percentage = static_cast<u32>(std::clamp(power_status.percentage, 0, 100));
+    }
+    if (power_status.has_battery && power_status.charging) {
+        state.charger = ChargerType::RegularCharger;
+    }
+    return state;
+}
+
+void PSM::PollBattery() {
+    const BatteryState now = ReadBattery();
+
+    BatteryNotices notices{};
+    std::vector<std::shared_ptr<IPsmSession>> bound;
+    {
+        std::scoped_lock lk{battery_mutex};
+        if (!last_battery) {
+            // The first reading is where psc starts from: nothing is announced at boot.
+            last_battery = now;
+            return;
+        }
+        if (*last_battery == now) {
+            return;
+        }
+        notices = CompareBattery(*last_battery, now);
+        last_battery = now;
+        std::erase_if(sessions, [](const auto& session) { return session.expired(); });
+        for (const auto& weak : sessions) {
+            if (auto session = weak.lock()) {
+                bound.push_back(std::move(session));
+            }
+        }
+    }
+
+    LOG_DEBUG(Service_PTM, "psm: battery {}%, charger {}", now.percentage,
+              static_cast<u32>(now.charger));
+    for (const auto& session : bound) {
+        session->SignalBatteryChanged();
+    }
+
+    if (!system.GetAppletManager().IsHomeSession()) {
+        return;
+    }
+    if (notices.charger_changed) {
+        SendOverlayNotice(OverlayTagChargerChanged, now);
+    }
+    if (notices.low) {
+        SendOverlayNotice(OverlayTagBatteryLow, now);
+    }
+}
+
+void PSM::SendOverlayNotice(u32 tag, const BatteryState& state) {
+    // psc's own sender on the overlay's source, as on a console (the SDK default sender).
+    const auto payload = BatteryNoticePayload(state);
+    const PSC::OverlayNotification message = PSC::MakeNotification(tag, payload);
+    const u64 tick = system.CoreTiming().GetClockTicks();
+
+    auto& agent = PSC::GetOvlnAgent();
+    PSC::OvlnStatus status = PSC::OvlnStatus::InvalidArgument;
+    std::scoped_lock lk{battery_mutex};
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (!ovln_sender) {
+            PSC::SourceName name{};
+            constexpr std::string_view source = "overlay";
+            std::copy(source.begin(), source.end(), name.name.begin());
+            if (agent.OpenSender(name, OverlaySenderQueueLength, ovln_sender) !=
+                PSC::OvlnStatus::Success) {
+                ovln_sender.reset();
+                break;
+            }
+        }
+        status = agent.Send(*ovln_sender, OverlaySendOption, message, tick);
+        if (status != PSC::OvlnStatus::InvalidArgument) {
+            break;
+        }
+        // A new ovln session closed this sender (OvlnAgent::Reset): open another, once.
+        ovln_sender.reset();
+    }
+    LOG_INFO(Service_PTM, "psm: overlay notice {} ({}%, charger {}) -> {}", tag, state.percentage,
+             static_cast<u32>(state.charger),
+             status == PSC::OvlnStatus::Success ? "queued" : "not queued");
+}
 
 void PSM::GetBatteryChargePercentage(HLERequestContext& ctx) {
     LOG_DEBUG(Service_PTM, "called");
 
-    u32 percentage = 100;
-
-    Common::PowerStatus power_status = Common::GetPowerStatus();
-
-    if (power_status.has_battery && power_status.percentage >= 0) {
-        percentage = static_cast<u32>(power_status.percentage);
-    }
-
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push<u32>(percentage);
+    rb.Push<u32>(ReadBattery().percentage);
 }
 
 void PSM::GetChargerType(HLERequestContext& ctx) {
     LOG_DEBUG(Service_PTM, "called");
 
-    ChargerType charger = ChargerType::Unplugged;
-    Common::PowerStatus power_status = Common::GetPowerStatus();
-    if (power_status.has_battery && power_status.charging) {
-        charger = ChargerType::RegularCharger;
-    }
-
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.PushEnum(charger);
+    rb.PushEnum(ReadBattery().charger);
 }
 
 void PSM::OpenSession(HLERequestContext& ctx) {
     LOG_DEBUG(Service_PTM, "called");
 
+    auto session = std::make_shared<IPsmSession>(system);
+    {
+        std::scoped_lock lk{battery_mutex};
+        sessions.push_back(session);
+    }
+
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
     rb.Push(ResultSuccess);
-    rb.PushIpcInterface<IPsmSession>(ctx, system);
+    rb.PushIpcInterface<IPsmSession>(ctx, std::move(session));
 }
 
 void PSM::GetBatteryVoltageState(HLERequestContext& ctx) {
@@ -230,21 +345,20 @@ struct BatteryChargeInfoFields {
 static_assert(sizeof(struct BatteryChargeInfoFields) == 0x54);
 void PSM::GetBatteryChargeInfoFields(HLERequestContext& ctx) {
     LOG_DEBUG(Service_PTM, "called");
-    Common::PowerStatus power_status = Common::GetPowerStatus();
+    const BatteryState battery = ReadBattery();
 
     BatteryChargeInfoFields r{};
-    r.battery_charge_percentage = f32(power_status.percentage); //100%
-    r.battery_age_percentage = f32(power_status.percentage); //100%
-    r.battery_charging = power_status.charging ? 1 : 0;
-    r.charger_type = u32(power_status.has_battery && power_status.charging
-        ? ChargerType::RegularCharger : ChargerType::Unplugged);
+    r.battery_charge_percentage = f32(battery.percentage);
+    r.battery_age_percentage = 100.f;
+    r.battery_charging = battery.charger != ChargerType::Unplugged ? 1 : 0;
+    r.charger_type = u32(battery.charger);
     r.charger_input_voltage_limit = 100;
     r.charger_input_voltage_limit = 100;
     r.input_current_limit = 100;
     r.boost_mode_current_limit = 100;
     r.fast_charge_current_limit = 100;
 
-    IPC::ResponseBuilder rb{ctx, 3};
+    IPC::ResponseBuilder rb{ctx, 2 + sizeof(BatteryChargeInfoFields) / sizeof(u32)};
     rb.Push(ResultSuccess);
     rb.PushRaw<BatteryChargeInfoFields>(r);
 }
