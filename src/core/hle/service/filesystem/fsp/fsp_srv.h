@@ -30,6 +30,9 @@ class SaveDataController;
 class IFileSystem;
 class ISaveDataInfoReader;
 class ISaveDataTransferProhibiter;
+namespace SaveTransfer {
+class ISaveDataTransferManagerVersion2;
+}
 class IStorage;
 class IMultiCommitManager;
 
@@ -104,6 +107,8 @@ private:
         FileSys::SaveDataAttribute attribute) const;
     Result FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
                             FileSys::SaveDataSpaceId space_id, u64 save_data_id) const;
+    Result GetSaveDataCommitId(Out<s64> out_commit_id, FileSys::SaveDataSpaceId space_id,
+                               u64 save_data_id);
     Result ReadExtraDataById(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                              FileSys::SaveDataSpaceId space_id, u64 save_data_id);
     Result ReadExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
@@ -112,6 +117,8 @@ private:
     Result WriteExtraData(FileSys::SaveDataSpaceId space_id,
                           const FileSys::SaveDataAttribute& attribute, std::span<const u8> data,
                           std::span<const u8> mask);
+    Result OpenSaveDataTransferManagerVersion2(
+        OutInterface<SaveTransfer::ISaveDataTransferManagerVersion2> out_manager);
     Result OpenSaveDataTransferProhibiter(OutInterface<ISaveDataTransferProhibiter> out_prohibiter,
                                           u64 id);
     Result OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_interface);

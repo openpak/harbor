@@ -96,6 +96,12 @@ struct Applet {
 
     // Common state
     bool sleep_lock_enabled{};
+    // Sleep lock (ICommonStateGetter 10-13), as the 23.0.1 am keeps it: how often it was
+    // requested, whether am has granted it (sleep_lock_event signalled), and the sleep sequence
+    // whose RequestToPrepareSleep the applet has not answered with a release yet (0 for none).
+    u32 sleep_lock_count{};
+    bool sleep_lock_granted{};
+    u64 sleep_prepare_request_id{};
     // ISelfController 62/64/65: what the applet asked of the idle timer (sleep and dimming times
     // handheld/console, in seconds) and when it last reported the user active.
     std::array<s32, 4> auto_sleep_time_override{};

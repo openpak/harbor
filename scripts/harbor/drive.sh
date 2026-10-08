@@ -8,7 +8,7 @@
 #
 # Commands (a command word starts a new command; arguments follow it):
 #   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
-#   home   home-long   capture   power   screenshot <png>   threads   quit
+#   home   home-long   capture   power   power-tap   screenshot <png>   threads   quit
 #   type <text>   type-line <file> <n>   key <name>   detach   attach   dock   terminate
 #   layout <us|uk|auto>   key-timing <hold ms> <gap ms>
 #   sleep <seconds>       (handled here, not sent)
@@ -39,7 +39,7 @@ FIFO="$RUN/control"
 
 is_command() {
     case "$1" in
-        press|hold|release|stick|home|home-long|capture|power|screenshot|threads|quit|sleep|type|type-line|key|detach|attach|layout|key-timing|terminate|dock) return 0 ;;
+        press|hold|release|stick|home|home-long|capture|power|power-tap|screenshot|threads|quit|sleep|type|type-line|key|detach|attach|layout|key-timing|terminate|dock) return 0 ;;
         *) return 1 ;;
     esac
 }

@@ -48,6 +48,10 @@ public:
     Result WriteSaveDataExtraData(FileSys::SaveDataSpaceId space,
                                   const FileSys::SaveDataAttribute& attribute,
                                   const FileSys::SaveDataExtraData& extra_data);
+    /// A commit of the save's contents: a new commit id and the time stamp, as fs's journal
+    /// commit updates them (olsc compares both against the cloud).
+    void RecordSaveDataCommit(FileSys::SaveDataSpaceId space,
+                              const FileSys::SaveDataAttribute& attribute);
     /// The extra data fs writes when it creates a save.
     void InitializeSaveDataExtraData(FileSys::SaveDataSpaceId space,
                                      const FileSys::SaveDataAttribute& attribute, u64 owner_id,

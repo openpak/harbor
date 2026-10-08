@@ -134,9 +134,16 @@ Result IFileSystem::GetEntryType(
     R_SUCCEED();
 }
 
-Result IFileSystem::Commit() {
-    LOG_WARNING(Service_FS, "(STUBBED) called");
+void IFileSystem::SetCommitHook(std::function<void()> hook) {
+    commit_hook = std::move(hook);
+}
 
+Result IFileSystem::Commit() {
+    // Host writes land at once; a save's commit only moves its commit id and time stamp.
+    LOG_DEBUG(Service_FS, "called");
+    if (commit_hook) {
+        commit_hook();
+    }
     R_SUCCEED();
 }
 
