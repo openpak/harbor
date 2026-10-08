@@ -66,6 +66,9 @@ private:
     /// at the first volume command, when the session is known.
     bool UseConsoleGain();
     void ApplyConsoleGain();
+    /// The volume and mute the audio sysmodule keeps in set:sys (GetAudioVolume/SetAudioVolume).
+    void RestoreStoredVolume(Set::AudioOutputModeTarget target);
+    void StoreVolume(Set::AudioOutputModeTarget target);
 
     KernelHelpers::ServiceContext service_context;
 

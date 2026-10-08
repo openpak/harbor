@@ -224,12 +224,16 @@ Result IAudioController::IsSpeakerAutoMuteEnabled(Out<bool> out_is_speaker_auto_
 Result IAudioController::AcquireTargetNotification(
     OutCopyHandle<Kernel::KReadableEvent> out_notification_event) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
+    // qlaunch's first audctl calls at boot: the console's stored volume applies from here, as the
+    // audio sysmodule applies it at its own start.
+    UseConsoleGain();
 
     *out_notification_event = &notification_event->GetReadableEvent();
     R_SUCCEED();
 }
 Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_audio_controller) {
     LOG_DEBUG(Audio, "Creating duplicate audio controller interface");
+    UseConsoleGain();
 
     // Return a new reference to this controller instance
     *out_audio_controller = std::static_pointer_cast<IAudioController>(shared_from_this());
@@ -247,9 +251,12 @@ bool IAudioController::UseConsoleGain() {
         m_console_gain = system.GetAppletManager().IsHomeSession();
         if (*m_console_gain) {
             // The constructor seeded the targets and the sink from the host's volume: a console
-            // starts at its own full volume, unmuted, and the host's volume applies on its own.
+            // starts at the volume its audio sysmodule stored in set:sys (full and unmuted on a
+            // NAND that never stored one), and the host's volume applies on its own.
             m_target_volumes.fill(15);
             m_target_muted.fill(false);
+            RestoreStoredVolume(Set::AudioOutputModeTarget::Speaker);
+            RestoreStoredVolume(Set::AudioOutputModeTarget::Headphone);
             try {
                 auto& sink = system.AudioCore().GetOutputSink();
                 sink.SetSystemVolume(1.0f);
@@ -261,6 +268,49 @@ bool IAudioController::UseConsoleGain() {
         }
     }
     return *m_console_gain;
+}
+
+// The set:sys record of an output's volume (AudioVolumeTarget), for the targets that have one.
+static std::optional<Set::AudioVolumeTarget> VolumeRecordFor(Set::AudioOutputModeTarget target) {
+    switch (target) {
+    case Set::AudioOutputModeTarget::Speaker:
+        return Set::AudioVolumeTarget::Speaker;
+    case Set::AudioOutputModeTarget::Headphone:
+        return Set::AudioVolumeTarget::Headphone;
+    default:
+        return std::nullopt;
+    }
+}
+
+void IAudioController::RestoreStoredVolume(Set::AudioOutputModeTarget target) {
+    const auto record = VolumeRecordFor(target);
+    if (!record || !m_set_sys) {
+        return;
+    }
+    const auto stored = m_set_sys->GetStoredAudioVolume(*record);
+    if (!stored) {
+        return;
+    }
+    const auto idx = static_cast<size_t>(target);
+    m_target_volumes[idx] = std::clamp<s32>(stored->volume, 0, 15);
+    m_target_muted[idx] = (stored->flags & 1) != 0;
+    LOG_INFO(Audio, "audctl: target {} restored to volume {}/15{}", static_cast<u32>(target),
+             m_target_volumes[idx], m_target_muted[idx] ? ", muted" : "");
+}
+
+void IAudioController::StoreVolume(Set::AudioOutputModeTarget target) {
+    const auto record = VolumeRecordFor(target);
+    if (!record || !m_set_sys) {
+        return;
+    }
+    const auto idx = static_cast<size_t>(target);
+    Set::AudioVolume volume{};
+    if (const auto stored = m_set_sys->GetStoredAudioVolume(*record)) {
+        volume.flags = stored->flags;
+    }
+    volume.flags = (volume.flags & ~1u) | (m_target_muted[idx] ? 1u : 0u);
+    volume.volume = static_cast<u8>(m_target_volumes[idx]);
+    (void)m_set_sys->SetAudioVolume(volume, *record);
 }
 
 void IAudioController::ApplyConsoleGain() {
@@ -305,6 +355,7 @@ Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 
     m_target_volumes[idx] = target_volume;
 
     if (console_gain) {
+        StoreVolume(target);
         if (m_active_target == target) {
             ApplyConsoleGain();
         }
@@ -363,6 +414,7 @@ Result IAudioController::SetTargetMute(bool is_muted, Set::AudioOutputModeTarget
     m_target_muted[idx] = is_muted;
 
     if (console_gain) {
+        StoreVolume(target);
         if (m_active_target == target) {
             ApplyConsoleGain();
         }

@@ -42,6 +42,15 @@ enum class AudioVolumeTarget : u32 {
     Headphone,
 };
 
+/// This is nn::settings::system::AudioVolume (libnx SetSysAudioVolume: a u32 of flags, then the
+/// 0-15 volume). Harbor keeps the mute in bit 0 of the flags.
+struct AudioVolume {
+    u32 flags;
+    u8 volume;
+    INSERT_PADDING_BYTES_NOINIT(3);
+};
+static_assert(sizeof(AudioVolume) == 0x8, "AudioVolume is an invalid size");
+
 /// This is nn::settings::system::ClockSourceId
 enum class ClockSourceId : u32 {
     NetworkSystemClock,
