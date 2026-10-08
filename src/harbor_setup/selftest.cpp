@@ -21,6 +21,7 @@
 #include "harbor_setup/driver_catalog.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/keys.h"
+#include "harbor_setup/menu_input.h"
 #include "harbor_setup/record.h"
 #include "harbor_setup/wizard.h"
 
@@ -378,6 +379,43 @@ void TestChime() {
 
 } // namespace
 
+static void TestInputStore(const std::filesystem::path& dir) {
+    const auto path = dir / "harbor-input.json";
+    Common::ParamPackage pad{{"engine", "sdl"}, {"guid", "030000005e0400008e02000014010000"}, {"port", "1"},
+                             {"display", "Xbox pad 1"}};
+    Common::ParamPackage keyboard{{"engine", "keyboard"}, {"display", "Keyboard"}};
+    Check(InputStore::DeviceKey(pad) == "sdl:030000005e0400008e02000014010000", "input: a pad is kept by GUID");
+    Check(InputStore::DeviceKey(keyboard) == "keyboard", "input: the keyboard has one entry");
+    {
+        InputStore store(path);
+        InputStore::Profile profile;
+        profile.buttons[0] = "engine:sdl,guid:030000005e0400008e02000014010000,port:1,button:1";
+        profile.analogs[0] = "engine:sdl,guid:030000005e0400008e02000014010000,port:1,axis_x:0,axis_y:1";
+        store.Put(InputStore::DeviceKey(pad), profile);
+        store.SetPower("engine:keyboard,code:80,toggle:0");
+        Check(store.Save(), "input: store saved");
+    }
+    InputStore loaded(path);
+    const auto profile = loaded.Find(InputStore::DeviceKey(pad));
+    Check(profile.has_value() && profile->buttons[0].find("button:1") != std::string::npos,
+          "input: a pad's mapping loads back");
+    Check(loaded.Power() == "engine:keyboard,code:80,toggle:0", "input: the Power binding loads back");
+    Check(!loaded.Find("sdl:other").has_value(), "input: an unknown pad has no saved mapping");
+
+    // The same pad on another port gets its mapping moved there.
+    Common::ParamPackage moved_pad = pad;
+    moved_pad.Set("port", 3);
+    const Common::ParamPackage moved{RetargetParam(profile->buttons[0], moved_pad)};
+    Check(moved.Get("port", 0) == 3 && moved.Get("button", 0) == 1, "input: a saved mapping follows the pad's port");
+    const Common::ParamPackage keys{RetargetParam(
+        "engine:analog_from_button,up:engine$0sdl$1guid$0030000005e0400008e02000014010000$1port$01$1button$03,"
+        "modifier_scale:0.5",
+        moved_pad)};
+    Check(Common::ParamPackage{keys.Get("up", "")}.Get("port", 0) == 3, "input: a stick from buttons follows too");
+    Check(RetargetParam("engine:keyboard,code:65", moved_pad) == "engine:keyboard,code:65",
+          "input: another device's binding is left alone");
+}
+
 int main() {
     const char* tmp = std::getenv("TMPDIR");
     const auto dir = std::filesystem::path(tmp ? tmp : ".") / "harbor-setup-selftest";
@@ -392,6 +430,7 @@ int main() {
     TestPickerBackAndDriverPage(dir);
     TestConsoleTheme(dir);
     TestChime();
+    TestInputStore(dir);
 
     std::filesystem::remove_all(dir);
     if (failures) {

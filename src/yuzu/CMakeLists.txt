@@ -164,6 +164,8 @@ add_executable(yuzu
     harbor_desktop.cpp
     harbor_desktop.h
     harbor_control.h
+    harbor_menu.cpp
+    harbor_menu.h
     harbor_system_keys.cpp
     harbor_system_keys.h
     hotkeys.cpp
@@ -471,3 +473,7 @@ endif()
 target_link_libraries(yuzu PRIVATE OpenSSL::SSL OpenSSL::Crypto SDL3::SDL3)
 
 create_target_directory_groups(yuzu)
+
+# The Harbor menu's console backup zips the NAND with qt_common's QuaZip helpers.
+target_sources(yuzu PRIVATE harbor_console_menu.cpp harbor_console_menu.h)
+target_link_libraries(yuzu PRIVATE QuaZip::QuaZip)

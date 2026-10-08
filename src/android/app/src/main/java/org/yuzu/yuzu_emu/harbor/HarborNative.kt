@@ -71,6 +71,18 @@ object HarborNative {
     /** The console's power button held: HOME's overlay opens its power menu. */
     external fun pressPower()
 
+    /** Whether a recommended driver exists for this GPU (T30 on an Adreno 6xx). */
+    external fun hasRecommendedDriver(): Boolean
+
+    /** Why an installed driver does not fit this GPU, or "". */
+    external fun driverProblem(name: String, library: String, minApi: Int): String
+
+    /** Downloads, installs and selects the recommended driver: [id, name, error]. Not on the UI thread. */
+    external fun installRecommendedDriver(): Array<String>
+
+    /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
+    external fun powerShortPress()
+
     /** The console's output gain for Android's audio focus: 1 full, 0.25 ducked, 0 muted. */
     external fun setHostGain(gain: Float)
 
@@ -79,6 +91,41 @@ object HarborNative {
 
     /** The console's saved theme: 1 Basic Black, 0 Basic White, -1 before its first boot. */
     external fun savedConsoleTheme(): Int
+    /** The console's NAND directory, which a console backup holds. */
+    external fun nandDirectory(): String
+
+    /** The device key sealed with `passphrase` into the NAND for a backup about to be taken. */
+    external fun sealDeviceKey(passphrase: String): Boolean
+
+    /** The sealed device key out of the live NAND again. */
+    external fun removeSealedDeviceKey()
+
+    /** Read the calibration again (the NAND was replaced). */
+    external fun reloadCalibration()
+
+    /** A restored NAND whose device key waits for its backup's passphrase. */
+    external fun deviceKeyRestorePending(): Boolean
+
+    /** 0 restored, 1 wrong passphrase, 2 no sealed key in the NAND, 3 the key could not be kept. */
+    external fun restoreDeviceKey(passphrase: String): Int
+
+    /** A fresh calibration and device key; this console's OpenPak credentials dropped. */
+    external fun makeNewConsole(): Boolean
+
+    /** Once a console boots: the Harbor menu's host and the mapped Power button (harbor_menu_android.cpp). */
+    external fun initMenu()
+
+    /** Opens the Harbor menu on the console's screen: 0 the menu, 1 Settings, 2 frame generation, 3 controllers. */
+    external fun openMenu(page: Int)
+
+    /** Closes it: the console's picture and its controllers come back. */
+    external fun closeMenu()
+
+    /** Whether the Harbor menu is open. */
+    external fun menuOpen(): Boolean
+
+    /** Android back while the menu is open: the menu's own Back (on its top level it closes). */
+    external fun menuBack()
 
     /** The console's picture on the emulation surface (left, top, right, bottom), empty while none runs. */
     external fun pictureRect(): IntArray

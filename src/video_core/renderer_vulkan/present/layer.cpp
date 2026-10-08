@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include <variant>
 #include "video_core/present.h"
 #include "video_core/renderer_vulkan/present/anti_alias_pass.h"
@@ -14,6 +15,7 @@
 
 #include "common/settings.h"
 #include "video_core/framebuffer_config.h"
+#include "video_core/host_screen.h"
 #include "video_core/renderer_vulkan/present/fsr.h"
 #include "video_core/renderer_vulkan/present/sgsr.h"
 #include "video_core/renderer_vulkan/present/fxaa.h"
@@ -87,8 +89,12 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
                           VkSampler sampler, size_t image_index,
                           const Tegra::FramebufferConfig& framebuffer,
                           const Layout::FramebufferLayout& layout) {
-    const auto texture_info = rasterizer.AccelerateDisplay(
-        framebuffer, framebuffer.address + framebuffer.offset, framebuffer.stride);
+    // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
+    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress;
+    const auto texture_info =
+        host_screen ? std::nullopt
+                    : rasterizer.AccelerateDisplay(framebuffer, framebuffer.address + framebuffer.offset,
+                                                   framebuffer.stride);
     const u32 texture_width = texture_info ? texture_info->width : framebuffer.width;
     const u32 texture_height = texture_info ? texture_info->height : framebuffer.height;
     const u32 scaled_width = texture_info ? texture_info->scaled_width : texture_width;
@@ -337,8 +343,20 @@ void Layer::UpdateRawImage(const Tegra::FramebufferConfig& framebuffer, size_t i
 
     const u64 image_offset = GetRawImageOffset(framebuffer, image_index);
 
+    // Harbor's host screen: linear RGBA rows, copied as they are.
+    if (framebuffer.address == VideoCore::HostScreen::HostAddress) {
+        const auto frame = VideoCore::HostScreen::Current();
+        const u64 size = u64{framebuffer.width} * framebuffer.height * 4;
+        if (frame && frame->width == framebuffer.width && frame->height == framebuffer.height &&
+            frame->rgba.size() >= size) {
+            std::memcpy(mapped_span.data() + image_offset, frame->rgba.data(), size);
+            buffer.Flush();
+        }
+    }
     const DAddr framebuffer_addr = framebuffer.address + framebuffer.offset;
-    const u8* const host_ptr = device_memory.GetPointer<u8>(framebuffer_addr);
+    const u8* const host_ptr = framebuffer.address == VideoCore::HostScreen::HostAddress
+                                   ? nullptr
+                                   : device_memory.GetPointer<u8>(framebuffer_addr);
 
     // TODO(Rodrigo): Read this from HLE
     constexpr u32 block_height_log2 = 4;

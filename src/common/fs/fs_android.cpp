@@ -22,6 +22,10 @@ void RegisterCallbacks(JNIEnv* env, jclass clazz) {
     s_file_exists = env->GetStaticMethodID(native_library, "exists", "(Ljava/lang/String;)Z");
     s_open_content_uri = env->GetStaticMethodID(native_library, "openContentUri",
                                                 "(Ljava/lang/String;Ljava/lang/String;)I");
+    s_can_delete_document =
+        env->GetStaticMethodID(native_library, "canDeleteDocument", "(Ljava/lang/String;)Z");
+    s_delete_document =
+        env->GetStaticMethodID(native_library, "deleteDocument", "(Ljava/lang/String;)Z");
 }
 
 void UnRegisterCallbacks() {
@@ -33,6 +37,8 @@ void UnRegisterCallbacks() {
     s_file_exists = nullptr;
 
     s_open_content_uri = nullptr;
+    s_can_delete_document = nullptr;
+    s_delete_document = nullptr;
 }
 
 bool IsContentUri(const std::string& path) {
@@ -117,6 +123,24 @@ std::string GetFilename(const std::string& filepath) {
         return {};
     }
     return Common::Android::GetJString(env, j_return);
+}
+
+bool CanDeleteDocument(const std::string& filepath) {
+    if (s_can_delete_document == nullptr) {
+        return false;
+    }
+    auto env = Common::Android::GetEnvForThread();
+    return env->CallStaticBooleanMethod(native_library, s_can_delete_document,
+                                        Common::Android::ToJString(env, filepath));
+}
+
+bool DeleteDocument(const std::string& filepath) {
+    if (s_delete_document == nullptr) {
+        return false;
+    }
+    auto env = Common::Android::GetEnvForThread();
+    return env->CallStaticBooleanMethod(native_library, s_delete_document,
+                                        Common::Android::ToJString(env, filepath));
 }
 
 } // namespace Common::FS::Android

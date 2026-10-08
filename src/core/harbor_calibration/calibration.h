@@ -32,6 +32,9 @@ public:
     /// follows the NAND directory if it changes.
     static const Calibration& Get();
 
+    /// Read again on the next Get() (the binary or the device key changed on disk).
+    static void Reload();
+
     /// The whole binary (0x8000 bytes, CAL0), as set:cal and a BIS CalibrationBinary read see it.
     std::span<const u8> Binary() const {
         return binary;
@@ -55,9 +58,37 @@ public:
     Cal0::DeviceKey DeriveDeviceKey(std::string_view label) const;
 
 private:
+    friend bool WriteDeviceKeyBackup(std::string_view passphrase);
+    friend bool DeviceKeyRestorePending();
+
     std::vector<u8> binary;
     Cal0::DeviceKey device_key{};
+    bool keys_pending = false; ///< a restored NAND whose sealed device key waits for its passphrase
 };
+
+// Console backups. A NAND backup carries the device key sealed with a passphrase the user chooses
+// (scrypt, AES-256-GCM), at <nand>/calibration/device-key.hbk; the passphrase is never kept.
+// Restoring it puts the key back in this host's password store, so the restored console is the
+// same console.
+
+/// Seal this console's device key into the NAND for a backup about to be taken.
+bool WriteDeviceKeyBackup(std::string_view passphrase);
+
+/// The sealed key out of the live NAND once the backup is taken (or restored).
+void RemoveDeviceKeyBackup();
+
+/// A restored NAND whose device key is not in this host's store and that carries a sealed one.
+bool DeviceKeyRestorePending();
+
+enum class RestoreResult { Restored, WrongPassphrase, NoBackup, Failed };
+
+/// Open the NAND's sealed device key with `passphrase` and keep it in this host's store.
+RestoreResult RestoreDeviceKey(std::string_view passphrase);
+
+/// Make this NAND a new console: a fresh calibration and device key, the old console's
+/// credentials dropped (password store and this process). Firmware users and saves stay; the
+/// users link their Nintendo Accounts again. The emulated console must be stopped.
+bool MakeNewConsole();
 
 /// Keep OpenPak's secrets (credentials, tokens, registrations) under this NAND's own namespace in
 /// the host password store, so consoles on one host never share them. Call before any of them is

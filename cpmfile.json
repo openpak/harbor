@@ -20,7 +20,8 @@
         "patches": [
             "0001-no-jni-onload.patch",
             "0002-no-android-cjk-font.patch",
-            "0003-harbor-navigation-repeat.patch"
+            "0003-harbor-navigation-repeat.patch",
+            "0004-harbor-platform-factory.patch"
         ],
         "repo": "XITRIX/borealis",
         "version": "8c1f1093ee41a461d9d3bdd6dd2f6dfec166ab7a"

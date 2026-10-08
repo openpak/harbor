@@ -10,6 +10,8 @@
 #include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/common_funcs.h"
+#include "core/file_sys/errors.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -27,12 +29,20 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
+
+#ifdef __ANDROID__
+#include "common/fs/fs_android.h"
+#elif !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 namespace Service::NS {
 
@@ -103,6 +113,57 @@ void LogRecordOrder(const std::vector<ApplicationRecord>& records) {
     }
     LOG_INFO(Service_NS, "HOME library: {} application record(s), most recent first: {}",
              ids.size(), order);
+}
+
+// Delete Software for a title from the library folders: the files its records came from.
+#ifdef __ANDROID__
+bool IsContentUri(const std::string& path) {
+    return Common::FS::Android::IsContentUri(path);
+}
+#endif
+
+u64 LibraryFileSize(const std::string& path) {
+#ifdef __ANDROID__
+    if (IsContentUri(path)) {
+        return Common::FS::Android::GetSize(path);
+    }
+#endif
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(std::filesystem::path{path}, ec);
+    return ec ? 0 : static_cast<u64>(size);
+}
+
+// Deleting a file needs write access to its folder (desktop) or a SAF grant whose provider
+// supports deleting it (Android). A folder is never deleted.
+bool CanDeleteLibraryFile(const std::string& path) {
+#ifdef __ANDROID__
+    if (IsContentUri(path)) {
+        return Common::FS::Android::CanDeleteDocument(path);
+    }
+#endif
+    const std::filesystem::path file{path};
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(file, ec);
+    if (ec || std::filesystem::is_directory(status) || !std::filesystem::exists(status)) {
+        return false;
+    }
+#ifdef _WIN32
+    return (status.permissions() & std::filesystem::perms::owner_write) !=
+           std::filesystem::perms::none;
+#else
+    const auto parent = file.parent_path();
+    return ::access(parent.empty() ? "." : parent.c_str(), W_OK | X_OK) == 0;
+#endif
+}
+
+bool DeleteLibraryFile(const std::string& path) {
+#ifdef __ANDROID__
+    if (IsContentUri(path)) {
+        return Common::FS::Android::DeleteDocument(path);
+    }
+#endif
+    std::error_code ec;
+    return std::filesystem::remove(std::filesystem::path{path}, ec) && !ec;
 }
 
 } // Anonymous namespace
@@ -837,13 +898,9 @@ Result IApplicationManagerInterface::IsAnyApplicationEntityInstalled(
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id) {
-    LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
-
-    // Content installed on the emulated NAND or SD card is removed, as on a console. A title
-    // found in the user's library folders is never deleted from them: HOME shows its success
-    // notice and the tile stays, because the files are still in the folder (archive and delete
-    // have no Harbor equivalent for folder content).
+// Removes the application's content installed on the emulated NAND or SD card. Returns whether
+// there was any.
+bool IApplicationManagerInterface::RemoveInstalledContent(u64 application_id) {
     auto& fsc = system.GetFileSystemController();
     bool installed = false;
     if (auto* const user_cache = fsc.GetUserNANDContents(); user_cache != nullptr) {
@@ -856,7 +913,16 @@ Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id)
         sdmc_cache->RemoveExistingEntry(application_id);
         sdmc_cache->Refresh();
     }
-    if (!installed) {
+    return installed;
+}
+
+Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id) {
+    LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
+
+    // Archive Software. Content installed on the emulated NAND or SD card is removed, as on a
+    // console. A title from the library folders keeps its files: HOME shows its success notice
+    // and the tile stays (what archiving means for folder content is not decided yet).
+    if (!RemoveInstalledContent(application_id)) {
         LOG_WARNING(Service_NS,
                     "HOME library: {:016X} is not installed on the NAND or SD card; the files in "
                     "the library folders stay and so does its tile",
@@ -867,8 +933,99 @@ Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id)
     R_SUCCEED();
 }
 
+// Delete Software, as on a Switch: after the firmware's own confirmation the software leaves
+// the console's storage, which for a title from the library folders means its own files there
+// (the base, its updates and its DLC: each NSP, XCI or loose NCA its records came from), never a
+// folder or another title's file. Save data stays. Every file is checked first, so a file that
+// cannot go leaves everything in place.
 Result IApplicationManagerInterface::DeleteApplicationCompletely(u64 application_id) {
-    R_RETURN(DeleteApplicationEntity(application_id));
+    LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
+    const u64 base = FileSys::GetBaseTitleID(application_id);
+    const auto belongs = [base](u64 id) { return FileSys::GetBaseTitleID(id) == base; };
+
+    if (belongs(system.GetApplicationProcessProgramID())) {
+        LOG_WARNING(Service_NS, "HOME library: {:016X} is running; nothing deleted",
+                    application_id);
+        R_THROW(FileSys::ResultPermissionDenied);
+    }
+
+    auto& content = system.GetContentProviderUnion();
+    auto* const manual = static_cast<FileSys::ManualContentProvider*>(
+        content.GetSlotProvider(FileSys::ContentProviderUnionSlot::FrontendManual));
+    auto* const external = system.GetFileSystemController().GetExternalContentProvider();
+
+    std::map<std::string, u64> files;
+    bool shared = false;
+    const auto collect = [&](const FileSys::ContentSourceFiles& sources) {
+        for (const auto& [path, title_ids] : sources) {
+            if (std::none_of(title_ids.begin(), title_ids.end(), belongs)) {
+                continue;
+            }
+            // A file that also holds another title's content is not this title's to delete.
+            shared |= !std::all_of(title_ids.begin(), title_ids.end(), belongs);
+            files.emplace(path, 0);
+        }
+    };
+    if (manual != nullptr) {
+        collect(manual->GetSourceFiles());
+    }
+    if (external != nullptr) {
+        collect(external->GetSourceFiles());
+    }
+
+    if (shared) {
+        LOG_WARNING(Service_NS,
+                    "HOME library: a file of {:016X} also holds another title; nothing deleted",
+                    application_id);
+        R_THROW(FileSys::ResultPermissionDenied);
+    }
+    size_t blocked = 0;
+    for (auto& [path, size] : files) {
+        if (!CanDeleteLibraryFile(path)) {
+            ++blocked;
+            continue;
+        }
+        size = LibraryFileSize(path);
+    }
+    if (blocked != 0) {
+        LOG_WARNING(Service_NS,
+                    "HOME library: {} of {} file(s) of {:016X} cannot be deleted (read-only or no "
+                    "access); nothing deleted",
+                    blocked, files.size(), application_id);
+        LOG_UNKNOWN_CONTRACT(Service_NS, "ns 5 DeleteApplicationCompletely failure Result (the "
+                                         "code a console shows for a failed delete); answering "
+                                         "fs 2002-6400");
+        R_THROW(FileSys::ResultPermissionDenied);
+    }
+
+    size_t deleted = 0;
+    u64 deleted_bytes = 0;
+    for (const auto& [path, size] : files) {
+        if (!DeleteLibraryFile(path)) {
+            LOG_ERROR(Service_NS, "HOME library: deleting a file of {:016X} failed after the check",
+                      application_id);
+            continue;
+        }
+        ++deleted;
+        deleted_bytes += size;
+    }
+
+    if (manual != nullptr) {
+        manual->RemoveApplication(base);
+    }
+    if (external != nullptr) {
+        external->RemoveApplication(base);
+    }
+    LOG_INFO(Service_NS, "HOME library: deleted {:016X}: {} of {} file(s), {} bytes; save data kept",
+             application_id, deleted, files.size(), deleted_bytes);
+
+    // Content installed on the emulated NAND or SD card goes as before.
+    RemoveInstalledContent(application_id);
+    NotifyApplicationRecordsChanged();
+    if (deleted != files.size()) {
+        R_THROW(FileSys::ResultPermissionDenied);
+    }
+    R_SUCCEED();
 }
 
 Result IApplicationManagerInterface::GetApplicationViewDeprecated(

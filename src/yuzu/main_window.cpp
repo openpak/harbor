@@ -42,10 +42,11 @@
 #include "frontend_common/joycon_rails.h"
 #include "frontend_common/secret_store.h"
 #include "common/harbor_crash.h"
+#include "yuzu/harbor_console_menu.h"
 #include "harbor_control.h"
 #include "harbor_desktop.h"
 #ifdef HAS_LSFG
-#include "harbor_frame_gen.h"
+#include "harbor_menu.h"
 #endif
 #include "harbor_system_keys.h"
 #include "loading_screen.h"
@@ -568,6 +569,48 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         HarborSetJoyconsDetached(!FrontendCommon::JoyconsDetached(QtCommon::system->HIDCore()));
     });
 
+    // The Harbor menu, drawn onto the console's screen: F1, or Plus and Minus together.
+    harbor_menu = std::make_unique<HarborMenu>(
+        this, *input_subsystem,
+        HarborMenu::Hooks{
+            .restart =
+                [this] {
+                    ShutdownGame();
+                    if (harbor_console) {
+                        HarborRestartConsole();
+                    } else {
+                        LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
+                    }
+                },
+            .exit = [this] { close(); },
+            .save_config = [this] { OnSaveConfig(); },
+            .fps_shown = [] { return UISettings::values.show_perf_overlay.GetValue(); },
+            .show_fps =
+                [this](bool show) {
+                    ui->action_Show_Performance_Overlay->setChecked(show);
+                    UISettings::values.show_perf_overlay = show;
+                    OnTogglePerfOverlay();
+                    OnSaveConfig();
+                },
+            .joycons = [](bool detached) { HarborSetJoyconsDetached(detached); },
+            .change_dll =
+                [this](std::function<void()> change) {
+                    const bool was_running = emulation_running;
+                    ShutdownGame();
+                    change();
+                    if (was_running && harbor_console) {
+                        HarborRestartConsole();
+                    }
+                },
+            .console_action = [this](const std::string& name) { HarborConsoleAction(name); },
+        });
+    auto* menu_shortcut = new QShortcut(QKeySequence(Qt::Key_F1), this);
+    menu_shortcut->setContext(Qt::ApplicationShortcut);
+    connect(menu_shortcut, &QShortcut::activated, this, [this] {
+        LOG_INFO(Frontend, "harbor: menu asked for by F1");
+        harbor_menu->Toggle();
+    });
+
     // Test harness: HARBOR_CONTROL=<fifo path> accepts input, screenshot and dump commands.
     harbor_control = HarborControl::CreateFromEnvironment(
         this, *input_subsystem,
@@ -592,8 +635,22 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             },
             .menu =
                 [this](const std::string& name) {
-                    if (name == "frame-gen" && harbor_frame_gen_action) {
-                        harbor_frame_gen_action->trigger();
+                    using HarborSetup::MenuPage;
+                    if (name == "harbor") {
+                        HarborSetup::MenuOpen(MenuPage::Menu);
+                    } else if (name == "settings") {
+                        HarborSetup::MenuOpen(MenuPage::Settings);
+                    } else if (name == "frame-gen") {
+                        HarborSetup::MenuOpen(MenuPage::FrameGeneration);
+                    } else if (name == "controllers") {
+                        HarborSetup::MenuOpen(MenuPage::Controllers);
+                    } else if (name == "close") {
+                        HarborSetup::MenuClose();
+                    } else if (name == "back") {
+                        HarborSetup::MenuBack();
+                    } else if (name == "backup" || name == "restore" || name == "new-console") {
+                        // The Harbor pane's console entries (they stop the console first).
+                        HarborConsoleAction(name);
                     } else {
                         LOG_WARNING(Frontend, "harbor-control: no menu entry \"{}\"", name);
                     }
@@ -733,7 +790,7 @@ void MainWindow::HarborRestartConsole() {
     game_list->PopulateAsync(UISettings::values.game_dirs);
 }
 
-/// The Harbor menu (console mode): host settings for the console as a whole.
+/// Console mode: Eden's rooms and lobby are hidden (the Harbor menu is drawn on the console's screen).
 void MainWindow::HarborAddMenu() {
     // No rooms or lobby in console mode: online play is the console's own, through OpenPak.
     ui->menu_Multiplayer->menuAction()->setVisible(false);
@@ -743,26 +800,26 @@ void MainWindow::HarborAddMenu() {
     multiplayer_state->setVisible(false);
     multiplayer_state->GetStatusText()->setVisible(false);
     multiplayer_state->GetStatusIcon()->setVisible(false);
-#ifdef HAS_LSFG
-    auto* menu = new QMenu(tr("&Harbor"), this);
-    ui->menubar->insertMenu(ui->menu_Help->menuAction(), menu);
-    // Frame generation (Lossless Scaling): the user's own Lossless.dll, then on/off and mode.
-    // Settings apply to whatever is presented, HOME or a title; a DLL change restarts the console.
-    harbor_frame_gen_action = menu->addAction(tr("&Frame generation..."), this, [this] {
-        HarborFrameGenDialog dialog(
-            this,
-            [this](std::function<void()> change) {
-                const bool was_running = emulation_running;
-                ShutdownGame();
-                change();
-                if (was_running) {
-                    HarborRestartConsole();
-                }
-            },
-            [this] { OnSaveConfig(); });
-        dialog.exec();
-    });
-#endif
+}
+
+/// Back up, restore or make a new console (the Harbor menu's Harbor pane and the harness): the
+/// console stops, the platform dialogs ask for the file and passphrase, the console starts again.
+void MainWindow::HarborConsoleAction(const std::string& name) {
+    const auto while_stopped = [this](std::function<void()> change) {
+        const bool was_running = emulation_running;
+        ShutdownGame();
+        change();
+        if (was_running) {
+            HarborRestartConsole();
+        }
+    };
+    if (name == "backup") {
+        HarborConsoleMenu::BackUp(this, while_stopped);
+    } else if (name == "restore") {
+        HarborConsoleMenu::Restore(this, while_stopped);
+    } else if (name == "new-console") {
+        HarborConsoleMenu::MakeNew(this, while_stopped);
+    }
 }
 
 void MainWindow::HarborStopOpenPak() {
@@ -775,6 +832,7 @@ void MainWindow::HarborStopOpenPak() {
 }
 
 MainWindow::~MainWindow() {
+    harbor_menu.reset();
     HarborStopOpenPak();
 
     // will get automatically deleted otherwise
@@ -2397,6 +2455,8 @@ void MainWindow::OnEmulationStopped() {
     render_window->hide();
     loading_screen->hide();
     loading_screen->Clear();
+    // The Harbor menu belongs to a running console.
+    HarborSetup::MenuClose();
     if (harbor_console) {
         // Harbor console mode shows no game list; a stopped-console page comes later. HOME's power
         // menu: a restart boots the console again, turning it off closes Harbor.

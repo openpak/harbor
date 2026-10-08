@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 
 #include "core/hle/service/am/am_types.h"
@@ -72,6 +73,18 @@ public:
     void PowerButtonMiddlePress();
     void ForceTerminateApplication();
 
+    // The power button pressed briefly (OnSystemButtonPress PowerButtonShortPressing): the console
+    // goes to sleep, or wakes when it sleeps. am keeps the state; the frontend's sleep handler
+    // pauses the guest and blanks the screen, and wakes it on the power button, HOME or any
+    // button by calling this again.
+    void PowerButtonShortPress();
+    [[nodiscard]] bool IsSleeping() const { return m_sleeping.load(); }
+    // Called when the console goes to sleep (true) or wakes (false), with am's locks held: the
+    // handler must only queue its work.
+    void SetSleepHandler(std::function<void(bool)> handler);
+    // From the window system (PowerButtonShortPressing in a HOME session).
+    void ToggleSleep();
+
     // The guest asked for a reboot or a shutdown (IGlobalStateController 3/4, IOverlayFunctions
     // 10/11). In a HOME session the applets end first (the window system's shutdown sequence),
     // then the session stops; the frontend reads this afterwards to start it again with the same
@@ -98,6 +111,10 @@ private:
     WindowSystem* m_window_system{};
     std::atomic<bool> m_home_session{};
     std::atomic<PowerRequest> m_power_request{PowerRequest::None};
+
+    std::atomic<bool> m_sleeping{};
+    std::mutex m_sleep_lock;
+    std::function<void(bool)> m_sleep_handler;
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};

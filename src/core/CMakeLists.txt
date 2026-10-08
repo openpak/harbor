@@ -136,6 +136,10 @@ add_library(core STATIC
     file_sys/romfs.h
     file_sys/romfs_factory.cpp
     file_sys/romfs_factory.h
+    file_sys/save_image/save_image.h
+    file_sys/save_image/save_image.cpp
+    file_sys/save_image/save_image_core.cpp
+    file_sys/save_image/save_image_core.h
     file_sys/savedata_factory.cpp
     file_sys/savedata_factory.h
     file_sys/sdmc_factory.cpp
@@ -1323,6 +1327,7 @@ else()
 endif()
 
 include(openpak/openpak.cmake)
+include(file_sys/save_image/save_image.cmake)
 include(harbor_calibration/calibration.cmake)
 
 create_target_directory_groups(core)

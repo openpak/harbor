@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 tobagin
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+<!-- Harbor's power button, pressed: dark disc, light glyph, as the HOME button's pressed art. -->
+<vector android:alpha="0.6" android:height="70.55dp"
+    android:viewportHeight="70.55" android:viewportWidth="70.55"
+    android:width="70.55dp" xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillAlpha="0.5" android:fillColor="#151515"
+        android:pathData="M35.27,35.27m-35.27,0a35.27,35.27 0,1 1,70.54 0a35.27,35.27 0,1 1,-70.54 0" />
+    <path android:strokeAlpha="0.75" android:strokeColor="#FFFFFFFF" android:strokeWidth="4"
+        android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M42.77,22.28 A15,15 0,1 1,27.77 22.28" />
+    <path android:strokeAlpha="0.75" android:strokeColor="#FFFFFFFF" android:strokeWidth="4"
+        android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M35.27,17.5 L35.27,34" />
+</vector>

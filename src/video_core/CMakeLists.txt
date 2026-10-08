@@ -62,6 +62,8 @@ add_library(video_core STATIC
     engines/puller.h
     framebuffer_config.cpp
     framebuffer_config.h
+    host_screen.cpp
+    host_screen.h
     fsr.cpp
     fsr.h
     host1x/codecs/decoder.cpp

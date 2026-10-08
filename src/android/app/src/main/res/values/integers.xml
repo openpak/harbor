@@ -39,6 +39,13 @@
     <integer name="STICK_L_Y">670</integer>
     <integer name="STICK_R_X">900</integer>
     <integer name="STICK_R_Y">670</integer>
+    <!-- Harbor: the power button, in the top-left corner. -->
+    <integer name="BUTTON_POWER_X">40</integer>
+    <integer name="BUTTON_POWER_Y">60</integer>
+    <integer name="BUTTON_POWER_X_PORTRAIT">60</integer>
+    <integer name="BUTTON_POWER_Y_PORTRAIT">60</integer>
+    <integer name="BUTTON_POWER_X_FOLDABLE">60</integer>
+    <integer name="BUTTON_POWER_Y_FOLDABLE">60</integer>
     <integer name="COMBINED_DPAD_X">260</integer>
     <integer name="COMBINED_DPAD_Y">790</integer>
 

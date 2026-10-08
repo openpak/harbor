@@ -37,6 +37,11 @@ public:
 
     void SignalRecordUpdate();
 
+private:
+    bool RemoveInstalledContent(u64 application_id);
+
+public:
+
     Result UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id);
     Result GetApplicationControlData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                      Out<u32> out_actual_size,

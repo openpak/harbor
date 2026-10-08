@@ -4,17 +4,8 @@
 #include <filesystem>
 #include <system_error>
 
-#include <QApplication>
-#include <QCheckBox>
-#include <QComboBox>
-#include <QDialogButtonBox>
 #include <QFileDialog>
-#include <QFormLayout>
-#include <QHBoxLayout>
-#include <QLabel>
 #include <QMessageBox>
-#include <QPushButton>
-#include <QVBoxLayout>
 
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -29,10 +20,6 @@
 namespace {
 
 using VideoCore::FrameGen::LosslessStatus;
-
-constexpr int Multipliers[] = {2, 3, 4};
-constexpr int TargetRates[] = {0, 60, 90, 120};
-constexpr int FlowScales[] = {0, 50, 75, 100}; // 0: auto
 
 QString StatusText(LosslessStatus status) {
     switch (status) {
@@ -96,130 +83,18 @@ bool GpuCanGenerate() try {
     return false;
 }
 
-template <size_t N>
-int IndexOf(const int (&values)[N], int value) {
-    for (size_t i = 0; i < N; i++) {
-        if (values[i] == value) {
-            return static_cast<int>(i);
-        }
-    }
-    return 0;
-}
-
 } // namespace
 
-HarborFrameGenDialog::HarborFrameGenDialog(QWidget* parent,
-                                           std::function<void(std::function<void()>)> change_dll_,
-                                           std::function<void()> save_)
-    : QDialog(parent), change_dll{std::move(change_dll_)}, save{std::move(save_)},
-      gpu_ok{GpuCanGenerate()} {
-    setWindowTitle(tr("Frame generation"));
+namespace HarborFrameGen {
 
-    status = new QLabel(this);
-    status->setWordWrap(true);
-    choose = new QPushButton(tr("Choose Lossless.dll..."), this);
-    remove = new QPushButton(tr("Remove"), this);
-    auto* dll_row = new QHBoxLayout;
-    dll_row->addWidget(choose);
-    dll_row->addWidget(remove);
-    dll_row->addStretch();
-
-    enabled = new QCheckBox(tr("Frame generation"), this);
-    multiplier = new QComboBox(this);
-    for (const int value : Multipliers) {
-        multiplier->addItem(QStringLiteral("%1x").arg(value));
-    }
-    target_rate = new QComboBox(this);
-    target_rate->addItem(tr("Use a fixed multiplier"));
-    for (const int value : TargetRates) {
-        if (value != 0) {
-            target_rate->addItem(tr("%1 FPS").arg(value));
-        }
-    }
-    flow_scale = new QComboBox(this);
-    flow_scale->addItem(tr("Auto"));
-    for (const int value : FlowScales) {
-        if (value != 0) {
-            flow_scale->addItem(QStringLiteral("%1%").arg(value));
-        }
-    }
-
-    auto* form = new QFormLayout;
-    form->addRow(enabled);
-    form->addRow(tr("Frame multiplier"), multiplier);
-    form->addRow(tr("Target frame rate"), target_rate);
-    form->addRow(tr("Motion estimation resolution"), flow_scale);
-
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
-    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->addWidget(status);
-    layout->addLayout(dll_row);
-    layout->addLayout(form);
-    layout->addWidget(buttons);
-
-    connect(choose, &QPushButton::clicked, this, &HarborFrameGenDialog::ChooseDll);
-    connect(remove, &QPushButton::clicked, this, &HarborFrameGenDialog::RemoveDll);
-    connect(enabled, &QCheckBox::toggled, this, &HarborFrameGenDialog::Store);
-    for (auto* box : {multiplier, target_rate, flow_scale}) {
-        connect(box, &QComboBox::currentIndexChanged, this, &HarborFrameGenDialog::Store);
-    }
-    Refresh();
+bool GpuSupported() {
+    static const bool ok = GpuCanGenerate();
+    return ok;
 }
 
-void HarborFrameGenDialog::Refresh() {
-    refreshing = true;
-    const auto installed = VideoCore::FrameGen::GetInstalledLosslessStatus();
-    const bool installed_ok = installed == LosslessStatus::Ok;
-    const bool ok = installed_ok && gpu_ok;
-    status->setText(gpu_ok ? StatusText(installed)
-                           : tr("This GPU cannot run frame generation (it needs the Vulkan memory "
-                                "model, 16-bit float shaders and null descriptors)."));
-    choose->setText(installed_ok ? tr("Replace Lossless.dll...") : tr("Choose Lossless.dll..."));
-    choose->setEnabled(gpu_ok);
-    remove->setEnabled(installed_ok);
-
-    auto& v = Settings::values;
-    enabled->setEnabled(ok);
-    enabled->setChecked(ok && v.frame_gen.GetValue());
-    const bool on = ok && v.frame_gen.GetValue();
-    const bool fixed = v.frame_gen_target_rate.GetValue() == 0;
-    multiplier->setCurrentIndex(IndexOf(Multipliers, static_cast<int>(v.frame_gen_multiplier.GetValue())));
-    target_rate->setCurrentIndex(
-        IndexOf(TargetRates, static_cast<int>(v.frame_gen_target_rate.GetValue())));
-    flow_scale->setCurrentIndex(v.frame_gen_flow_scale_auto.GetValue()
-                                    ? 0
-                                    : IndexOf(FlowScales, static_cast<int>(v.frame_gen_flow_scale.GetValue())));
-    multiplier->setEnabled(on && fixed);
-    target_rate->setEnabled(on);
-    flow_scale->setEnabled(on);
-    refreshing = false;
-}
-
-void HarborFrameGenDialog::Store() {
-    if (refreshing) {
-        return;
-    }
-    auto& v = Settings::values;
-    v.frame_gen.SetValue(enabled->isChecked());
-    v.frame_gen_multiplier.SetValue(static_cast<u32>(Multipliers[multiplier->currentIndex()]));
-    v.frame_gen_target_rate.SetValue(static_cast<u32>(TargetRates[target_rate->currentIndex()]));
-    const int flow = FlowScales[flow_scale->currentIndex()];
-    v.frame_gen_flow_scale_auto.SetValue(flow == 0);
-    if (flow != 0) {
-        v.frame_gen_flow_scale.SetValue(static_cast<u32>(flow));
-    }
-    LOG_INFO(Frontend, "harbor: frame generation {} ({}x, target {} fps, flow {})",
-             v.frame_gen.GetValue() ? "on" : "off", v.frame_gen_multiplier.GetValue(),
-             v.frame_gen_target_rate.GetValue(), flow == 0 ? std::string{"auto"} : std::to_string(flow) + "%");
-    save();
-    Refresh();
-}
-
-void HarborFrameGenDialog::ChooseDll() {
-    const QString picked = QFileDialog::getOpenFileName(this, tr("Choose Lossless.dll"), QString{},
-                                                        tr("Lossless.dll (Lossless.dll *.dll)"));
+void ChooseDll(QWidget* parent, std::function<void(std::function<void()>)> change_dll) {
+    const QString picked = QFileDialog::getOpenFileName(parent, QObject::tr("Choose Lossless.dll"), QString{},
+                                                        QObject::tr("Lossless.dll (Lossless.dll *.dll)"));
     if (picked.isEmpty()) {
         return;
     }
@@ -227,7 +102,7 @@ void HarborFrameGenDialog::ChooseDll() {
     const std::filesystem::path source = picked.toStdU16String();
     const auto valid = VideoCore::FrameGen::ValidateLosslessDll(source);
     if (valid != LosslessStatus::Ok) {
-        QMessageBox::warning(this, tr("Frame generation"), StatusText(valid));
+        QMessageBox::warning(parent, QObject::tr("Frame generation"), StatusText(valid));
         return;
     }
     LosslessStatus result = LosslessStatus::Ok;
@@ -244,21 +119,17 @@ void HarborFrameGenDialog::ChooseDll() {
         LOG_INFO(Frontend, "harbor: Lossless.dll {}", result == LosslessStatus::Ok ? "installed" : "rejected");
     });
     if (result != LosslessStatus::Ok) {
-        QMessageBox::warning(this, tr("Frame generation"), StatusText(result));
+        QMessageBox::warning(parent, QObject::tr("Frame generation"), StatusText(result));
     }
-    Refresh();
 }
 
-void HarborFrameGenDialog::RemoveDll() {
-    if (QMessageBox::question(this, tr("Frame generation"),
-                              tr("Remove Lossless.dll? The console restarts.")) != QMessageBox::Yes) {
-        return;
-    }
+void RemoveDll(std::function<void(std::function<void()>)> change_dll, std::function<void()> save) {
     change_dll([] {
         void(VideoCore::FrameGen::RemoveInstalledLosslessDll());
         LOG_INFO(Frontend, "harbor: Lossless.dll removed");
     });
     Settings::values.frame_gen.SetValue(false);
     save();
-    Refresh();
 }
+
+} // namespace HarborFrameGen

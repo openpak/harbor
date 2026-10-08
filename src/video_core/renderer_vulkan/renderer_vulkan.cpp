@@ -22,6 +22,7 @@
 #include "core/frontend/graphics_context.h"
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
+#include "video_core/host_screen.h"
 #include "video_core/present.h"
 #include "video_core/renderer_vulkan/present/util.h"
 #ifdef HAS_RESHADE
@@ -210,6 +211,15 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     if (!render_window.IsShown()) {
         return;
+    }
+
+    // Harbor: the host screen (the Harbor menu) is presented in place of the console's picture,
+    // with the same scaling and letterboxing. Screenshots show what is on the screen.
+    const auto host_frame = VideoCore::HostScreen::Current();
+    std::array<Tegra::FramebufferConfig, 1> host_layer{};
+    if (host_frame) {
+        host_layer[0] = VideoCore::HostScreen::MakeLayer(*host_frame);
+        framebuffers = host_layer;
     }
 
     RenderScreenshot(framebuffers);
