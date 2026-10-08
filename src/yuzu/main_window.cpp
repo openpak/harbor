@@ -41,6 +41,7 @@
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
 #include "frontend_common/secret_store.h"
+#include "yuzu/harbor_console_menu.h"
 #include "harbor_control.h"
 #ifdef HAS_LSFG
 #include "harbor_frame_gen.h"
@@ -592,6 +593,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 [this](const std::string& name) {
                     if (name == "frame-gen" && harbor_frame_gen_action) {
                         harbor_frame_gen_action->trigger();
+                    } else if (const auto it = harbor_menu_actions.find(name);
+                               it != harbor_menu_actions.end()) {
+                        it->second->trigger();
                     } else {
                         LOG_WARNING(Frontend, "harbor-control: no menu entry \"{}\"", name);
                     }
@@ -682,9 +686,28 @@ void MainWindow::HarborAddMenu() {
     multiplayer_state->setVisible(false);
     multiplayer_state->GetStatusText()->setVisible(false);
     multiplayer_state->GetStatusIcon()->setVisible(false);
-#ifdef HAS_LSFG
     auto* menu = new QMenu(tr("&Harbor"), this);
     ui->menubar->insertMenu(ui->menu_Help->menuAction(), menu);
+    const auto while_stopped = [this](std::function<void()> change) {
+        const bool was_running = emulation_running;
+        ShutdownGame();
+        change();
+        if (was_running) {
+            HarborRestartConsole();
+        }
+    };
+    // Also by name for the test harness (`menu backup`, `menu restore`, `menu new-console`).
+    harbor_menu_actions["backup"] =
+        menu->addAction(tr("&Back up console..."), this,
+                        [this, while_stopped] { HarborConsoleMenu::BackUp(this, while_stopped); });
+    harbor_menu_actions["restore"] =
+        menu->addAction(tr("&Restore console..."), this,
+                        [this, while_stopped] { HarborConsoleMenu::Restore(this, while_stopped); });
+    harbor_menu_actions["new-console"] =
+        menu->addAction(tr("Make this a &new console..."), this,
+                        [this, while_stopped] { HarborConsoleMenu::MakeNew(this, while_stopped); });
+#ifdef HAS_LSFG
+    menu->addSeparator();
     // Frame generation (Lossless Scaling): the user's own Lossless.dll, then on/off and mode.
     // Settings apply to whatever is presented, HOME or a title; a DLL change restarts the console.
     harbor_frame_gen_action = menu->addAction(tr("&Frame generation..."), this, [this] {

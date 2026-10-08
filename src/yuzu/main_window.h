@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <thread>
 #include <optional>
@@ -548,6 +549,7 @@ private:
     std::thread harbor_connect;
     bool harbor_openpak_stopped = false;
     QAction* harbor_frame_gen_action = nullptr; // Harbor menu, Frame generation
+    std::map<std::string, QAction*> harbor_menu_actions; // Harbor menu entries the harness names
     QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
