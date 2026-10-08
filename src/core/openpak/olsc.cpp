@@ -198,6 +198,7 @@ void ArchiveCache::Refresh(const std::string& uid, int max_age_s) {
             entry.archives = std::move(*archives);
             entry.fetched = true;
             entry.fetched_at = Now();
+            SaveLocked();
         }
     }).detach();
 }
@@ -229,11 +230,127 @@ void ArchiveCache::Put(const std::string& uid, std::vector<ArchiveInfo> archives
     entry.archives = std::move(archives);
     entry.fetched = true;
     entry.fetched_at = Now();
+    SaveLocked();
 }
 
 void ArchiveCache::Clear() {
     std::lock_guard lock{mutex};
     entries.clear();
+    store.clear();
+}
+
+void ArchiveCache::SetStore(const std::filesystem::path& file) {
+    std::lock_guard lock{mutex};
+    if (file == store) {
+        return;
+    }
+    entries.clear();
+    store = file;
+    LoadLocked();
+}
+
+void ArchiveCache::LoadLocked() {
+    const std::string text = Platform::ReadFile(store);
+    if (text.empty()) {
+        return;
+    }
+    const auto json = nlohmann::json::parse(text, nullptr, false);
+    const auto users = json.is_object() ? json.find("users") : json.end();
+    if (users == json.end() || !users->is_object()) {
+        LOG_WARNING(Service_OLSC, "save data cloud: the stored archive lists are unreadable");
+        return;
+    }
+    for (const auto& [uid, value] : users->items()) {
+        if (!value.is_object()) {
+            continue;
+        }
+        const auto archives = value.find("archives");
+        auto list = archives != value.end() ? DeserializeArchives(archives->dump()) : std::nullopt;
+        if (!list) {
+            continue;
+        }
+        Entry& entry = entries[uid];
+        entry.archives = std::move(*list);
+        entry.fetched = true;
+        // Kept, not fetched in this session: the next Refresh fetches again.
+        entry.fetched_at = 0;
+    }
+    LOG_DEBUG(Service_OLSC, "save data cloud: stored archive lists for {} user(s)", entries.size());
+}
+
+void ArchiveCache::SaveLocked() const {
+    if (store.empty()) {
+        return;
+    }
+    nlohmann::json users = nlohmann::json::object();
+    for (const auto& [uid, entry] : entries) {
+        if (entry.fetched) {
+            users[uid] = {{"archives", nlohmann::json::parse(SerializeArchives(entry.archives))}};
+        }
+    }
+    const nlohmann::json json = {{"version", 1}, {"users", users}};
+    if (!Platform::CreateParentDirs(store) || !Platform::WriteAtomically(store, json.dump(2))) {
+        LOG_WARNING(Service_OLSC, "save data cloud: the archive lists could not be stored");
+    }
+}
+
+std::string SerializeArchives(const std::vector<ArchiveInfo>& archives) {
+    nlohmann::json list = nlohmann::json::array();
+    for (const auto& a : archives) {
+        list.push_back({{"id", a.id},
+                        {"nsa_id", a.nsa_id},
+                        {"application_id", a.application_id},
+                        {"data_size", a.data_size},
+                        {"status", a.status},
+                        {"datatype", a.datatype},
+                        {"num_of_partitions", a.num_of_partitions},
+                        {"launch_required_version", a.launch_required_version},
+                        {"previous_id", a.previous_id},
+                        {"series_id", a.series_id},
+                        {"saved_at", a.saved_at},
+                        {"finished_at", a.finished_at},
+                        {"platform_key_generation", a.platform_key_generation},
+                        {"acd_index", a.acd_index}});
+    }
+    return list.dump();
+}
+
+std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view text) {
+    const auto list = nlohmann::json::parse(text, nullptr, false);
+    if (!list.is_array()) {
+        return std::nullopt;
+    }
+    std::vector<ArchiveInfo> archives;
+    for (const auto& item : list) {
+        if (!item.is_object()) {
+            return std::nullopt;
+        }
+        const auto u64 = [&item](const char* key) -> std::uint64_t {
+            const auto it = item.find(key);
+            return it != item.end() && it->is_number_unsigned() ? it->get<std::uint64_t>() : 0;
+        };
+        ArchiveInfo a;
+        a.id = u64("id");
+        a.nsa_id = u64("nsa_id");
+        a.application_id = u64("application_id");
+        a.data_size = u64("data_size");
+        a.status = static_cast<std::uint8_t>(u64("status"));
+        a.datatype = static_cast<std::uint8_t>(u64("datatype"));
+        a.num_of_partitions = static_cast<std::uint32_t>(u64("num_of_partitions"));
+        a.launch_required_version = static_cast<std::uint32_t>(u64("launch_required_version"));
+        a.previous_id = u64("previous_id");
+        a.series_id = u64("series_id");
+        a.saved_at = u64("saved_at");
+        a.finished_at = u64("finished_at");
+        a.platform_key_generation = static_cast<std::uint8_t>(u64("platform_key_generation"));
+        a.acd_index = static_cast<std::uint8_t>(u64("acd_index"));
+        if (a.id == 0 || a.application_id == 0 ||
+            (a.status != StatusFixed && a.status != StatusUploading)) {
+            continue;
+        }
+        archives.push_back(a);
+    }
+    return archives;
 }
 
 std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid) {

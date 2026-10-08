@@ -69,10 +69,16 @@ std::vector<ArchiveInfo> LatestPerApplication(const std::vector<ArchiveInfo>& ar
 
 /// The archive cache for firmware users (uid: the 32 hex digits acc prints a UserId as).
 /// Lookup never blocks; Refresh fetches on a thread of its own and fills the cache when the
-/// server answers. A failed fetch keeps what was there.
+/// server answers. A failed fetch keeps what was there. With a store file set, the lists are
+/// kept across restarts, as the sysmodule keeps its SaveDataArchiveInfo cache in its system
+/// save, so a page opened before the next fetch lands shows the last known list.
 class ArchiveCache {
 public:
     static ArchiveCache& Instance();
+
+    /// Keep the lists in `file` (read now; written on every change). A different file than the
+    /// current one (another data directory) drops what is cached in memory first.
+    void SetStore(const std::filesystem::path& file);
 
     /// Fetch `uid`'s list unless one was fetched in the last `max_age_s` seconds or a fetch is
     /// under way. Needs a configured console server and a linked user; otherwise does nothing.
@@ -97,9 +103,18 @@ private:
         bool fetched = false;
         bool in_flight = false;
     };
+
+    void LoadLocked();
+    void SaveLocked() const;
+
     mutable std::mutex mutex;
     std::map<std::string, Entry> entries;
+    std::filesystem::path store;
 };
+
+/// The stored form of an archive list (the store file's per-user entry), and back.
+std::string SerializeArchives(const std::vector<ArchiveInfo>& archives);
+std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view text);
 
 /// GET save_data_archives for `uid` (blocking; run it off the guest's IPC thread).
 std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid);
