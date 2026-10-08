@@ -242,6 +242,7 @@ void AppletManager::CreateAndInsertByFrontendAppletParameters(
         m_pending_parameters = params;
         m_home_session = IsHomeSessionRoot(params);
         m_power_request = PowerRequest::None;
+        m_sleeping = false;
     }
     m_cv.notify_all();
 }
@@ -265,6 +266,34 @@ void AppletManager::PowerButtonMiddlePress() {
     LOG_INFO(Service_AM, "host: power button held (power menu)");
     if (m_window_system) {
         m_window_system->OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
+    }
+}
+
+void AppletManager::PowerButtonShortPress() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: power button pressed");
+    if (m_window_system) {
+        m_window_system->OnSystemButtonPress(SystemButtonType::PowerButtonShortPressing);
+    }
+}
+
+void AppletManager::SetSleepHandler(std::function<void(bool)> handler) {
+    std::scoped_lock lk{m_sleep_lock};
+    m_sleep_handler = std::move(handler);
+}
+
+void AppletManager::ToggleSleep() {
+    const bool sleeping = !m_sleeping.load();
+    m_sleeping = sleeping;
+    LOG_INFO(Service_AM, "am: the console {}", sleeping ? "goes to sleep" : "wakes up");
+    // A console's sleep sequence (RequestToPrepareSleep to the applets, sleep locks, psc's
+    // PmModule states, FinishedSleepSequence and Resume on wake) is not established for 23.0.1:
+    // nothing is sent; the frontend only pauses the guest. IsSleepEnabled stays false.
+    LOG_WARNING(Service_AM, "unknown contract: am sleep sequence (no applet messages, no psc "
+                            "notification; the guest is paused)");
+    std::scoped_lock lk{m_sleep_lock};
+    if (m_sleep_handler) {
+        m_sleep_handler(sleeping);
     }
 }
 

@@ -402,6 +402,9 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
                                       AppletMessage::DetectLongPressingHomeButton);
         return;
     case SystemButtonType::PowerButtonShortPressing:
+        // A short press puts the console to sleep, or wakes it (AppletManager::ToggleSleep).
+        m_system.GetAppletManager().ToggleSleep();
+        return;
     case SystemButtonType::PowerButtonLongPressing:
         if (m_overlay_display == nullptr) {
             LOG_INFO(Service_AM, "am: power button ignored: no overlay applet is running");
@@ -495,9 +498,10 @@ void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
 }
 
 void WindowSystem::OnPowerButtonPressed(ButtonPressDuration type) {
-    // A console's power button: short is sleep (not emulated), the middle press opens the
-    // overlay's power menu.
-    if (type == ButtonPressDuration::MiddlePressing) {
+    // A console's power button: short is sleep, the middle press opens the overlay's power menu.
+    if (type == ButtonPressDuration::ShortPressing) {
+        OnSystemButtonPress(SystemButtonType::PowerButtonShortPressing);
+    } else if (type == ButtonPressDuration::MiddlePressing) {
         OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
     }
 }
