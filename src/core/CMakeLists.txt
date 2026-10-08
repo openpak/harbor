@@ -1319,5 +1319,6 @@ else()
 endif()
 
 include(openpak/openpak.cmake)
+include(harbor_calibration/calibration.cmake)
 
 create_target_directory_groups(core)
