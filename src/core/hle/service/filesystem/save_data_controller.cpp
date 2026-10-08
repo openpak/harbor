@@ -66,6 +66,11 @@ Result SaveDataController::OpenSaveData(FileSys::VirtualDir* out_save_data,
     return ResultSuccess;
 }
 
+bool SaveDataController::SaveDataExists(FileSys::SaveDataSpaceId space,
+                                        const FileSys::SaveDataAttribute& attribute) const {
+    return factory->Exists(space, attribute);
+}
+
 Result SaveDataController::OpenSaveDataSpace(FileSys::VirtualDir* out_save_data_space,
                                              FileSys::SaveDataSpaceId space) {
     auto save_data_space = factory->GetSaveDataSpaceDirectory(space);
@@ -109,6 +114,10 @@ void SaveDataController::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) {
 
 Result SaveDataController::DeleteSystemSaveData(u64 save_id) {
     return factory->DeleteSystemSaveData(save_id);
+}
+
+bool SaveDataController::SystemSaveDataExists(u64 save_id) const {
+    return factory->SystemSaveDataExists(save_id);
 }
 
 } // namespace Service::FileSystem
