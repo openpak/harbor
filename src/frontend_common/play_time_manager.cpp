@@ -166,6 +166,14 @@ void PlayTimeManager::ResetProgramPlayTime(u64 program_id) {
     Save();
 }
 
+PlayTimeDatabase PlayTimeManager::ReadSaved() {
+    PlayTimeDatabase database;
+    if (!ReadPlayTimeFile(database)) {
+        database.clear();
+    }
+    return database;
+}
+
 std::string PlayTimeManager::GetReadablePlayTime(u64 t) {
     return t > 0 ? fmt::format("{:02}:{:02}:{:02}", t / 3600, (t / 60) % 60, t % 60)
         : std::string{};

@@ -6,13 +6,9 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 
 #include <openssl/evp.h>
 
-#include "common/fs/file.h"
-#include "common/fs/fs.h"
-#include "common/fs/path_util.h"
 
 #include "common/hex_util.h"
 #include "common/redact.h"
@@ -39,6 +35,7 @@
 #include "core/hle/service/ns/service_getter_interface.h"
 #include "core/hle/service/sm/sm.h"
 #include "core/launch_timestamp_cache.h"
+#include "frontend_common/play_time_manager.h"
 
 namespace Service::AM {
 
@@ -48,31 +45,6 @@ namespace {
 constexpr Result ResultPdmUserNotFound{ErrorModule::PDM, 101};
 // am: an id outside the caller's play log white list (2128-0500).
 constexpr Result ResultObjectInvalid{ErrorModule::AM, 500};
-
-// Seconds played per program, from the play time file the frontend keeps (u64 program id, u64
-// seconds per entry). Read only: the frontend is its one writer.
-std::map<u64, u64> ReadPlayTimes() {
-    std::map<u64, u64> play_times;
-    const auto path = Common::FS::GetEdenPath(Common::FS::EdenPath::PlayTimeDir) / "playtime.bin";
-    if (!Common::FS::Exists(path)) {
-        return play_times;
-    }
-    Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read,
-                            Common::FS::FileType::BinaryFile};
-    if (!file.IsOpen()) {
-        return play_times;
-    }
-    std::vector<std::array<u64, 2>> entries(file.GetSize() / sizeof(std::array<u64, 2>));
-    if (file.ReadSpan<std::array<u64, 2>>(entries) != entries.size()) {
-        return play_times;
-    }
-    for (const auto& [program_id, seconds] : entries) {
-        if (program_id != 0) {
-            play_times[program_id] = seconds;
-        }
-    }
-    return play_times;
-}
 
 std::unique_ptr<FileSys::RawNACP> ReadControlProperty(Core::System& system, u64 program_id) {
     std::vector<u8> nacp;
@@ -109,7 +81,8 @@ Result QueryPlayStatistics(Core::System& system, u64 caller_program_id, s32& out
         }
     }
 
-    const auto play_times = ReadPlayTimes();
+    // The frontend's PlayTimeManager owns the play time file; this reads what it last saved.
+    const auto play_times = PlayTime::PlayTimeManager::ReadSaved();
     s32 written = 0;
     for (const u64 id : application_ids) {
         if (static_cast<size_t>(written) >= out_stats.size()) {
