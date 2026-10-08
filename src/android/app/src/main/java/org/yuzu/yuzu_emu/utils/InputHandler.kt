@@ -10,6 +10,7 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import org.yuzu.yuzu_emu.R
+import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.input.YuzuInputDevice
@@ -125,6 +126,7 @@ object InputHandler {
         }
         heldButtons.clear()
         movedAxes.clear()
+        triggersHeld.clear()
     }
 
     fun getButtonIdFromEvent(event: KeyEvent): Int {
@@ -145,13 +147,33 @@ object InputHandler {
             androidControllers[event.device.controllerNumber] ?: return false
         val pad = controllerData.getGUID() to controllerData.getPort()
         event.device.motionRanges.forEach {
-            val value = event.getAxisValue(it.axis)
+            var value = event.getAxisValue(it.axis)
             if (value != 0f) {
                 movedAxes.getOrPut(pad) { mutableSetOf() }.add(it.axis)
+            }
+            if (HarborConsole.active && it.axis in TRIGGER_AXES) {
+                value = triggerWithHysteresis(pad, it.axis, value)
             }
             NativeInput.onGamePadAxisEvent(pad.first, pad.second, it.axis, value)
         }
         return true
+    }
+
+    // Harbor: an analog trigger is ZL or ZR pressed from 0.5 and released below 0.4, so a trigger
+    // resting near the threshold does not flicker. Behaviour follows the Ryujinx Harbor
+    // (MIT-licensed Ryujinx base), PhysicalPadState.cs.
+    private val TRIGGER_AXES = setOf(
+        MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_BRAKE, MotionEvent.AXIS_GAS
+    )
+    private const val TRIGGER_PRESS = 0.5f
+    private const val TRIGGER_RELEASE = 0.4f
+    private val triggersHeld = mutableSetOf<Triple<String, Int, Int>>()
+
+    private fun triggerWithHysteresis(pad: Pair<String, Int>, axis: Int, value: Float): Float {
+        val key = Triple(pad.first, pad.second, axis)
+        val held = if (key in triggersHeld) value >= TRIGGER_RELEASE else value >= TRIGGER_PRESS
+        if (held) triggersHeld.add(key) else triggersHeld.remove(key)
+        return if (held) 1f else 0f
     }
 
     // Nintendo's Joy-Con halves, which Android reports as two separate pads.
