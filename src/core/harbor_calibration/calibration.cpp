@@ -15,6 +15,7 @@
 #include "common/logging.h"
 #include "core/harbor_calibration/calibration.h"
 #include "core/openpak/secret_store.h"
+#include "core/openpak/platform.h"
 #include "core/openpak/session.h"
 
 namespace Harbor {
@@ -90,7 +91,16 @@ bool StoreDeviceKey(u64 device_id, const Cal0::DeviceKey& key) {
 struct Loaded {
     std::vector<u8> binary;
     Cal0::DeviceKey device_key{};
+    bool keys_pending = false;
 };
+
+std::filesystem::path CalibrationDir() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "calibration";
+}
+
+std::filesystem::path SealedKeyPath() {
+    return CalibrationDir() / "device-key.hbk";
+}
 
 Loaded Make(const std::filesystem::path& path) {
     Loaded out;
@@ -144,6 +154,16 @@ Loaded Load(const std::filesystem::path& path) {
         return out;
     }
 
+    // A restored backup that carries its device key sealed: the keys wait for the passphrase
+    // (RestoreDeviceKey) instead of being replaced.
+    std::error_code ec;
+    if (std::filesystem::exists(SealedKeyPath(), ec)) {
+        out.keys_pending = true;
+        LOG_WARNING(Service_SET, "calibration: loaded; the device key is in this NAND's backup and "
+                                 "waits for its passphrase");
+        return out;
+    }
+
     // A NAND from another host (or a host whose password store was reset): same console, its
     // keys unreadable here, so new key pairs under a new device key. Serial, addresses and device
     // id stay.
@@ -163,24 +183,122 @@ Loaded Load(const std::filesystem::path& path) {
 
 } // namespace
 
-const Calibration& Calibration::Get() {
-    static std::mutex mutex;
-    static std::filesystem::path loaded_from;
-    static std::unique_ptr<Calibration> current;
+namespace {
 
-    std::scoped_lock lock{mutex};
-    const std::filesystem::path path =
-        Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "calibration" / "prodinfo.bin";
-    if (!current || path != loaded_from) {
+struct Current {
+    std::mutex mutex;
+    std::filesystem::path loaded_from;
+    std::unique_ptr<Calibration> current;
+    // Replaced instances stay alive: a caller may still hold a reference to one.
+    std::vector<std::unique_ptr<Calibration>> retired;
+};
+
+Current& CurrentState() {
+    static Current state;
+    return state;
+}
+
+} // namespace
+
+const Calibration& Calibration::Get() {
+    Current& state = CurrentState();
+    std::scoped_lock lock{state.mutex};
+    const std::filesystem::path path = CalibrationDir() / "prodinfo.bin";
+    if (!state.current || path != state.loaded_from) {
         Loaded loaded = Load(path);
         auto next = std::make_unique<Calibration>();
         next->binary = std::move(loaded.binary);
         next->device_key = loaded.device_key;
+        next->keys_pending = loaded.keys_pending;
         OPENSSL_cleanse(loaded.device_key.data(), loaded.device_key.size());
-        current = std::move(next);
-        loaded_from = path;
+        if (state.current) {
+            state.retired.push_back(std::move(state.current));
+        }
+        state.current = std::move(next);
+        state.loaded_from = path;
     }
-    return *current;
+    return *state.current;
+}
+
+void Calibration::Reload() {
+    Current& state = CurrentState();
+    std::scoped_lock lock{state.mutex};
+    if (state.current) {
+        state.retired.push_back(std::move(state.current));
+    }
+    state.loaded_from.clear();
+}
+
+bool WriteDeviceKeyBackup(std::string_view passphrase) {
+    const auto& calibration = Calibration::Get();
+    if (calibration.Binary().empty() || calibration.keys_pending) {
+        return false;
+    }
+    const auto sealed =
+        Cal0::SealDeviceKey(calibration.device_key, calibration.DeviceId(), passphrase);
+    const bool ok = !sealed.empty() && WriteFile(SealedKeyPath(), sealed);
+    LOG_INFO(Service_SET, "calibration: device key sealed for a backup: {}", ok ? "ok" : "failed");
+    return ok;
+}
+
+void RemoveDeviceKeyBackup() {
+    std::error_code ec;
+    std::filesystem::remove(SealedKeyPath(), ec);
+}
+
+bool DeviceKeyRestorePending() {
+    return Calibration::Get().keys_pending;
+}
+
+RestoreResult RestoreDeviceKey(std::string_view passphrase) {
+    const auto& calibration = Calibration::Get();
+    const auto sealed = ReadFile(SealedKeyPath());
+    if (!sealed || calibration.Binary().empty()) {
+        return RestoreResult::NoBackup;
+    }
+    const auto key = Cal0::OpenDeviceKey(*sealed, calibration.DeviceId(), passphrase);
+    if (!key) {
+        LOG_WARNING(Service_SET, "calibration: the backup's device key did not open");
+        return RestoreResult::WrongPassphrase;
+    }
+    if (!Cal0::EccDevicePrivateKey(calibration.Binary(), *key) ||
+        !StoreDeviceKey(calibration.DeviceId(), *key)) {
+        return RestoreResult::Failed;
+    }
+    RemoveDeviceKeyBackup();
+    Calibration::Reload();
+    LOG_INFO(Service_SET, "calibration: device key restored from the backup; same console");
+    return RestoreResult::Restored;
+}
+
+bool MakeNewConsole() {
+    const u64 old_id = Calibration::Get().DeviceId();
+    const std::string old_namespace = OpenPak::CurrentSecretNamespace();
+
+    // The old console's credentials, in this process and in the password store.
+    OpenPak::Session::ForgetAllProfiles();
+    OpenPak::EraseSecretNamespace(old_namespace);
+    if (old_id != 0) {
+        OpenPak::EraseHostSecret(SecretName(old_id));
+    }
+
+    // Its identity: the calibration, a sealed key, and the per-server TLS files made from it.
+    std::error_code ec;
+    std::filesystem::remove(CalibrationDir() / "prodinfo.bin", ec);
+    RemoveDeviceKeyBackup();
+    for (const auto& entry :
+         std::filesystem::directory_iterator(OpenPak::Platform::DataDir(), ec)) {
+        const std::string name = entry.path().filename().string();
+        if (name.starts_with("device-") && (name.ends_with(".pem") || name.ends_with(".key"))) {
+            std::filesystem::remove(entry.path(), ec);
+        }
+    }
+
+    Calibration::Reload();
+    const bool made = Calibration::Get().DeviceId() != 0;
+    LOG_INFO(Service_SET, "calibration: this NAND is a new console ({})",
+             made ? "new calibration made" : "no calibration could be made");
+    return made;
 }
 
 std::span<const u8> Calibration::BlockData(const Cal0::Block& block) const {
