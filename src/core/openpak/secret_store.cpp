@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <algorithm>
 #include <map>
+#include <vector>
 #include <mutex>
 
 #include "common/logging.h"
@@ -96,6 +98,67 @@ std::string Namespaced(const std::string& ns, std::string_view key) {
     return ns.empty() ? std::string{key} : ns + "-" + std::string{key};
 }
 
+// Each namespace keeps the names of its entries (one per line) under "<namespace>-index", so a
+// console's credentials can be dropped together: the stores have no listing of their own.
+std::mutex& IndexMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::vector<std::string> ReadIndex(const std::string& ns) {
+    std::vector<std::string> keys;
+    const auto text = LoadHostSecret(Namespaced(ns, "index"));
+    if (!text) {
+        return keys;
+    }
+    std::size_t start = 0;
+    while (start < text->size()) {
+        const std::size_t end = std::min(text->find('\n', start), text->size());
+        if (end > start) {
+            keys.emplace_back(text->substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    return keys;
+}
+
+void WriteIndex(const std::string& ns, const std::vector<std::string>& keys) {
+    if (keys.empty()) {
+        EraseHostSecret(Namespaced(ns, "index"));
+        return;
+    }
+    std::string text;
+    for (const auto& key : keys) {
+        text += key;
+        text += '\n';
+    }
+    StoreHostSecret(Namespaced(ns, "index"), text);
+}
+
+void IndexAdd(const std::string& ns, std::string_view key) {
+    if (ns.empty()) {
+        return;
+    }
+    std::lock_guard lock{IndexMutex()};
+    auto keys = ReadIndex(ns);
+    if (std::find(keys.begin(), keys.end(), key) == keys.end()) {
+        keys.emplace_back(key);
+        WriteIndex(ns, keys);
+    }
+}
+
+void IndexRemove(const std::string& ns, std::string_view key) {
+    if (ns.empty()) {
+        return;
+    }
+    std::lock_guard lock{IndexMutex()};
+    auto keys = ReadIndex(ns);
+    if (const auto it = std::find(keys.begin(), keys.end(), key); it != keys.end()) {
+        keys.erase(it);
+        WriteIndex(ns, keys);
+    }
+}
+
 } // namespace
 
 void SetSecretNamespace(std::function<std::string()> resolve) {
@@ -112,6 +175,7 @@ std::optional<std::string> LoadSecret(std::string_view key) {
     // An entry from before namespacing: it becomes this console's, once.
     auto legacy = LoadHostSecret(key);
     if (legacy && StoreHostSecret(Namespaced(ns, key), *legacy)) {
+        IndexAdd(ns, key);
         EraseHostSecret(key);
         Secrets& s = Get();
         std::lock_guard lock{s.mutex};
@@ -125,15 +189,36 @@ std::optional<std::string> LoadSecret(std::string_view key) {
 }
 
 bool StoreSecret(std::string_view key, std::string_view secret) {
-    return StoreHostSecret(Namespaced(Namespace(), key), secret);
+    const std::string ns = Namespace();
+    if (!StoreHostSecret(Namespaced(ns, key), secret)) {
+        return false;
+    }
+    IndexAdd(ns, key);
+    return true;
 }
 
 void EraseSecret(std::string_view key) {
     const std::string ns = Namespace();
     EraseHostSecret(Namespaced(ns, key));
     if (!ns.empty()) {
+        IndexRemove(ns, key);
         EraseHostSecret(key); // and any entry from before namespacing
     }
+}
+
+std::string CurrentSecretNamespace() {
+    return Namespace();
+}
+
+void EraseSecretNamespace(const std::string& ns) {
+    if (ns.empty()) {
+        return;
+    }
+    std::lock_guard lock{IndexMutex()};
+    for (const auto& key : ReadIndex(ns)) {
+        EraseHostSecret(Namespaced(ns, key));
+    }
+    EraseHostSecret(Namespaced(ns, "index"));
 }
 
 } // namespace OpenPak

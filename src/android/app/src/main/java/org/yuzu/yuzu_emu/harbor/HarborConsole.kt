@@ -378,6 +378,9 @@ object HarborConsole {
             if (LosslessScalingHelper.isSupportedByGpu()) {
                 add(R.string.harbor_menu_frame_gen to { showFrameGeneration(activity) })
             }
+            add(R.string.harbor_menu_backup to { askBackupPassphrase(activity) })
+            add(R.string.harbor_menu_restore to { confirmRestore(activity) })
+            add(R.string.harbor_menu_new_console to { confirmNewConsole(activity) })
             add(
                 R.string.harbor_menu_setup_again to {
                     stopThen(activity) {
@@ -563,6 +566,206 @@ object HarborConsole {
             if (notice.isShowing) notice.dismiss()
             next()
         }
+    }
+
+    // Console backups: the NAND zipped with its device key sealed by a passphrase the user sets.
+    // The passphrase lives only in this field between the question and the file picker's answer.
+    private var backupPassphrase: String? = null
+    private const val MIN_PASSPHRASE = 8
+
+    private fun askPassphrase(activity: EmulationActivity, message: Int, answer: (String?) -> Unit) {
+        val field = android.widget.EditText(activity).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setMessage(message)
+            .setView(field)
+            .setPositiveButton(android.R.string.ok) { _, _ -> answer(field.text.toString()) }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> answer(null) }
+            .setCancelable(false)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    private fun tell(activity: Activity, message: String, then: () -> Unit = {}) {
+        MaterialAlertDialogBuilder(activity)
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .setOnDismissListener { then() }
+            .show()
+    }
+
+    private fun askBackupPassphrase(activity: EmulationActivity) {
+        askPassphrase(activity, R.string.harbor_backup_passphrase) { first ->
+            if (first == null) return@askPassphrase
+            if (first.length < MIN_PASSPHRASE) {
+                Toast.makeText(activity, R.string.harbor_backup_passphrase_short, Toast.LENGTH_LONG).show()
+                return@askPassphrase
+            }
+            askPassphrase(activity, R.string.harbor_backup_passphrase_again) { second ->
+                if (second == null) return@askPassphrase
+                if (second != first) {
+                    Toast.makeText(activity, R.string.harbor_backup_passphrase_differs, Toast.LENGTH_LONG).show()
+                    return@askPassphrase
+                }
+                backupPassphrase = first
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.ROOT)
+                    .format(java.util.Date())
+                activity.harborBackupTarget.launch("harbor-console-$stamp.zip")
+            }
+        }
+    }
+
+    /** The picked file for a backup: console stopped, key sealed, NAND zipped, sealed key removed. */
+    fun backUpTo(activity: EmulationActivity, uri: Uri?) {
+        val passphrase = backupPassphrase
+        backupPassphrase = null
+        if (uri == null || passphrase == null) return
+        stopThen(activity) {
+            val progress = MaterialAlertDialogBuilder(activity)
+                .setMessage(R.string.harbor_backup_working)
+                .setCancelable(false)
+                .show()
+            thread(name = "HarborBackup") {
+                val ok = try {
+                    val nand = File(HarborNative.nandDirectory())
+                    HarborNative.sealDeviceKey(passphrase) &&
+                        FileUtil.zipFromInternalStorage(
+                            nand,
+                            nand.absolutePath,
+                            java.io.BufferedOutputStream(activity.contentResolver.openOutputStream(uri)),
+                            compression = false
+                        ) == org.yuzu.yuzu_emu.model.TaskState.Completed
+                } catch (e: Exception) {
+                    Log.warning("[Harbor] console backup failed: ${e.message}")
+                    false
+                } finally {
+                    HarborNative.removeSealedDeviceKey()
+                }
+                Log.info("[Harbor] console backup ${if (ok) "written" else "failed"}")
+                activity.runOnUiThread {
+                    progress.dismiss()
+                    tell(activity, activity.getString(if (ok) R.string.harbor_backup_done else R.string.harbor_backup_failed)) {
+                        restartConsole(activity)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun confirmRestore(activity: EmulationActivity) {
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_restore)
+            .setMessage(R.string.harbor_restore_confirm)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                activity.harborRestoreSource.launch(arrayOf("application/zip"))
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    /** A picked backup: console stopped, the NAND replaced, then its device key's passphrase. */
+    fun restoreFrom(activity: EmulationActivity, uri: Uri) {
+        stopThen(activity) {
+            val progress = MaterialAlertDialogBuilder(activity)
+                .setMessage(R.string.harbor_restore_working)
+                .setCancelable(false)
+                .show()
+            thread(name = "HarborRestore") {
+                val failure = try {
+                    replaceNand(uri)
+                } catch (e: Exception) {
+                    Log.warning("[Harbor] console restore failed: ${e.message}")
+                    R.string.harbor_restore_failed
+                }
+                activity.runOnUiThread {
+                    progress.dismiss()
+                    if (failure != null) {
+                        tell(activity, activity.getString(failure)) { restartConsole(activity) }
+                    } else {
+                        unlockRestoredKey(activity)
+                    }
+                }
+            }
+        }
+    }
+
+    /** The backup into nand.restore, checked, then swapped in for the NAND. Null when it worked. */
+    private fun replaceNand(uri: Uri): Int? {
+        val nand = File(HarborNative.nandDirectory())
+        val incoming = File(nand.path + ".restore")
+        val previous = File(nand.path + ".previous")
+        incoming.deleteRecursively()
+        incoming.mkdirs()
+        FileUtil.unzipToInternalStorage(uri.toString(), incoming)
+        if (!File(incoming, "calibration/prodinfo.bin").isFile) {
+            incoming.deleteRecursively()
+            return R.string.harbor_restore_not_backup
+        }
+        previous.deleteRecursively()
+        if (!nand.renameTo(previous)) {
+            incoming.deleteRecursively()
+            return R.string.harbor_restore_failed
+        }
+        if (!incoming.renameTo(nand)) {
+            previous.renameTo(nand)
+            return R.string.harbor_restore_failed
+        }
+        previous.deleteRecursively()
+        HarborNative.reloadCalibration()
+        Log.info("[Harbor] console restored from a backup")
+        return null
+    }
+
+    private fun unlockRestoredKey(activity: EmulationActivity) {
+        if (!HarborNative.deviceKeyRestorePending()) {
+            HarborNative.removeSealedDeviceKey()
+            tell(activity, activity.getString(R.string.harbor_restore_done)) { restartConsole(activity) }
+            return
+        }
+        askPassphrase(activity, R.string.harbor_restore_passphrase) { passphrase ->
+            if (passphrase == null) {
+                tell(activity, activity.getString(R.string.harbor_restore_locked)) { restartConsole(activity) }
+                return@askPassphrase
+            }
+            thread(name = "HarborRestoreKey") {
+                val result = HarborNative.restoreDeviceKey(passphrase)
+                activity.runOnUiThread {
+                    when (result) {
+                        0 -> tell(activity, activity.getString(R.string.harbor_restore_done)) { restartConsole(activity) }
+                        1 -> {
+                            Toast.makeText(activity, R.string.harbor_restore_wrong, Toast.LENGTH_LONG).show()
+                            unlockRestoredKey(activity)
+                        }
+                        else -> tell(activity, activity.getString(R.string.harbor_restore_locked)) { restartConsole(activity) }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun confirmNewConsole(activity: EmulationActivity) {
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_new_console)
+            .setMessage(R.string.harbor_new_console_confirm)
+            .setPositiveButton(R.string.harbor_menu_new_console) { _, _ ->
+                stopThen(activity) {
+                    thread(name = "HarborNewConsole") {
+                        val made = HarborNative.makeNewConsole()
+                        activity.runOnUiThread {
+                            tell(
+                                activity,
+                                activity.getString(if (made) R.string.harbor_new_console_done else R.string.harbor_new_console_failed)
+                            ) { restartConsole(activity) }
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
     }
 
     private const val HOME_SHORT_MS = 100L

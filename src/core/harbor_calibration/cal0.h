@@ -131,6 +131,15 @@ std::optional<std::vector<u8>> RsaPrivateKeyDer(std::span<const u8> cal0, const 
 /// Whether a certificate block carries a signature (zero until OpenPak's device CA signs it).
 bool IsSigned(std::span<const u8> cal0, const Block& certificate_block);
 
+/// The device key sealed with a passphrase for a console backup: scrypt (N 2^15, r 8, p 1) to an
+/// AES-256-GCM key, the console's device id bound in as associated data. The passphrase is not kept.
+std::vector<u8> SealDeviceKey(const DeviceKey& device_key, u64 device_id, std::string_view passphrase);
+
+/// The device key from a sealed backup, or nothing when the passphrase is wrong, the blob is
+/// damaged or it belongs to another console.
+std::optional<DeviceKey> OpenDeviceKey(std::span<const u8> sealed, u64 device_id,
+                                       std::string_view passphrase);
+
 /// A key derived from the device key for one purpose (HMAC-SHA256, first 16 bytes). Every use of
 /// the device key goes through a label of its own.
 DeviceKey DeriveKey(const DeviceKey& device_key, std::string_view label);
