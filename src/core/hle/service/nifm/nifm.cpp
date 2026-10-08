@@ -7,6 +7,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -875,7 +876,9 @@ void IGeneralService::SetEthernetCommunicationEnabledForTest(HLERequestContext& 
 }
 
 void IGeneralService::GetSsidListVersion(HLERequestContext& ctx) {
-    LOG_WARNING(Service_NIFM, "(STUBBED) called");
+    // The Nintendo Zone SSID list's version: there is no such list here. Its size and format are
+    // not established; one u32 0 is answered, as Eden did.
+    LOG_UNKNOWN_CONTRACT(Service_NIFM, "nifm IGeneralService 25 GetSsidListVersion: answered u32 0");
 
     constexpr u32 ssid_list_version = 0;
 

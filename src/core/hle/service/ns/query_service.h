@@ -61,8 +61,6 @@ private:
         Out<s32> out_entries, u8 flag, Common::UUID user_id,
         OutArray<ApplicationPlayStatistics, BufferAttr_HipcMapAlias> out_stats,
         InArray<u64, BufferAttr_HipcMapAlias> application_ids);
-
-    std::unique_ptr<PlayTime::PlayTimeManager> play_time_manager;
 };
 
 } // namespace Service::NS

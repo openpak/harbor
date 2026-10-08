@@ -113,7 +113,7 @@ public:
     Result Unknown935();
     Result Unknown2366(OutInterface<IAsyncResult> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id);
-    Result Unknown4008(OutInterface<IAsyncResult> out_interface,
+    Result Unknown4008(OutInterface<ICompletedAsyncValue> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id,
                        u64 work_buffer_size,
                        InCopyHandle<Kernel::KTransferMemory> work_buffer);

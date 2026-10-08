@@ -1392,7 +1392,7 @@ Result IApplicationManagerInterface::Unknown2366(OutInterface<IAsyncResult> out_
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4008(OutInterface<IAsyncResult> out_interface,
+Result IApplicationManagerInterface::Unknown4008(OutInterface<ICompletedAsyncValue> out_interface,
                                                  OutCopyHandle<Kernel::KReadableEvent> out_event,
                                                  Common::UUID user_id, u64 work_buffer_size,
                                                  InCopyHandle<Kernel::KTransferMemory> work_buffer) {
@@ -1401,13 +1401,16 @@ Result IApplicationManagerInterface::Unknown4008(OutInterface<IAsyncResult> out_
     // result and its event; the applet polls that event until it signals. What ns does with the
     // buffer is unknown; the work completes at once and unchanged. The event is this command's own:
     // the caller clears it after the wait, and 2366's async is in flight at the same time.
+    // 23.0.1 ns hands out an IAsyncValue here (dispatcher 0x17ca64), not an IAsyncResult: the
+    // caller's GetSize/Get/Cancel used to land on IAsyncResult's Get/Cancel/GetErrorContext, and
+    // that last one found no out buffer.
     LOG_WARNING(Service_NS,
                 "unknown contract: IApplicationManagerInterface 4008; completed unchanged, "
                 "work buffer {:#x} bytes{}",
                 work_buffer_size, work_buffer ? "" : " (no transfer memory)");
     unknown4008_event.Signal(system.Kernel());
     *out_event = unknown4008_event.GetHandle();
-    *out_interface = std::make_shared<IAsyncResult>(system, &unknown4008_event);
+    *out_interface = std::make_shared<ICompletedAsyncValue>(system, &unknown4008_event);
     R_SUCCEED();
 }
 

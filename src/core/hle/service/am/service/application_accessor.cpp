@@ -6,6 +6,7 @@
 
 #include <cstring>
 
+#include "common/redact.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/core.h"
 #include "core/hle/result.h"
@@ -158,8 +159,28 @@ Result IApplicationAccessor::SetUsers(bool enable,
 
 Result IApplicationAccessor::GetCurrentLibraryApplet(
     Out<SharedPointer<ILibraryAppletAccessor>> out_accessor) {
-    LOG_INFO(Service_AM, "(STUBBED) called");
-    *out_accessor = nullptr;
+    // The application's open library applet, if any; otherwise no object. Behaviour follows the
+    // Ryujinx Harbor (MIT-licensed Ryujinx base): qlaunch asks after HOME was pressed over an
+    // application with a pending friend invitation.
+    std::shared_ptr<Applet> open;
+    {
+        std::scoped_lock lk{m_applet->lock};
+        for (auto it = m_applet->child_applets.rbegin(); it != m_applet->child_applets.rend();
+             ++it) {
+            std::scoped_lock lk2{(*it)->lock};
+            if (!(*it)->is_completed && !(*it)->process_exiting) {
+                open = *it;
+                break;
+            }
+        }
+    }
+    if (open) {
+        *out_accessor =
+            std::make_shared<ILibraryAppletAccessor>(system, open->caller_applet_broker, open);
+    } else {
+        *out_accessor = nullptr;
+    }
+    LOG_DEBUG(Service_AM, "called, {}", open ? "an open library applet" : "none");
     R_SUCCEED();
 }
 
@@ -170,13 +191,14 @@ Result IApplicationAccessor::RequestForApplicationToGetForeground() {
 }
 
 Result IApplicationAccessor::CheckRightsEnvironmentAvailable(Out<bool> out_is_available) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Rights are always available here, as the Ryujinx Harbor answers.
+    LOG_DEBUG(Service_AM, "called");
     *out_is_available = true;
     R_SUCCEED();
 }
 
 Result IApplicationAccessor::GetNsRightsEnvironmentHandle(Out<u64> out_handle) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationAccessor 132 GetNsRightsEnvironmentHandle: answered 0xdeadbeef (no ns rights environment exists)");
     *out_handle = 0xdeadbeef;
     R_SUCCEED();
 }

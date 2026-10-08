@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
@@ -117,7 +118,8 @@ namespace Service::AM {
     }
 
     Result IOverlayFunctions::SetAutoSleepTimeAndDimmingTimeEnabled(bool enabled) {
-        LOG_WARNING(Service_AM, "(STUBBED) called, enabled={}", enabled);
+        // Kept per applet for the idle timer.
+        LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
         std::scoped_lock lk{m_applet->lock};
         m_applet->auto_sleep_disabled = !enabled;
         R_SUCCEED();
@@ -234,7 +236,8 @@ namespace Service::AM {
     }
 
     Result IOverlayFunctions::Unknown70() {
-        LOG_DEBUG(Service_AM, "called");
+        LOG_UNKNOWN_CONTRACT(Service_AM, "IOverlayFunctions 70: accepted, no effect here (the "
+                                         "command is not documented)");
         R_SUCCEED();
     }
 } // namespace Service::AM
