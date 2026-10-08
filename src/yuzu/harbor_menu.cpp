@@ -6,9 +6,11 @@
 #include <QKeySequence>
 #include <QMetaObject>
 #include <QProcess>
+#include <QSettings>
 #include <QStyleHints>
 #include <QWidget>
 
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/core.h"
 #include "frontend_common/joycon_rails.h"
@@ -124,6 +126,26 @@ void HarborMenu::SetShowFps(bool show) {
     // Kept at once, so the menu reads it back; the overlay follows on the GUI thread.
     UISettings::values.show_perf_overlay = show;
     OnGui([this, show] { hooks.show_fps(show); });
+}
+
+namespace {
+QString HarborIni() {
+    return QString::fromStdString(
+        (Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor.ini").string());
+}
+} // namespace
+
+bool HarborDeviceLineShown() {
+    return QSettings(HarborIni(), QSettings::IniFormat).value(QStringLiteral("show_device_line"), false).toBool();
+}
+
+bool HarborMenu::ShowDeviceLine() {
+    return HarborDeviceLineShown();
+}
+
+void HarborMenu::SetShowDeviceLine(bool show) {
+    QSettings(HarborIni(), QSettings::IniFormat).setValue(QStringLiteral("show_device_line"), show);
+    OnGui([this] { hooks.device_line_changed(); });
 }
 
 bool HarborMenu::FrameGenSupported() {

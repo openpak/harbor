@@ -14,6 +14,10 @@ namespace InputCommon {
 class InputSubsystem;
 }
 
+/// Harbor Settings' "device and driver under the FPS" on desktop (harbor.ini in the config
+/// directory; off by default).
+bool HarborDeviceLineShown();
+
 /// The desktop's side of the Harbor menu (harbor_setup/menu.h): the menu draws onto the console's
 /// screen; this opens it (F1, Plus and Minus together) and carries out what it asks for.
 class HarborMenu final : public HarborSetup::MenuHost {
@@ -28,6 +32,7 @@ public:
         std::function<void(bool)> joycons;        ///< detach (true) or attach the Joy-Cons
         std::function<void(std::function<void()>)> change_dll; ///< a Lossless.dll change, console stopped
         std::function<void(const std::string&)> console_action; ///< backup, restore, new-console
+        std::function<void()> device_line_changed; ///< the line under the FPS was turned on or off
     };
 
     HarborMenu(QWidget* window, InputCommon::InputSubsystem& input, Hooks hooks);
@@ -52,6 +57,11 @@ public:
 
     bool ShowFps() override;
     void SetShowFps(bool show) override;
+    bool HasDeviceLine() override {
+        return true;
+    }
+    bool ShowDeviceLine() override;
+    void SetShowDeviceLine(bool show) override;
     bool FrameGenSupported() override;
     void ChooseLosslessDll() override;
     void RemoveLosslessDll() override;

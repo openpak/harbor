@@ -556,6 +556,7 @@ private:
     void HarborRestartConsole();
     void HarborAddMenu();
     void HarborConsoleAction(const std::string& name);
+    void HarborUpdateDeviceLine();
     void HarborStopOpenPak();
     void HarborUpdateLetterbox();
     void HarborApplyAutoResolution();

@@ -59,6 +59,8 @@ public:
         return device.GetDriverName();
     }
 
+    [[nodiscard]] std::string GetDeviceDescription() const override;
+
     // Enhanced platform-specific initialization
     void InitializePlatformSpecific();
 

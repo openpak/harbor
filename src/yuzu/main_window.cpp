@@ -603,6 +603,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                     }
                 },
             .console_action = [this](const std::string& name) { HarborConsoleAction(name); },
+            .device_line_changed = [this] { HarborUpdateDeviceLine(); },
         });
     auto* menu_shortcut = new QShortcut(QKeySequence(Qt::Key_F1), this);
     menu_shortcut->setContext(Qt::ApplicationShortcut);
@@ -820,6 +821,18 @@ void MainWindow::HarborConsoleAction(const std::string& name) {
     } else if (name == "new-console") {
         HarborConsoleMenu::MakeNew(this, while_stopped);
     }
+}
+
+/// Harbor Settings: the GPU and its driver under the FPS readings, when chosen.
+void MainWindow::HarborUpdateDeviceLine() {
+    if (!perf_overlay) {
+        return;
+    }
+    QString line;
+    if (HarborDeviceLineShown() && QtCommon::system->IsPoweredOn()) {
+        line = QString::fromStdString(QtCommon::system->GPU().Renderer().GetDeviceDescription());
+    }
+    perf_overlay->SetDeviceLine(line);
 }
 
 void MainWindow::HarborStopOpenPak() {
@@ -3394,6 +3407,7 @@ void MainWindow::OnLoadComplete() {
     loading_screen->OnLoadComplete();
 
     perf_overlay = new PerformanceOverlay(this);
+    HarborUpdateDeviceLine();
     perf_overlay->setVisible(ui->action_Show_Performance_Overlay->isChecked());
 
     connect(perf_overlay, &PerformanceOverlay::closed, perf_overlay,

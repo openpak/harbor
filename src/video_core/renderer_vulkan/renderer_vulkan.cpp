@@ -256,6 +256,11 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     rasterizer.TickFrame();
 }
 
+std::string RendererVulkan::GetDeviceDescription() const {
+    return fmt::format("{} · {} {}", device.GetModelName(), device.GetDriverName(),
+                       GetDriverVersion(device));
+}
+
 void RendererVulkan::Report() const {
     using namespace Common::Literals;
     const std::string vendor_name{device.GetVendorName()};
