@@ -8,7 +8,6 @@
 #include "core/harbor_calibration/calibration.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/set/factory_settings_server.h"
-#include "core/openpak/session.h"
 
 namespace Service::Set {
 
@@ -66,18 +65,6 @@ IFactorySettingsServer::IFactorySettingsServer(Core::System& system_)
 
     // A new NAND gets its calibration at its first boot, not at the first call that needs it.
     Harbor::Calibration::Get();
-
-    // OpenPak servers this install meets from now on see the console's own TLS certificate.
-    OpenPak::Session::SetClientIdentitySource([](std::vector<u8>& certificate, std::vector<u8>& key) {
-        const auto& calibration = Harbor::Calibration::Get();
-        auto private_key = calibration.SslPrivateKey();
-        certificate = calibration.SslCertificate();
-        if (certificate.empty() || !private_key) {
-            return false;
-        }
-        key = std::move(*private_key);
-        return true;
-    });
 }
 
 IFactorySettingsServer::~IFactorySettingsServer() = default;

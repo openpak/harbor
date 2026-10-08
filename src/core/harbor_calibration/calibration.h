@@ -59,4 +59,8 @@ private:
     Cal0::DeviceKey device_key{};
 };
 
+/// Make OpenPak servers this install meets from now on see the console's own TLS certificate.
+/// Called before the services start, so no session can make a self-signed one first.
+void InstallClientIdentity();
+
 } // namespace Harbor
