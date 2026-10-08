@@ -67,6 +67,15 @@ public:
         selected_driver = id;
         return true;
     }
+    int http_gets = 0;
+    std::optional<std::string> HttpGet(const std::string&, std::uint64_t, const std::atomic_bool&,
+                                       std::string* error) override {
+        http_gets++;
+        if (error) {
+            *error = "offline";
+        }
+        return std::nullopt;
+    }
 };
 
 std::string Release(const std::string& name, const std::string& tag, const std::string& body,
@@ -285,6 +294,55 @@ void TestFlow(const std::filesystem::path& dir) {
     Check(notes == 6, "flow: one cue per page shown");
 }
 
+// G4.WIZ.20, G4.WIZ.21 and G4.GPU.3: a picker that fails, Back on Welcome, no GitHub request
+// before "Browse GitHub drivers".
+void TestPickerBackAndDriverPage(const std::filesystem::path& dir) {
+    {
+        FakeHost host;
+        Wizard wizard(host, dir / "welcome.json", Readiness{}, SampleDevice("desktop"),
+                      [](std::function<void()> f) { f(); });
+        Check(wizard.step() == Step::Welcome && wizard.OnWelcome(),
+              "back: a new setup is on Welcome, where Android back leaves the app");
+    }
+    {
+        FakeHost host;
+        Readiness readiness;
+        readiness.keys_usable = true;
+        readiness.qlaunch = true;
+        readiness.firmware_version = "23.0.1";
+        Wizard wizard(host, dir / "picker.json", readiness, SampleDevice("desktop"),
+                      [](std::function<void()> f) { f(); });
+        Check(wizard.step() == Step::Games && !wizard.OnWelcome(), "back: past Welcome, back is the wizard's Back");
+        wizard.PickerFailed("No Activity found to handle Intent");
+        Check(wizard.Status() == "The picker could not open: No Activity found to handle Intent" &&
+                  wizard.StatusTone() == Tone::Bad && wizard.Folders().empty(),
+              "picker: a picker that throws says so and changes nothing");
+    }
+    {
+        FakeHost host;
+        host.driver_store = true;
+        DeviceInfo a650;
+        a650.abis = std::vector<std::string>{"arm64-v8a"};
+        a650.gpu = "Adreno (TM) 650";
+        a650.adreno = true;
+        a650.android_api = 31;
+        Record record;
+        record.keys_present = true;
+        record.firmware_version = "23.0.1";
+        record.game_dirs = std::vector<std::string>{"/games"};
+        record.dlc_dirs = std::vector<std::string>{};
+        record.update_dirs = std::vector<std::string>{};
+        SaveRecord(record, dir / "driver.json");
+        Readiness readiness;
+        readiness.keys_usable = true;
+        readiness.qlaunch = true;
+        readiness.firmware_version = "23.0.1";
+        Wizard wizard(host, dir / "driver.json", readiness, a650, [](std::function<void()> f) { f(); });
+        Check(wizard.step() == Step::Driver && host.http_gets == 0 && !wizard.Busy(),
+              "drivers: the driver page on an Adreno 650 sends nothing to GitHub until Browse");
+    }
+}
+
 void TestChime() {
     const auto samples = Chime::Samples(0);
     Check(samples.size() == static_cast<size_t>(Chime::SampleRate * Chime::DurationMs / 1000), "chime: 180 ms");
@@ -309,6 +367,7 @@ int main() {
     TestKeysCheck();
     TestDriverCatalog();
     TestFlow(dir);
+    TestPickerBackAndDriverPage(dir);
     TestChime();
 
     std::filesystem::remove_all(dir);

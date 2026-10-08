@@ -29,4 +29,23 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_key_service_description">Sends a controller\'s HOME key to the console while Harbor is on screen, instead of leaving Harbor. Harbor reads no other keys and nothing on screen.</string>
     <string name="harbor_key_service_hint">Turn on \"Harbor controller HOME key\" here, then go back to Harbor.</string>
     <string name="harbor_connecting">Connecting to OpenPak…</string>
+    <string name="harbor_starting">Starting…</string>
+    <string name="harbor_menu_power">Power button (hold)</string>
+    <string name="harbor_stopping">Stopping the console…</string>
+    <string name="harbor_stopped">Harbor stopped</string>
+    <string name="harbor_cannot_start">Harbor cannot start</string>
+    <string name="harbor_start_again">Start again</string>
+    <string name="harbor_back">Back</string>
+    <string name="harbor_stop_root_exited">The console\'s root program exited.</string>
+    <string name="harbor_stop_home_failed">The HOME menu could not be loaded (see the log).</string>
+    <string name="harbor_stop_renderer">The renderer could not start (see the log).</string>
+    <string name="harbor_driver_lead">The Vulkan driver the console starts with. Start with the phone\'s driver; try an installed Turnip driver when something draws wrong.</string>
+    <string name="harbor_driver_chosen">%1$s (chosen)</string>
+    <string name="harbor_driver_install">Install driver…</string>
+    <string name="harbor_driver_saved">Saved. The console uses it from its next start.</string>
+    <string name="harbor_driver_not_saved">The choice could not be saved.</string>
+    <string name="harbor_driver_installing">Installing the driver…</string>
+    <string name="harbor_driver_installed">%1$s is installed. It is chosen; the console uses it from its next start.</string>
+    <string name="harbor_driver_install_failed">The driver could not be installed: %1$s</string>
+    <string name="harbor_driver_api">%1$s requires Android API %2$s; this phone has API %3$d. Choose another driver.</string>
 </resources>

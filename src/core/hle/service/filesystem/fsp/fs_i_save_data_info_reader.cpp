@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <string>
+#include <string_view>
+
 #include "common/hex_util.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -22,7 +25,9 @@ ISaveDataInfoReader::ISaveDataInfoReader(Core::System& system_,
     };
     RegisterHandlers(functions);
 
-    FindAllSaves(space);
+    if (save_data_controller != nullptr) {
+        info = FindAllSaves(*save_data_controller, space);
+    }
 }
 
 ISaveDataInfoReader::~ISaveDataInfoReader() = default;
@@ -37,6 +42,25 @@ static u64 stoull_be(std::string_view str) {
     std::memcpy(&out, bytes.data(), sizeof(u64));
 
     return Common::swap64(out);
+}
+
+// fs gives every save that has no static id an id of its own in its index. Saves here have no
+// index, so the id is derived from the save's location: stable across restarts, below the
+// system save range (top bit clear) and never 0.
+static u64 MakeSaveDataId(FileSys::SaveDataSpaceId space, std::string_view user_id,
+                          std::string_view title_id) {
+    u64 hash = 0xCBF29CE484222325ULL;
+    const auto mix = [&hash](std::string_view text) {
+        for (const char c : text) {
+            hash = (hash ^ static_cast<u8>(c)) * 0x100000001B3ULL;
+        }
+        hash = (hash ^ u8{'/'}) * 0x100000001B3ULL;
+    };
+    mix(std::to_string(static_cast<u32>(space)));
+    mix(user_id);
+    mix(title_id);
+    const u64 id = hash & 0x7FFFFFFFFFFFFFFFULL;
+    return id != 0 ? id : 1;
 }
 
 Result ISaveDataInfoReader::ReadSaveDataInfo(
@@ -63,29 +87,40 @@ Result ISaveDataInfoReader::ReadSaveDataInfo(
     R_SUCCEED();
 }
 
-void ISaveDataInfoReader::FindAllSaves(FileSys::SaveDataSpaceId space) {
+std::vector<ISaveDataInfoReader::SaveDataInfo> ISaveDataInfoReader::FindAllSaves(
+    SaveDataController& save_data_controller, FileSys::SaveDataSpaceId space) {
+    std::vector<SaveDataInfo> info;
     FileSys::VirtualDir save_root{};
-    const auto result = save_data_controller->OpenSaveDataSpace(&save_root, space);
+    const auto result = save_data_controller.OpenSaveDataSpace(&save_root, space);
 
     if (result != ResultSuccess || save_root == nullptr) {
         LOG_ERROR(Service_FS, "The save root for the space_id={:02X} was invalid!", space);
-        return;
+        return info;
     }
 
     for (const auto& type : save_root->GetSubdirectories()) {
         if (type->GetName() == "save") {
-            FindNormalSaves(space, type);
+            FindNormalSaves(info, space, type);
         } else if (space == FileSys::SaveDataSpaceId::Temporary) {
-            FindTemporaryStorageSaves(space, type);
+            FindTemporaryStorageSaves(info, space, type);
         }
     }
+    return info;
 }
 
-void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
+void ISaveDataInfoReader::FindNormalSaves(std::vector<SaveDataInfo>& info,
+                                          FileSys::SaveDataSpaceId space,
                                           const FileSys::VirtualDir& type) {
     for (const auto& save_id : type->GetSubdirectories()) {
         // Emulator bookkeeping (/system/save/.harbor) is not a save.
         if (save_id->GetName().starts_with('.')) {
+            continue;
+        }
+        // Eden's newer layout for user saves (SaveDataFactory::GetFullPath prefers it when it
+        // exists): account/<user>/<title>/0 and device/<title>/0.
+        if (space == FileSys::SaveDataSpaceId::User &&
+            (save_id->GetName() == "account" || save_id->GetName() == "device")) {
+            FindNewLayoutSaves(info, space, save_id);
             continue;
         }
         for (const auto& user_id : save_id->GetSubdirectories()) {
@@ -99,9 +134,9 @@ void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
             std::reverse(user_id_numeric.begin(), user_id_numeric.end());
 
             if (save_id_numeric != 0) {
-                // System Save Data
+                // System Save Data. fs indexes a system save under its static id.
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    save_id_numeric,
                     space,
                     FileSys::SaveDataType::System,
                     {},
@@ -120,7 +155,7 @@ void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
                 const auto device = std::all_of(user_id_numeric.begin(), user_id_numeric.end(),
                                                 [](u8 val) { return val == 0; });
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    MakeSaveDataId(space, user_id->GetName(), title_id->GetName()),
                     space,
                     device ? FileSys::SaveDataType::Device : FileSys::SaveDataType::Account,
                     {},
@@ -136,7 +171,50 @@ void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
     }
 }
 
-void ISaveDataInfoReader::FindTemporaryStorageSaves(FileSys::SaveDataSpaceId space,
+void ISaveDataInfoReader::FindNewLayoutSaves(std::vector<SaveDataInfo>& info,
+                                             FileSys::SaveDataSpaceId space,
+                                             const FileSys::VirtualDir& layout) {
+    const bool device = layout->GetName() == "device";
+    const auto add_title_saves = [&](const FileSys::VirtualDir& titles, std::string_view user_name,
+                                     const std::array<u8, 0x10>& user_id) {
+        for (const auto& title_id : titles->GetSubdirectories()) {
+            if (title_id->GetName().size() != 0x10 || title_id->GetSubdirectory("0") == nullptr) {
+                continue;
+            }
+            // The layout tag keeps these ids apart from a save of the same title and user in
+            // the older layout.
+            info.emplace_back(SaveDataInfo{
+                MakeSaveDataId(space, fmt::format("{}/{}", layout->GetName(), user_name),
+                               title_id->GetName()),
+                space,
+                device ? FileSys::SaveDataType::Device : FileSys::SaveDataType::Account,
+                {},
+                user_id,
+                0,
+                stoull_be(title_id->GetName()),
+                title_id->GetSize(),
+                {},
+                {},
+            });
+        }
+    };
+
+    if (device) {
+        add_title_saves(layout, {}, {});
+        return;
+    }
+    for (const auto& user_dir : layout->GetSubdirectories()) {
+        // The user directory is Common::UUID::RawString: the id's bytes in memory order.
+        if (user_dir->GetName().size() != 0x20) {
+            continue;
+        }
+        add_title_saves(user_dir, user_dir->GetName(),
+                        Common::HexStringToArray<0x10>(user_dir->GetName()));
+    }
+}
+
+void ISaveDataInfoReader::FindTemporaryStorageSaves(std::vector<SaveDataInfo>& info,
+                                                    FileSys::SaveDataSpaceId space,
                                                     const FileSys::VirtualDir& type) {
     for (const auto& user_id : type->GetSubdirectories()) {
         // Skip non user id subdirectories
@@ -149,7 +227,7 @@ void ISaveDataInfoReader::FindTemporaryStorageSaves(FileSys::SaveDataSpaceId spa
                 std::reverse(user_id_numeric.begin(), user_id_numeric.end());
 
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    MakeSaveDataId(space, user_id->GetName(), title_id->GetName()),
                     space,
                     FileSys::SaveDataType::Temporary,
                     {},

@@ -21,9 +21,9 @@ class InputSubsystem;
  * is created there and line commands are read from it on a background thread:
  *
  *   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
- *   home   home-long   capture   power
+ *   home   home-long   capture   power   terminate
  *   screenshot <png path>   threads   quit   menu <name>
- *   type <text>   type-line <file> <n>   key <name>   detach   attach
+ *   type <text>   type-line <file> <n>   key <name>   detach   attach   dock
  *
  * Buttons reach the guest through the virtual gamepad (the same input path the Android overlay
  * uses), on both the Player 1 and the Handheld controller. Text and keys reach it as key presses
@@ -49,6 +49,11 @@ public:
         std::function<void(const std::string& name)> menu;
         /// Runs on the GUI thread: the Joy-Cons off (true) or back on (false) the console's rails.
         std::function<void(bool detached)> joycons;
+        /// Runs on the control thread: the power button held (F5), force-terminate (F10).
+        std::function<void()> power;
+        std::function<void()> terminate;
+        /// Runs on the GUI thread: into or out of the dock (F6).
+        std::function<void()> dock;
     };
 
     /// Returns nullptr unless HARBOR_CONTROL is set.

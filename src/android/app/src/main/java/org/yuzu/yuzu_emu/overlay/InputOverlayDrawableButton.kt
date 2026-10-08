@@ -98,6 +98,11 @@ class InputOverlayDrawableButton(
         return false
     }
 
+    /** Harbor console mode: InputOverlay tracks the fingers and sets the drawn state. */
+    fun setPressed(pressed: Boolean) {
+        pressedState = pressed
+    }
+
     fun setPosition(x: Int, y: Int) {
         buttonPositionX = x
         buttonPositionY = y

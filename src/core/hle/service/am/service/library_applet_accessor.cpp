@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_data_broker.h"
@@ -247,7 +248,9 @@ Result ILibraryAppletAccessor::GetLibraryAppletInfo(
 }
 
 Result ILibraryAppletAccessor::Unknown170(OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // qlaunch waits on it beside the state-changed event; it never signals.
+    LOG_UNKNOWN_CONTRACT(Service_AM,
+                         "ILibraryAppletAccessor 170; returning an event that never signals");
     *out_event = m_applet->unknown_event.GetHandle();
     R_SUCCEED();
 }

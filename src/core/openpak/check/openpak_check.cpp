@@ -311,6 +311,25 @@ void OlscChecks(const std::filesystem::path& dir) {
               reread.ApplicationAutoTransfer(uid, 0x0100A00000BB0000) &&
               !reread.ApplicationAutoTransfer(uid, 0x0100000000000001),
           "the olsc daemon settings survive a restart");
+
+    if (list) {
+        const auto store = dir / "olsc-archives.json";
+        std::filesystem::remove(store);
+        auto& cache = olsc::ArchiveCache::Instance();
+        cache.SetStore(store);
+        cache.Put(uid, *list);
+        cache.Clear();
+        Check(!cache.Get(uid), "a cleared cache has no list");
+        cache.SetStore(store);
+        const auto kept = cache.Get(uid);
+        Check(kept && kept->size() == list->size() && (*kept)[0].id == (*list)[0].id &&
+                  (*kept)[0].nsa_id == 0xaa && (*kept)[0].acd_index == 3 &&
+                  (*kept)[2].status == olsc::StatusUploading,
+              "the archive list survives a restart, as the sysmodule's cache does");
+        cache.SetStore(dir / "olsc-archives-other.json");
+        Check(!cache.Get(uid), "another data directory starts without the list");
+        cache.Clear();
+    }
 }
 
 void RedactChecks() {

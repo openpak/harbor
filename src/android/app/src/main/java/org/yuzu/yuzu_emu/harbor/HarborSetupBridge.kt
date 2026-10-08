@@ -4,6 +4,7 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.annotation.Keep
 import java.io.File
@@ -13,10 +14,15 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipException
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 import javax.net.ssl.HttpsURLConnection
 import org.yuzu.yuzu_emu.YuzuApplication
 import org.yuzu.yuzu_emu.features.settings.model.StringSetting
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
+import org.yuzu.yuzu_emu.utils.GpuDriverMetadata
 import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.NativeConfig
 
@@ -34,6 +40,13 @@ object HarborSetupBridge {
     var ran = false
 
     private const val USER_AGENT = "Harbor"
+
+    // Driver packages (G4.GPU.10) and downloads (G4.GPU.5), as the Ryujinx Harbor limits them.
+    private const val MAX_META_BYTES = 64L * 1024
+    private const val MAX_DRIVER_FILES = 128
+    private const val MAX_DRIVER_FILES_BYTES = 256L * 1024 * 1024
+    private const val ZIP_SLACK_BYTES = 1L * 1024 * 1024
+    private const val DOWNLOAD_DEADLINE_MS = 3 * 60 * 1000L
 
     @JvmStatic
     fun pickFile(requestId: Int, title: String, extensions: Array<String>) {
@@ -89,6 +102,8 @@ object HarborSetupBridge {
                 return arrayOf("error", "The download is larger than the release says.")
             }
             val digest = MessageDigest.getInstance("SHA-256")
+            // The whole download, not just each read, has three minutes.
+            val deadline = SystemClock.elapsedRealtime() + DOWNLOAD_DEADLINE_MS
             var total = 0L
             connection.inputStream.use { input ->
                 FileOutputStream(file).use { output ->
@@ -106,6 +121,10 @@ object HarborSetupBridge {
                         output.write(buffer, 0, read)
                         if (!HarborNative.downloadProgress(handle, total)) {
                             return arrayOf("error", "Cancelled.")
+                        }
+                        if (SystemClock.elapsedRealtime() > deadline) {
+                            file.delete()
+                            return arrayOf("error", "The download took longer than three minutes. Try again.")
                         }
                     }
                 }
@@ -136,8 +155,11 @@ object HarborSetupBridge {
     }
 
     /**
-     * Copies a driver package aside and reads it with Eden's own parser (so Eden can load what Harbor
-     * accepts): [staged, name, version, vendor, libraryName, minApi, error].
+     * Copies a driver package aside, checks it and reads it with Eden's own parser (so Eden can load
+     * what Harbor accepts): [staged, name, version, vendor, libraryName, minApi, error]. Only the files
+     * beside meta.json are kept, flat, in the staged copy, so a package in a subfolder installs and
+     * nothing in the zip chooses where a file lands.
+     * Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), GpuDrivers.Install.
      */
     @JvmStatic
     fun inspectDriver(location: String): Array<String> {
@@ -147,9 +169,23 @@ object HarborSetupBridge {
             deleteRecursively()
             mkdirs()
         }
+        val source = File(directory, "source.zip")
         val staged = File(directory, File(name).name)
         return try {
-            openInput(location).use { input -> FileOutputStream(staged).use { input.copyTo(it) } }
+            openInput(location).use { input ->
+                FileOutputStream(source).use { output ->
+                    if (copyBounded(input, output, MAX_DRIVER_FILES_BYTES + ZIP_SLACK_BYTES) < 0) {
+                        return failure("The driver package is too large to install.")
+                    }
+                }
+            }
+            val problem = repackDriver(source, staged, name)
+            source.delete()
+            if (problem != null) {
+                staged.delete()
+                Log.warning("[Harbor] driver package refused: $problem")
+                return failure(problem)
+            }
             val meta = GpuDriverHelper.getMetadataFromZip(staged)
             if (meta.name == null || meta.libraryName == null) {
                 staged.delete()
@@ -160,8 +196,72 @@ object HarborSetupBridge {
                 meta.minApi.toString(), ""
             )
         } catch (e: IOException) {
+            source.delete()
             staged.delete()
             failure("The driver could not be read: ${e.message}")
+        }
+    }
+
+    /** Writes the files beside `source`'s meta.json to `target`, flat; returns why not, or null. */
+    private fun repackDriver(source: File, target: File, name: String): String? {
+        val zip = try {
+            ZipFile(source)
+        } catch (e: ZipException) {
+            return "$name is not a .zip file."
+        }
+        zip.use {
+            val entries = zip.entries().toList().filter { !it.isDirectory }
+            val meta = entries.firstOrNull { it.name == "meta.json" || it.name.endsWith("/meta.json") }
+                ?: return "$name has no meta.json, so it is not a driver package. Choose an AdrenoTools driver .zip."
+            if (meta.size > MAX_META_BYTES) {
+                return "The driver package metadata is too large to install."
+            }
+            val folder = meta.name.removeSuffix("meta.json")
+            val files = entries.filter {
+                it.name.startsWith(folder) && it.name.length > folder.length &&
+                    !it.name.substring(folder.length).contains('/')
+            }
+            if (files.size > MAX_DRIVER_FILES || files.sumOf { it.size.coerceAtLeast(0) } > MAX_DRIVER_FILES_BYTES) {
+                return "The driver package is too large to install."
+            }
+            val parsed = zip.getInputStream(meta).use { GpuDriverMetadata(it, meta.size) }
+            val library = parsed.libraryName ?: return "The meta.json in $name names no driver library."
+            if (library.contains('/') || library.contains('\\') || library == "." || library == ".." ||
+                files.none { it.name.substring(folder.length) == library }
+            ) {
+                return "$name does not contain $library, the library its meta.json names."
+            }
+            // Counted as written: a zip's declared sizes can lie.
+            var budget = MAX_DRIVER_FILES_BYTES
+            ZipOutputStream(FileOutputStream(target)).use { output ->
+                for (file in files) {
+                    output.putNextEntry(ZipEntry(file.name.substring(folder.length)))
+                    val written = zip.getInputStream(file).use { copyBounded(it, output, budget) }
+                    if (written < 0) {
+                        return "The driver package is too large to install."
+                    }
+                    budget -= written
+                    output.closeEntry()
+                }
+            }
+        }
+        return null
+    }
+
+    /** Copies at most `limit` bytes; returns how many, or -1 when there was more. */
+    private fun copyBounded(input: InputStream, output: java.io.OutputStream, limit: Long): Long {
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) {
+                return total
+            }
+            total += read
+            if (total > limit) {
+                return -1
+            }
+            output.write(buffer, 0, read)
         }
     }
 

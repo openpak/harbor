@@ -780,7 +780,7 @@ void IHidSystemServer::AcquireDeviceRegisteredEventForControllerSupport(HLEReque
 }
 
 void IHidSystemServer::GetRegisteredDevices(HLERequestContext& ctx) {
-    LOG_WARNING(Service_HID, "(STUBBED) called, command={}", ctx.GetCommand()); //548 or 551
+    LOG_WARNING(Service_HID, "{}hid:sys {}: 0 registered devices", ctx.GetCommand() == 551 ? "unknown contract: " : "(STUBBED) ", ctx.GetCommand()); //548 or 551
 
     struct RegisterData {
         std::array<u8, 0x68> data;

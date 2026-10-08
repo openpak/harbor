@@ -7,6 +7,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include "core/file_sys/fs_save_data_types.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/filesystem/fsp/fsp_types.h"
@@ -59,8 +60,11 @@ private:
                                     FileSys::SaveDataAttribute save_struct, u128 uid);
     Result CreateSaveDataFileSystemBySystemSaveDataId(
         FileSys::SaveDataAttribute save_struct, FileSys::SaveDataCreationInfo save_create_struct);
-    Result CreateSaveDataFileSystemWithCreationInfo2(
-        FileSys::SaveDataCreationInfo2 save_data_creation_info);
+    void CreateSaveDataFileSystemWithCreationInfo2(HLERequestContext& ctx);
+    Result CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId space,
+                                      const FileSys::SaveDataAttribute& attribute, u64 owner_id,
+                                      u32 flags, s64 size, s64 journal_size,
+                                      FileSys::SaveDataFormatType format_type);
     void RecordSystemSaveDataOwner(const FileSys::SaveDataAttribute& attribute, u64 owner_id);
     Result DeleteSaveDataFileSystem(u64 save_data_id);
     Result IsExFatSupported(Out<bool> out_is_supported);
@@ -96,6 +100,18 @@ private:
         FileSys::SaveDataSpaceId space_id, FileSys::SaveDataAttribute attribute,
         InBuffer<BufferAttr_HipcMapAlias> mask_buffer,
         OutBuffer<BufferAttr_HipcMapAlias> out_buffer);
+    FileSys::SaveDataAttribute ResolveExtraDataAttribute(
+        FileSys::SaveDataAttribute attribute) const;
+    Result FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
+                            FileSys::SaveDataSpaceId space_id, u64 save_data_id) const;
+    Result ReadExtraDataById(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                             FileSys::SaveDataSpaceId space_id, u64 save_data_id);
+    Result ReadExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                         FileSys::SaveDataSpaceId space_id,
+                         const FileSys::SaveDataAttribute& attribute, std::span<const u8> mask);
+    Result WriteExtraData(FileSys::SaveDataSpaceId space_id,
+                          const FileSys::SaveDataAttribute& attribute, std::span<const u8> data,
+                          std::span<const u8> mask);
     Result OpenSaveDataTransferProhibiter(OutInterface<ISaveDataTransferProhibiter> out_prohibiter,
                                           u64 id);
     Result OpenDataStorageByCurrentProcess(OutInterface<IStorage> out_interface);

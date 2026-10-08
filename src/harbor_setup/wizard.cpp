@@ -706,7 +706,7 @@ void Wizard::FillDriverChoices(const std::string& selected) {
 
 /// Adreno 6xx: the phone's own driver crashes HOME, so MrPurple's Turnip T30 is the default, once
 /// per setup and only while the phone's driver is chosen: an installed T30 is selected, otherwise
-/// the GitHub listing is fetched and its recommended T30 downloaded and installed (which selects it).
+/// the first "Browse GitHub drivers" downloads and installs the recommended T30 (which selects it).
 void Wizard::ChooseRecommendedDriver() {
     if (driver_auto_tried || !selected_driver.empty() || busy) {
         return;
@@ -721,10 +721,11 @@ void Wizard::ChooseRecommendedDriver() {
         ShowStatus(t30->title + " is chosen for this GPU; the phone's driver stays one tap away.", Tone::Ok);
         return;
     }
+    // Nothing goes to GitHub before "Browse GitHub drivers" is pressed; the first browse then
+    // installs the recommended T30 while the phone's driver is still chosen.
     if (CanBrowseDrivers()) {
-        LOG_INFO(Frontend, "harbor: fetching the recommended driver for this GPU");
+        LOG_INFO(Frontend, "harbor: the first GitHub browse installs the recommended driver for this GPU");
         driver_auto_download = true;
-        BrowseDrivers();
     }
 }
 
@@ -1410,6 +1411,13 @@ void Wizard::Next() {
         return;
     }
     GoTo(Neighbour(page, 1));
+}
+
+void Wizard::PickerFailed(const std::string& message) {
+    LOG_WARNING(Frontend, "harbor: a picker could not open");
+    ShowStatus("The picker could not open: " + (message.empty() ? std::string("unknown error") : message),
+               Tone::Bad);
+    Notify();
 }
 
 void Wizard::Back() {

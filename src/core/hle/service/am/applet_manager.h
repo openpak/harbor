@@ -64,6 +64,11 @@ public:
     // Forwarded to the window system, if one is running.
     void ReleaseForegroundHold(const Applet& child);
 
+    // Host keys (HOME session). The power button held: the overlay's power menu. Force-terminate:
+    // ends the application the HOME menu launched, as a kill does on a console.
+    void PowerButtonMiddlePress();
+    void ForceTerminateApplication();
+
     // The guest asked for a reboot (IGlobalStateController 4, IOverlayFunctions 11). The session
     // stops; the frontend reads this afterwards to start it again with the same data.
     enum class PowerRequest { None, Shutdown, Reboot };

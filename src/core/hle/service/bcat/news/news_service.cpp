@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 
+#include "common/redact.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/service/bcat/news/download_context.h"
 #include "core/hle/service/bcat/news/news_service.h"
@@ -54,6 +55,7 @@ INewsService::INewsService(Core::System& system_, std::shared_ptr<NewsShared> sh
         {40101, D<&INewsService::RequestAutoSubscription>, "RequestAutoSubscription"}, //3.0.0+
         {40200, D<&INewsService::ClearStorage>, "ClearStorage"},
         {40201, D<&INewsService::ClearSubscriptionStatusAll>, "ClearSubscriptionStatusAll"},
+        {50100, D<&INewsService::Unknown50100>, "Unknown50100"}, //23.0.0+
         {90100, nullptr, "GetNewsDatabaseDump"},
     };
     // clang-format on
@@ -171,6 +173,11 @@ Result INewsService::ClearStorage() {
 Result INewsService::ClearSubscriptionStatusAll() {
     shared->ClearSubscriptions();
     LOG_INFO(Service_BCAT, "News subscriptions cleared");
+    R_SUCCEED();
+}
+
+Result INewsService::Unknown50100() {
+    LOG_UNKNOWN_CONTRACT(Service_BCAT, "news 50100; returning success with no output");
     R_SUCCEED();
 }
 

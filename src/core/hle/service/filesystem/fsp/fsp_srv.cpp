@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstring>
 #include <iterator>
@@ -88,7 +89,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {34, D<&FSP_SRV::GetCacheStorageSize>, "GetCacheStorageSize"},
         {35, nullptr, "CreateSaveDataFileSystemByHashSalt"},
         {36, nullptr, "OpenHostFileSystemWithOption"},
-        {37, D<&FSP_SRV::CreateSaveDataFileSystemWithCreationInfo2>, "CreateSaveDataFileSystemWithCreationInfo2"},
+        {37, &FSP_SRV::CreateSaveDataFileSystemWithCreationInfo2, "CreateSaveDataFileSystemWithCreationInfo2"},
         {51, D<&FSP_SRV::OpenSaveDataFileSystem>, "OpenSaveDataFileSystem"},
         {52, D<&FSP_SRV::OpenSaveDataFileSystemBySystemSaveDataId>, "OpenSaveDataFileSystemBySystemSaveDataId"},
         {53, D<&FSP_SRV::OpenReadOnlySaveDataFileSystem>, "OpenReadOnlySaveDataFileSystem"},
@@ -248,35 +249,83 @@ Result FSP_SRV::OpenSdCardFileSystem(OutInterface<IFileSystem> out_interface) {
 }
 
 Result FSP_SRV::CreateSaveDataFileSystem(FileSys::SaveDataCreationInfo save_create_struct,
-                                         FileSys::SaveDataAttribute save_struct, u128 uid) {
-    LOG_DEBUG(Service_FS, "called save_struct = {}, uid = {:016X}{:016X}", save_struct.DebugInfo(),
-              uid[1], uid[0]);
+                                         FileSys::SaveDataAttribute save_struct,
+                                         [[maybe_unused]] u128 uid) {
+    LOG_DEBUG(Service_FS, "called save_struct = {}", save_struct.DebugInfo());
 
-    FileSys::VirtualDir save_data_dir{};
-    R_RETURN(save_data_controller->CreateSaveData(&save_data_dir, FileSys::SaveDataSpaceId::User,
-                                                  save_struct));
+    R_RETURN(CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId::User, save_struct,
+                                        save_create_struct.owner_id, save_create_struct.flags,
+                                        save_create_struct.size, save_create_struct.journal_size,
+                                        FileSys::SaveDataFormatType::Normal));
 }
 
 Result FSP_SRV::CreateSaveDataFileSystemBySystemSaveDataId(
     FileSys::SaveDataAttribute save_struct, FileSys::SaveDataCreationInfo save_create_struct) {
-    LOG_DEBUG(Service_FS, "called save_struct = {}", save_struct.DebugInfo());
+    LOG_INFO(Service_FS, "program {:016X} creates system save {:016X}, owner {:016X}", program_id,
+             save_struct.system_save_data_id, save_create_struct.owner_id);
 
-    FileSys::VirtualDir save_data_dir{};
-    R_TRY(save_data_controller->CreateSaveData(&save_data_dir, FileSys::SaveDataSpaceId::System,
-                                               save_struct));
+    R_TRY(CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId::System, save_struct,
+                                     save_create_struct.owner_id, save_create_struct.flags,
+                                     save_create_struct.size, save_create_struct.journal_size,
+                                     FileSys::SaveDataFormatType::Normal));
     RecordSystemSaveDataOwner(save_struct, save_create_struct.owner_id);
     R_SUCCEED();
 }
 
-Result FSP_SRV::CreateSaveDataFileSystemWithCreationInfo2(
-    FileSys::SaveDataCreationInfo2 save_data_creation_info) {
-    FileSys::VirtualDir save_data_dir{};
-    R_TRY(save_data_controller->CreateSaveData(&save_data_dir, save_data_creation_info.space_id,
-                                               save_data_creation_info.attribute));
-    if (save_data_creation_info.space_id == FileSys::SaveDataSpaceId::System) {
-        RecordSystemSaveDataOwner(save_data_creation_info.attribute,
-                                  save_data_creation_info.owner_id);
+void FSP_SRV::CreateSaveDataFileSystemWithCreationInfo2(HLERequestContext& ctx) {
+    // 14.0.0+: buffer<nn::fs::SaveDataCreationInfo2, 0x19>, 0x200 bytes. The Ryujinx Harbor also
+    // takes the struct from the raw data when no buffer comes (it saw qlaunch 22.5.0 do that).
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    FileSys::SaveDataCreationInfo2 info{};
+    const bool from_buffer = ctx.CanReadBuffer(0) && ctx.GetReadBufferSize(0) > 0;
+    if (from_buffer) {
+        const auto buffer = ctx.ReadBuffer(0);
+        std::memcpy(static_cast<void*>(&info), buffer.data(),
+                    (std::min)(sizeof(info), buffer.size()));
+    } else {
+        const std::size_t offset =
+            (std::min)(std::size_t{ctx.GetDataPayloadOffset() + 2}, IPC::COMMAND_BUFFER_LENGTH);
+        const std::size_t available = (IPC::COMMAND_BUFFER_LENGTH - offset) * sizeof(u32);
+        std::memcpy(static_cast<void*>(&info), ctx.CommandBuffer() + offset,
+                    (std::min)(sizeof(info), available));
     }
+
+    LOG_INFO(Service_FS,
+             "program {:016X} creates save {} in space {}, owner {:016X}, size {:#x}/{:#x}, "
+             "version {:#x}{}",
+             program_id, info.attribute.DebugInfo(), info.space_id, info.owner_id, info.size,
+             info.journal_size, info.version, from_buffer ? "" : " (inline)");
+
+    Result result =
+        CreateSaveDataUnlessExists(info.space_id, info.attribute, info.owner_id, info.flags,
+                                   info.size, info.journal_size, info.format_type);
+    if (result.IsSuccess() && info.space_id == FileSys::SaveDataSpaceId::System) {
+        RecordSystemSaveDataOwner(info.attribute, info.owner_id);
+    }
+
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(result);
+}
+
+Result FSP_SRV::CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId space,
+                                           const FileSys::SaveDataAttribute& attribute,
+                                           u64 owner_id, u32 flags, s64 size, s64 journal_size,
+                                           FileSys::SaveDataFormatType format_type) {
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+
+    // A console refuses to create a save that is already there; callers such as the web applets
+    // create their saves on that answer's absence.
+    if (save_data_controller->SaveDataExists(space, attribute)) {
+        LOG_DEBUG(Service_FS, "save {:016X} in space {} already exists",
+                  attribute.system_save_data_id, space);
+        R_THROW(FileSys::ResultPathAlreadyExists);
+    }
+
+    FileSys::VirtualDir save_data_dir{};
+    R_TRY(save_data_controller->CreateSaveData(&save_data_dir, space, attribute));
+    save_data_controller->InitializeSaveDataExtraData(space, attribute,
+                                                      owner_id != 0 ? owner_id : program_id, flags,
+                                                      size, journal_size, format_type);
     R_SUCCEED();
 }
 
@@ -296,6 +345,14 @@ Result FSP_SRV::DeleteSaveDataFileSystem(u64 save_data_id) {
     // hold no management right and clear their browser storage (0x8000000000001093) at start.
     // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
     R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+
+    // fs finds the save in its index before it checks the caller's rights, so an id that names
+    // no save answers TargetNotFound whoever asks.
+    if (!save_data_controller->SystemSaveDataExists(save_data_id)) {
+        LOG_INFO(Service_FS, "program {:016X} deletes system save {:016X}: not found", program_id,
+                 save_data_id);
+        R_THROW(FileSys::ResultTargetNotFound);
+    }
 
     const auto owner_id = save_data_controller->ReadSystemSaveDataOwner(save_data_id);
     const auto metadata = FileSys::ProgramMetadata::LoadInstalled(content_provider, program_id);
@@ -442,78 +499,185 @@ Result FSP_SRV::FindSaveDataWithFilter(Out<s64> out_count,
                                        OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                        FileSys::SaveDataSpaceId space_id,
                                        FileSys::SaveDataFilter filter) {
-    LOG_WARNING(Service_FS, "(STUBBED) called");
+    // fs answers success with the number of matches written (0 when none); the client turns
+    // 0 into TargetNotFound.
+    using SaveDataInfo = ISaveDataInfoReader::SaveDataInfo;
+    *out_count = 0;
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+
+    const auto matches = [&filter](const SaveDataInfo& info) {
+        const auto& attribute = filter.attribute;
+        if (filter.use_program_id && info.title_id != attribute.program_id) {
+            return false;
+        }
+        if (filter.use_save_data_type && info.type != attribute.type) {
+            return false;
+        }
+        if (filter.use_user_id &&
+            std::memcmp(info.user_id.data(), attribute.user_id.data(), info.user_id.size()) != 0) {
+            return false;
+        }
+        if (filter.use_save_data_id && info.save_id != attribute.system_save_data_id) {
+            return false;
+        }
+        if (filter.use_index && info.index != attribute.index) {
+            return false;
+        }
+        return info.rank == filter.rank;
+    };
+
+    const std::size_t capacity = out_buffer.size() / sizeof(SaveDataInfo);
+    s64 count = 0;
+    for (const auto& info : ISaveDataInfoReader::FindAllSaves(*save_data_controller, space_id)) {
+        if (static_cast<std::size_t>(count) >= capacity) {
+            break;
+        }
+        if (matches(info)) {
+            std::memcpy(out_buffer.data() + count * sizeof(SaveDataInfo), &info,
+                        sizeof(SaveDataInfo));
+            ++count;
+        }
+    }
+    *out_count = count;
+
+    LOG_DEBUG(Service_FS,
+              "space {}, filter program={} type={} user={} id={} index={} rank={} {}: {} found",
+              space_id, filter.use_program_id, filter.use_save_data_type, filter.use_user_id,
+              filter.use_save_data_id, filter.use_index, static_cast<u8>(filter.rank),
+              filter.attribute.DebugInfo(), count);
+    R_SUCCEED();
+}
+
+// Extra data (attribute, owner, timestamp, flags, sizes, commit id) is kept per save, outside
+// the save, from its creation on. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+// base), whose LibHac keeps it in the save image.
+
+FileSys::SaveDataAttribute FSP_SRV::ResolveExtraDataAttribute(
+    FileSys::SaveDataAttribute attribute) const {
+    // fs resolves the "caller" program id to the calling program.
+    constexpr u64 AutoResolveCallerProgramId = ~u64{0} - 1;
+    if (attribute.program_id == AutoResolveCallerProgramId) {
+        attribute.program_id = program_id;
+    }
+    return attribute;
+}
+
+Result FSP_SRV::FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
+                                 FileSys::SaveDataSpaceId space_id, u64 save_data_id) const {
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    if (save_data_controller->FindSaveDataById(out_attribute, space_id, save_data_id).IsSuccess()) {
+        R_SUCCEED();
+    }
+
+    // Saves without a static id go by the id the save list gives them.
+    for (const auto& info : ISaveDataInfoReader::FindAllSaves(*save_data_controller, space_id)) {
+        if (info.save_id_unknown != save_data_id || info.type == FileSys::SaveDataType::System) {
+            continue;
+        }
+        FileSys::UserId user_id{};
+        std::memcpy(user_id.data(), info.user_id.data(), sizeof(user_id));
+        *out_attribute = FileSys::SaveDataAttribute::Make(info.title_id, info.type, user_id,
+                                                          info.save_id, info.index, info.rank);
+        R_SUCCEED();
+    }
     R_THROW(FileSys::ResultTargetNotFound);
+}
+
+Result FSP_SRV::ReadExtraDataById(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                                  FileSys::SaveDataSpaceId space_id, u64 save_data_id) {
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    FileSys::SaveDataAttribute attribute{};
+    R_TRY(FindSaveDataById(&attribute, space_id, save_data_id));
+    R_RETURN(ReadExtraData(out_buffer, space_id, attribute, {}));
+}
+
+Result FSP_SRV::ReadExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
+                              FileSys::SaveDataSpaceId space_id,
+                              const FileSys::SaveDataAttribute& attribute,
+                              std::span<const u8> mask) {
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    FileSys::SaveDataExtraData extra_data{};
+    R_TRY(save_data_controller->ReadSaveDataExtraData(&extra_data, space_id, attribute));
+
+    // A mask keeps only the fields it covers; the rest read as zero.
+    std::array<u8, sizeof(extra_data)> bytes{};
+    std::memcpy(bytes.data(), &extra_data, bytes.size());
+    if (!mask.empty()) {
+        for (std::size_t i = 0; i < bytes.size(); ++i) {
+            bytes[i] &= i < mask.size() ? mask[i] : u8{0};
+        }
+    }
+
+    std::memset(out_buffer.data(), 0, out_buffer.size());
+    std::memcpy(out_buffer.data(), bytes.data(), (std::min)(out_buffer.size(), bytes.size()));
+    LOG_DEBUG(Service_FS, "save {:016X} (type {}): owner {:016X}, sizes {:#x}/{:#x}{}",
+              attribute.system_save_data_id, static_cast<u8>(attribute.type), extra_data.owner_id,
+              extra_data.available_size, extra_data.journal_size, mask.empty() ? "" : " (masked)");
+    R_SUCCEED();
+}
+
+Result FSP_SRV::WriteExtraData(FileSys::SaveDataSpaceId space_id,
+                               const FileSys::SaveDataAttribute& attribute,
+                               std::span<const u8> data, std::span<const u8> mask) {
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    FileSys::SaveDataExtraData extra_data{};
+    R_TRY(save_data_controller->ReadSaveDataExtraData(&extra_data, space_id, attribute));
+
+    // Without a mask the whole buffer is written; with one only the bytes it covers.
+    std::array<u8, sizeof(extra_data)> bytes{};
+    std::memcpy(bytes.data(), &extra_data, bytes.size());
+    for (std::size_t i = 0; i < bytes.size() && i < data.size(); ++i) {
+        const u8 keep = mask.empty() ? u8{0xFF} : (i < mask.size() ? mask[i] : u8{0});
+        bytes[i] = static_cast<u8>((bytes[i] & ~keep) | (data[i] & keep));
+    }
+    std::memcpy(&extra_data, bytes.data(), bytes.size());
+
+    LOG_INFO(Service_FS,
+             "program {:016X} writes the extra data of save {:016X} (type {}){}: flags {:#x}, "
+             "sizes {:#x}/{:#x}",
+             program_id, attribute.system_save_data_id, static_cast<u8>(attribute.type),
+             mask.empty() ? "" : " with a mask", extra_data.flags, extra_data.available_size,
+             extra_data.journal_size);
+    R_RETURN(save_data_controller->WriteSaveDataExtraData(space_id, attribute, extra_data));
 }
 
 Result FSP_SRV::WriteSaveDataFileSystemExtraData(InBuffer<BufferAttr_HipcMapAlias> buffer,
                                                  FileSys::SaveDataSpaceId space_id,
                                                  u64 save_data_id) {
-    LOG_WARNING(Service_FS, "(STUBBED) called, space_id={}, save_data_id={:016X}", space_id,
-                save_data_id);
-    R_SUCCEED();
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    FileSys::SaveDataAttribute attribute{};
+    R_TRY(FindSaveDataById(&attribute, space_id, save_data_id));
+    R_RETURN(WriteExtraData(space_id, attribute, buffer, {}));
 }
 
 Result FSP_SRV::WriteSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
     InBuffer<BufferAttr_HipcMapAlias> buffer, InBuffer<BufferAttr_HipcMapAlias> mask_buffer,
     FileSys::SaveDataSpaceId space_id, FileSys::SaveDataAttribute attribute) {
-    LOG_WARNING(Service_FS,
-                "(STUBBED) called, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
-                "attribute.type={}, attribute.rank={}, attribute.index={}",
-                space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
-    R_SUCCEED();
+    R_RETURN(WriteExtraData(space_id, ResolveExtraDataAttribute(attribute), buffer, mask_buffer));
 }
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
     FileSys::SaveDataSpaceId space_id, FileSys::SaveDataAttribute attribute,
     InBuffer<BufferAttr_HipcMapAlias> mask_buffer, OutBuffer<BufferAttr_HipcMapAlias> out_buffer) {
-    // Stub this to None for now, backend needs an impl to read/write the SaveDataExtraData
-    // In an earlier version of the code, this was returned as an out argument, but this is not
-    // correct
-    [[maybe_unused]] constexpr auto flags = static_cast<u32>(FileSys::SaveDataFlags::None);
-
-    LOG_WARNING(Service_FS,
-                "(STUBBED) called, flags={}, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
-                "attribute.type={}, attribute.rank={}, attribute.index={}",
-                flags, space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
-
-    R_SUCCEED();
+    R_RETURN(
+        ReadExtraData(out_buffer, space_id, ResolveExtraDataAttribute(attribute), mask_buffer));
 }
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                                 u64 save_data_id) {
-    // Stub, backend needs an impl to read/write the SaveDataExtraData
-    LOG_WARNING(Service_FS, "(STUBBED) called, save_data_id={:016X}", save_data_id);
-    std::memset(out_buffer.data(), 0, out_buffer.size());
-    R_SUCCEED();
+    R_RETURN(ReadExtraDataById(out_buffer, FileSys::SaveDataSpaceId::System, save_data_id));
 }
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataAttribute(
     OutBuffer<BufferAttr_HipcMapAlias> out_buffer, FileSys::SaveDataSpaceId space_id,
     FileSys::SaveDataAttribute attribute) {
-    // Stub, backend needs an impl to read/write the SaveDataExtraData
-    LOG_WARNING(Service_FS,
-                "(STUBBED) called, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
-                "attribute.type={}, attribute.rank={}, attribute.index={}",
-                space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
-    std::memset(out_buffer.data(), 0, out_buffer.size());
-    R_SUCCEED();
+    R_RETURN(ReadExtraData(out_buffer, space_id, ResolveExtraDataAttribute(attribute), {}));
 }
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataSpaceId(
     OutBuffer<BufferAttr_HipcMapAlias> out_buffer, FileSys::SaveDataSpaceId space_id,
     u64 save_data_id) {
-    // Stub, backend needs an impl to read/write the SaveDataExtraData
-    LOG_WARNING(Service_FS, "(STUBBED) called, space_id={}, save_data_id={:016X}", space_id,
-                save_data_id);
-    std::memset(out_buffer.data(), 0, out_buffer.size());
-    R_SUCCEED();
+    R_RETURN(ReadExtraDataById(out_buffer, space_id, save_data_id));
 }
 
 Result FSP_SRV::OpenSaveDataTransferProhibiter(
@@ -696,12 +860,20 @@ Result FSP_SRV::FlushAccessLogOnSdCard() {
 
 Result FSP_SRV::ExtendSaveDataFileSystem(FileSys::SaveDataSpaceId space_id, u64 save_data_id,
                                          s64 available_size, s64 journal_size) {
-    // We don't have an index of save data ids, so we can't implement this.
-    LOG_WARNING(Service_FS,
-                "(STUBBED) called, space_id={}, save_data_id={:016X}, available_size={:#x}, "
-                "journal_size={:#x}",
-                space_id, save_data_id, available_size, journal_size);
-    R_SUCCEED();
+    // Saves here are host directories with no size limit, so extending a save only records its
+    // new sizes in the extra data, where its owner reads them back.
+    R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
+    FileSys::SaveDataAttribute attribute{};
+    R_TRY(FindSaveDataById(&attribute, space_id, save_data_id));
+
+    FileSys::SaveDataExtraData extra_data{};
+    R_TRY(save_data_controller->ReadSaveDataExtraData(&extra_data, space_id, attribute));
+    LOG_INFO(Service_FS, "program {:016X} extends save {:016X}: {:#x}/{:#x} -> {:#x}/{:#x}",
+             program_id, save_data_id, extra_data.available_size, extra_data.journal_size,
+             available_size, journal_size);
+    extra_data.available_size = available_size;
+    extra_data.journal_size = journal_size;
+    R_RETURN(save_data_controller->WriteSaveDataExtraData(space_id, attribute, extra_data));
 }
 
 Result FSP_SRV::GetCacheStorageSize(s32 index, Out<s64> out_data_size, Out<s64> out_journal_size) {

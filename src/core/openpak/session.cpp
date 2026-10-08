@@ -277,9 +277,57 @@ std::filesystem::path DevicePath(const Endpoint& endpoint, const char* suffix) {
     return Platform::DataDir() / fmt::format("device-{}.{}", endpoint.key, suffix);
 }
 
-/// A self-signed certificate, kept per server, presented on every OpenPak host. A real console
-/// proves itself with the certificate in its NAND; this is a stable identifier for the install,
-/// and asserts nothing about hardware.
+std::mutex identity_mutex;
+std::function<bool(std::vector<std::uint8_t>&, std::vector<std::uint8_t>&)> identity_source;
+
+/// The console's own certificate and key (its calibration), written as this server's PEM pair.
+bool WriteConsoleIdentity(const std::filesystem::path& cert_path,
+                          const std::filesystem::path& key_path) {
+    std::vector<std::uint8_t> cert_der;
+    std::vector<std::uint8_t> key_der;
+    {
+        std::scoped_lock lock{identity_mutex};
+        if (!identity_source || !identity_source(cert_der, key_der)) {
+            return false;
+        }
+    }
+    const unsigned char* cert_in = cert_der.data();
+    const unsigned char* key_in = key_der.data();
+    X509* cert = d2i_X509(nullptr, &cert_in, static_cast<long>(cert_der.size()));
+    EVP_PKEY* key = d2i_AutoPrivateKey(nullptr, &key_in, static_cast<long>(key_der.size()));
+    OPENSSL_cleanse(key_der.data(), key_der.size());
+    bool ok = cert != nullptr && key != nullptr && X509_check_private_key(cert, key) == 1;
+    if (ok) {
+        Platform::CreateParentDirs(cert_path);
+        FILE* cert_file = std::fopen(cert_path.string().c_str(), "wb");
+        ok = cert_file != nullptr && PEM_write_X509(cert_file, cert) != 0;
+        if (cert_file != nullptr) {
+            std::fclose(cert_file);
+        }
+        FILE* key_file = std::fopen(key_path.string().c_str(), "wb");
+        if (key_file != nullptr) {
+            std::error_code ec;
+            std::filesystem::permissions(key_path,
+                                         std::filesystem::perms::owner_read |
+                                             std::filesystem::perms::owner_write,
+                                         ec);
+        }
+        ok = ok && key_file != nullptr &&
+             PEM_write_PrivateKey(key_file, key, nullptr, nullptr, 0, nullptr, nullptr) != 0;
+        if (key_file != nullptr) {
+            std::fclose(key_file);
+        }
+    }
+    X509_free(cert);
+    EVP_PKEY_free(key);
+    if (ok) {
+        LOG_INFO(WebService, "[OpenPak] This server gets the console's own certificate");
+    }
+    return ok;
+}
+
+/// The certificate presented on every OpenPak host, kept per server: the console's own (its
+/// calibration) for a server met since that exists, else a self-signed one made here.
 bool EnsureClientCertificate(const Endpoint& endpoint) {
     const std::filesystem::path cert_path = DevicePath(endpoint, "pem");
     const std::filesystem::path key_path = DevicePath(endpoint, "key");
@@ -289,6 +337,10 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
     if (std::filesystem::exists(cert_path) && std::filesystem::exists(key_path)) {
         std::error_code ec;
         std::filesystem::permissions(key_path, owner_only, ec);
+        return true;
+    }
+
+    if (WriteConsoleIdentity(cert_path, key_path)) {
         return true;
     }
 
@@ -1002,6 +1054,13 @@ std::string detail::ServerKey() {
     std::lock_guard lock{state.mutex};
     return state.server_host.empty() ? std::string{}
                                      : ServerKeyOf(state.server_host, state.port);
+}
+
+void SetClientIdentitySource(
+    std::function<bool(std::vector<std::uint8_t>& certificate, std::vector<std::uint8_t>& key)>
+        source) {
+    std::scoped_lock lock{identity_mutex};
+    identity_source = std::move(source);
 }
 
 void Configure(std::string server_host, int port, std::string ca_path) {

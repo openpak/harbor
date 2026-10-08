@@ -58,6 +58,8 @@ private:
 
     Result ClearSubscriptionStatusAll();
 
+    Result Unknown50100();
+
     std::shared_ptr<NewsShared> shared;
 };
 

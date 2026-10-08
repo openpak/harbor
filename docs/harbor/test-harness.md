@@ -7,7 +7,7 @@ input, screenshots and a guest thread dump. Nothing touches the owner's keyboard
 
 ```
 scripts/harbor/run-desktop.sh <name> [--fresh] [--docked] [-- extra harbor args]
-scripts/harbor/drive.sh <name> <command> [args...] [<command> ...]
+scripts/harbor/drive.sh [--layout us|uk|auto] <name> <command> [args...] [<command> ...]
 ```
 
 `run-desktop.sh` uses the binary of the worktree it is run from
@@ -15,8 +15,8 @@ scripts/harbor/drive.sh <name> <command> [args...] [<command> ...]
 `HARBOR_BIN` to override. It creates `$SCR/run/<name>/` (the run directory is the working directory,
 so the data lives in `<run>/user/`), extracts firmware 23.0.1 once into `$SCR/run/_fw-23.0.1/`,
 symlinks `~/.switch/{prod,title}.keys`, writes a minimal `qt-config.ini` (no first-run prompts,
-vsync Immediate, null audio, line-flushed log, no pause or confirm dialogs, Player 1 and Handheld
-connected), and starts `harbor --qlaunch` in handheld mode (the 23.0.1 starter stops at "remove the
+vsync Immediate, null audio, line-flushed log, no pause or confirm dialogs, Handheld
+connected and Player 1 not, so a title sees one controller), and starts `harbor --qlaunch` in handheld mode (the 23.0.1 starter stops at "remove the
 console from the dock" when docked; `--docked` selects docked, re-applied on every start). `--fresh`
 wipes only `<run>/user/` (refused unless the path is under `$SCR/run/`). It prints the pid and the
 Hyprland stable window id. Files in the run directory: `stdout.log`, `pid`, `window`, `control`
@@ -40,11 +40,15 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `hold <button>` / `release <button>` | press or release until told otherwise |
 | `stick <l\|r> <x> <y> [ms]` | set a stick (-1..1); with `ms` it returns to centre afterwards |
 | `home` | Home for 100 ms (short press, below the poller's 400 ms) |
-| `home-long` | Home for 1200 ms (long press, above the poller's 800 ms) |
+| `home-long` | Home for 1200 ms (long press, above the poller's 500 ms in a HOME session, 800 ms outside one) |
 | `capture` | Capture button, short press |
-| `power` | not supported: this build has no power button path; logs a warning |
-| `type <text>` | types the text on the emulated USB keyboard (US layout); logged |
+| `power` | the power button, middle press (F5 in the window) |
+| `terminate` | force-terminates the running application (F10 in the window) |
+| `dock` | toggles docked / handheld (the Qt "Docked" menu entry); in console mode it switches silently, with no "Invalid config" dialog |
+| `type <text>` | types the text on the emulated USB keyboard, following the guest's keyboard layout (see below); logged |
 | `type-line <file> <n>` | types line `n` (1-based) of `file`, only the value when the line is `key=value`; for secrets: logged only as `harbor-control: type-line (N chars)`, never echoed |
+| `layout <us\|uk\|auto>` | the layout `type` / `type-line` use (default `auto`; `--layout` is the same for a whole `drive.sh` call) |
+| `key-timing <hold> <gap>` | how long a key is held and then left released, in ms (default 100 / 100) |
 | `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
 | `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
@@ -56,7 +60,7 @@ Buttons: `A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK`. `drive
 `sleep <seconds>`. Relative screenshot paths land in the run directory.
 
 Input goes through InputCommon's virtual gamepad (the path the Android overlay uses), which every
-emulated controller already maps. It is sent to Player 1 and Handheld together, so Home and Capture
+emulated controller already maps. It is sent to Player 1 and Handheld together (whichever is connected), so Home and Capture
 reach `am/button_poller.cpp`, which logs `system button press, type=N` (1 = home short, 2 = home
 long, 6 = capture short, 7 = capture long) in `WindowSystem::OnSystemButtonPress`.
 
@@ -64,7 +68,15 @@ Typing goes to the emulated USB keyboard (hid keyboard, `keyboard_enabled` is sw
 which the firmware's own software keyboard reads as a console reads a USB keyboard. hid writes the
 keyboard into the shared memory of the most recently created applet resource, which is the swkbd
 applet while it is open. While Eden's Qt keyboard dialog is showing (swkbd HLE, outside a HOME
-session) the keys go to that dialog instead. Only printable ASCII is typed; a line with any other
+session) the keys go to that dialog instead. Typing follows the guest's keyboard layout, because the firmware turns a key position into a
+character with the layout set in System Settings (`set:sys` GetKeyboardLayout). Before every `type` and
+`type-line`, `drive.sh` reads that layout (the last `GetKeyboardLayout`/`SetKeyboardLayout` line in the
+run's `user/log/eden_log.txt`, else the field in the run's `nand/system/save/8000000000000050/settings.dat`)
+and sends `layout us` or `layout uk` (layout 1 = English US, 3 = English UK; any other layout types as
+US, with a warning). On UK, `@` and `"` swap places and `#`, `~`, `\` and `|` are on the two extra
+keys (usage 0x32 and 0x64). Each key is held 100 ms and left released 100 ms (Shift is pressed and
+released with the same gaps): the firmware reads the keyboard once per frame, so a shorter hold drops a
+key and a shorter gap merges a doubled key ("66") into one press. Only printable ASCII is typed; a line with any other
 character types nothing.
 
 ## The setup wizard in scripted runs

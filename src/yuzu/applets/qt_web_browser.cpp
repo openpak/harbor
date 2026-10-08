@@ -8,6 +8,7 @@
 #include <QUrl>
 
 #include "common/logging.h"
+#include "common/redact.h"
 
 #ifdef YUZU_USE_QT_WEB_ENGINE
 #include <bit>
@@ -421,7 +422,7 @@ void QtWebBrowser::OpenLocalWebPage(const std::string& local_url,
 
 void QtWebBrowser::OpenExternalWebPage(const std::string& external_url,
                                        OpenWebPageCallback callback_) const {
-    LOG_INFO(Service_AM, "Opening external URL in host browser: {}", external_url);
+    LOG_INFO(Service_AM, "Opening external URL in host browser: {}", Common::RedactUrl(external_url));
 
     const QUrl url(QString::fromStdString(external_url));
     const bool success = QDesktopServices::openUrl(url);

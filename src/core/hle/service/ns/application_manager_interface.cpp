@@ -13,6 +13,7 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/ns/application_manager_interface.h"
+#include "core/hle/kernel/k_transfer_memory.h"
 
 #include "core/file_sys/content_archive.h"
 #include "core/hle/service/ns/content_management_interface.h"
@@ -107,7 +108,8 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
       gamecard_waken_ready_event{service_context}, unknown_event{service_context},
       gamecard_attachment_event{service_context}, sd_card_removed_event{service_context},
       application_shell_event{service_context}, unknown518_event{service_context},
-      unknown1508_event{service_context}, async_completed_event{service_context} {
+      unknown1508_event{service_context}, async_completed_event{service_context},
+      unknown4008_event{service_context} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListApplicationRecord"},
@@ -1047,13 +1049,22 @@ Result IApplicationManagerInterface::Unknown2366(OutInterface<IAsyncResult> out_
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4008(UserIdAndValue input) {
-    // A user id and a u32 (seen as 0x300000), no buffers or output; the first-time setup calls it
-    // right after a user is created from an account.
+Result IApplicationManagerInterface::Unknown4008(OutInterface<IAsyncResult> out_interface,
+                                                 OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                 Common::UUID user_id, u64 work_buffer_size,
+                                                 InCopyHandle<Kernel::KTransferMemory> work_buffer) {
+    // The 23.0.1 client proxy (playerSelect, right after a user is linked) sends a user id, a u64
+    // size (0x300000) and a transfer memory of that size as a work buffer, and reads back an async
+    // result and its event; the applet polls that event until it signals. What ns does with the
+    // buffer is unknown; the work completes at once and unchanged. The event is this command's own:
+    // the caller clears it after the wait, and 2366's async is in flight at the same time.
     LOG_WARNING(Service_NS,
-                "unknown contract: IApplicationManagerInterface 4008; answered as a no-op, "
-                "value={:#x}",
-                input.value);
+                "unknown contract: IApplicationManagerInterface 4008; completed unchanged, "
+                "work buffer {:#x} bytes{}",
+                work_buffer_size, work_buffer ? "" : " (no transfer memory)");
+    unknown4008_event.Signal(system.Kernel());
+    *out_event = unknown4008_event.GetHandle();
+    *out_interface = std::make_shared<IAsyncResult>(system, &unknown4008_event);
     R_SUCCEED();
 }
 
@@ -1082,7 +1093,7 @@ Result IApplicationManagerInterface::Unknown4089(Out<UnknownTryPopRecord> out_re
 }
 
 Result IApplicationManagerInterface::Unknown4105() {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
+    LOG_UNKNOWN_CONTRACT(Service_NS, "ns:am2 4105; returning success, no linked-account work queued");
     R_SUCCEED();
 }
 

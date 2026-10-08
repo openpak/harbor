@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/logging.h"
+#include "common/redact.h"
 #include "core/frontend/applets/web_browser.h"
 
 namespace Core::Frontend {
@@ -19,7 +20,7 @@ void DefaultWebBrowserApplet::OpenLocalWebPage(const std::string& local_url,
                                                ExtractROMFSCallback extract_romfs_callback,
                                                OpenWebPageCallback callback) const {
     LOG_WARNING(Service_AM, "(STUBBED) called, backend requested to open local web page at {}",
-                local_url);
+                Common::RedactUrl(local_url));
 
     callback(Service::AM::Frontend::WebExitReason::WindowClosed, "http://localhost/");
 }
@@ -27,7 +28,7 @@ void DefaultWebBrowserApplet::OpenLocalWebPage(const std::string& local_url,
 void DefaultWebBrowserApplet::OpenExternalWebPage(const std::string& external_url,
                                                   OpenWebPageCallback callback) const {
     LOG_WARNING(Service_AM, "(STUBBED) called, backend requested to open external web page at {}",
-                external_url);
+                Common::RedactUrl(external_url));
 
     callback(Service::AM::Frontend::WebExitReason::WindowClosed, "http://localhost/");
 }

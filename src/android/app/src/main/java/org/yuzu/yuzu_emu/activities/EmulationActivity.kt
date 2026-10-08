@@ -23,6 +23,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -55,6 +56,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
+import org.yuzu.yuzu_emu.harbor.HarborAudioFocus
 import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.model.EmulationViewModel
 import org.yuzu.yuzu_emu.model.Game
@@ -198,8 +200,14 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         inputManager = getSystemService(INPUT_SERVICE) as InputManager
         inputManager.registerInputDeviceListener(this, null)
 
-        foregroundService = Intent(this, ForegroundService::class.java)
-        startForegroundService(foregroundService)
+        // Harbor console mode: no ongoing notification; the console pauses while Harbor is away.
+        if (!HarborConsole.active) {
+            foregroundService = Intent(this, ForegroundService::class.java)
+            startForegroundService(foregroundService)
+        } else {
+            // The volume keys set the media volume the console plays at, menus included.
+            volumeControlStream = AudioManager.STREAM_MUSIC
+        }
 
         val preferences = PreferenceManager.getDefaultSharedPreferences(YuzuApplication.appContext)
         if (!preferences.getBoolean(Settings.PREF_MEMORY_WARNING_SHOWN, false)) {
@@ -256,9 +264,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         notifyPhysicalControllerState()
 
         buildPictureInPictureParams()
+        if (HarborConsole.active) {
+            HarborAudioFocus.acquire()
+        }
     }
 
     override fun onPause() {
+        if (HarborConsole.active) {
+            HarborAudioFocus.release()
+        }
         if (foreground === this) foreground = null
         // Nothing stays held in the guest while Harbor is in the background.
         InputHandler.releaseAll()
@@ -271,12 +285,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)
-        stopForegroundService(this)
+        if (foregroundService != null) {
+            stopForegroundService(this)
+        }
         NativeLibrary.playTimeManagerStop()
     }
 
     override fun onUserLeaveHint() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+        // Harbor console mode: no picture-in-picture; leaving pauses the console.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && !HarborConsole.active) {
             if (BooleanSetting.PICTURE_IN_PICTURE.getBoolean() && !isInPictureInPictureMode) {
                 val pictureInPictureParamsBuilder = PictureInPictureParams.Builder()
                     .getPictureInPictureActionsBuilder().getPictureInPictureAspectBuilder()
@@ -857,7 +874,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             val isEmulationActive = emulationViewModel.emulationStarted.value &&
                 !emulationViewModel.isEmulationStopping.value
             pictureInPictureParamsBuilder.setAutoEnterEnabled(
-                BooleanSetting.PICTURE_IN_PICTURE.getBoolean() && isEmulationActive
+                BooleanSetting.PICTURE_IN_PICTURE.getBoolean() && isEmulationActive &&
+                    !HarborConsole.active
             )
         }
         setPictureInPictureParams(pictureInPictureParamsBuilder.build())
@@ -932,7 +950,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                 MotionEvent.ACTION_DOWN -> {
                     touchDownTime = System.currentTimeMillis()
                     // show overlay immediately on touch and cancel timer when only auto-hide is enabled
-                    if (!emulationViewModel.drawerOpen.value &&
+                    if (!emulationViewModel.drawerOpen.value && !HarborConsole.active &&
                         BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean() &&
                         !BooleanSetting.HIDE_OVERLAY_ON_CONTROLLER_INPUT.getBoolean()) {
                         fragment.handler.removeCallbacksAndMessages(null)

@@ -22,6 +22,7 @@
 #include "core/core_timing.h"
 #include "core/cpu_manager.h"
 #include "core/debug/thread_dump.h"
+#include "core/harbor_calibration/calibration.h"
 #include "core/debugger/debugger.h"
 #include "core/device_memory.h"
 #include "core/file_sys/fs_filesystem.h"
@@ -296,6 +297,10 @@ struct System::Impl {
             return SystemResultStatus::ErrorVideoCore;
 
         audio_core.emplace(system);
+
+        // Before any service can open an OpenPak session: a new server gets this NAND's own TLS
+        // certificate, not a self-signed one.
+        Harbor::InstallClientIdentity();
 
         service_manager = std::make_shared<Service::SM::ServiceManager>(kernel);
         services.emplace(service_manager, system, stop_event.get_token());
