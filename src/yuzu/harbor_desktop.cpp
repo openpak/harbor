@@ -8,9 +8,14 @@
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
+#include <QStyleHints>
+#include <QVBoxLayout>
 
 #include "common/fs/path_util.h"
 #include "common/harbor_crash.h"
@@ -21,6 +26,7 @@
 #include "core/hle/service/am/window_system.h"
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
+#include "harbor_setup/harbor_setup.h"
 #include "yuzu/harbor_desktop.h"
 
 namespace HarborDesktop {
@@ -165,6 +171,88 @@ void OfferLastCrashReport(QWidget* parent) {
     }
     LOG_INFO(Frontend, "harbor: offering crash report {}", report->name);
     ShowReport(parent, *report, QObject::tr("Harbor crashed last time"));
+}
+
+bool DarkTheme(Core::System* running) {
+    if (running != nullptr && running->IsPoweredOn()) {
+        const auto set_sys = running->ServiceManager().GetService<Service::Set::ISystemSettingsServer>(
+            "set:sys", false);
+        Service::Set::ColorSet color{};
+        if (set_sys && set_sys->GetColorSetId(&color).IsSuccess()) {
+            return color == Service::Set::ColorSet::BasicBlack;
+        }
+    }
+    if (const auto saved = HarborSetup::SavedConsoleDarkTheme()) {
+        return *saved;
+    }
+    return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+}
+
+StoppedPage::StoppedPage(QWidget* parent, Actions actions) : QWidget(parent) {
+    setObjectName(QStringLiteral("HarborStoppedPage"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    heading = new QLabel(this);
+    heading->setObjectName(QStringLiteral("heading"));
+    message = new QLabel(this);
+    message->setWordWrap(true);
+    message->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    start_again = new QPushButton(tr("Start again"), this);
+    auto* setup_button = new QPushButton(tr("Set up again"), this);
+    auto* exit_button = new QPushButton(tr("Exit"), this);
+    connect(start_again, &QPushButton::clicked, this, [run = actions.start_again] { run(); });
+    connect(setup_button, &QPushButton::clicked, this, [run = actions.set_up_again] { run(); });
+    connect(exit_button, &QPushButton::clicked, this, [run = actions.exit] { run(); });
+
+    auto* column = new QVBoxLayout;
+    column->addWidget(heading);
+    column->addWidget(message);
+    column->addSpacing(8);
+    for (auto* button : {start_again, setup_button, exit_button}) {
+        button->setMinimumHeight(40);
+        column->addWidget(button);
+    }
+    auto* holder = new QWidget(this);
+    holder->setLayout(column);
+    holder->setMaximumWidth(560);
+    auto* outer = new QVBoxLayout(this);
+    outer->addStretch();
+    auto* row = new QHBoxLayout;
+    row->addStretch();
+    row->addWidget(holder, 1);
+    row->addStretch();
+    outer->addLayout(row);
+    outer->addStretch();
+    hide();
+}
+
+void StoppedPage::ShowStopped(const QString& reason, bool dark) {
+    Show(tr("Harbor stopped"), reason, dark, true);
+}
+
+void StoppedPage::ShowCannotStart(const QString& reason, bool dark) {
+    Show(tr("Harbor cannot start"), reason, dark, true);
+}
+
+void StoppedPage::Show(const QString& title, const QString& reason, bool dark, bool can_start) {
+    // HOME's colours: Basic White paper #ebebeb with #2d2d2d ink, Basic Black the other way round.
+    const QString paper = dark ? QStringLiteral("#2d2d2d") : QStringLiteral("#ebebeb");
+    const QString ink = dark ? QStringLiteral("#ebebeb") : QStringLiteral("#2d2d2d");
+    const QString button = dark ? QStringLiteral("#464646") : QStringLiteral("#ffffff");
+    const QString accent = QStringLiteral("#00c3e3");
+    setStyleSheet(QStringLiteral(
+                      "#HarborStoppedPage { background: %1; }"
+                      "#HarborStoppedPage QLabel { color: %2; font-size: 16px; background: transparent; }"
+                      "#HarborStoppedPage QLabel#heading { font-size: 26px; font-weight: bold; }"
+                      "#HarborStoppedPage QPushButton { color: %2; background: %3; border: 2px solid %3;"
+                      " border-radius: 6px; font-size: 16px; padding: 6px 16px; text-align: left; }"
+                      "#HarborStoppedPage QPushButton:focus, #HarborStoppedPage QPushButton:hover"
+                      " { border-color: %4; }")
+                      .arg(paper, ink, button, accent));
+    heading->setText(title);
+    message->setText(reason);
+    start_again->setVisible(can_start);
+    show();
+    start_again->setFocus();
 }
 
 } // namespace HarborDesktop

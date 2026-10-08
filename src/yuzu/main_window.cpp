@@ -488,6 +488,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         harbor_status = new QLabel(tr("Connecting to OpenPak..."), this);
         harbor_status->setAlignment(Qt::AlignCenter);
         ui->horizontalLayout->addWidget(harbor_status);
+        harbor_stopped_page = new HarborDesktop::StoppedPage(
+            this, {
+                      .start_again = [this] { HarborRestartConsole(); },
+                      .set_up_again = [this] { harbor_menu->SetupAgain(); },
+                      .exit = [this] { close(); },
+                  });
+        ui->horizontalLayout->addWidget(harbor_stopped_page);
         harbor_connect = std::thread([this] {
             HarborSetup::ConnectOpenPak();
             QMetaObject::invokeMethod(
@@ -651,6 +658,13 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                     } else if (name == "backup" || name == "restore" || name == "new-console") {
                         // The Harbor pane's console entries (they stop the console first).
                         HarborConsoleAction(name);
+                    } else if (name == "root-exit" && emulation_running) {
+                        // Test: the console's root program exits by itself (System::Exit, the
+                        // path a guest exit takes), so "Harbor stopped" can be checked.
+                        QtCommon::system->Exit();
+                    } else if (name == "start-again" && harbor_stopped_page &&
+                               harbor_stopped_page->isVisible()) {
+                        HarborRestartConsole();
                     } else {
                         LOG_WARNING(Frontend, "harbor-control: no menu entry \"{}\"", name);
                     }
@@ -719,6 +733,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     harbor_letterbox_timer.setInterval(250);
     connect(&harbor_letterbox_timer, &QTimer::timeout, this, &MainWindow::HarborUpdateLetterbox);
     harbor_letterbox_timer.start();
+    harbor_resize_timer.setSingleShot(true);
+    connect(&harbor_resize_timer, &QTimer::timeout, this, &MainWindow::HarborFollowWindowSize);
 }
 
 void MainWindow::HarborUpdateLetterbox() {
@@ -749,22 +765,48 @@ void MainWindow::HarborUpdateLetterbox() {
 }
 
 void MainWindow::HarborApplyAutoResolution() {
-    // The picture's space in device pixels: the screen when the console starts full screen, else
-    // the window's central area.
-    QSize size = ui->centralwidget->size();
-    qreal ratio = devicePixelRatioF();
-    if (ui->action_Fullscreen->isChecked() && screen() != nullptr) {
-        size = screen()->size();
-        ratio = screen()->devicePixelRatio();
-    }
-    const int width = static_cast<int>(size.width() * ratio);
-    const int height = static_cast<int>(size.height() * ratio);
+    const auto [width, height] = HarborPictureSpace();
+    harbor_resolution_pending.reset();
     const auto setup =
         HarborDesktop::AutoResolutionFor(width, height, Settings::IsDockedMode());
     Settings::values.resolution_setup.SetGlobal(false);
     Settings::values.resolution_setup.SetValue(setup);
+    harbor_resolution_in_use = setup;
     LOG_INFO(Frontend, "harbor: window {}x{}, resolution scale {} (automatic)", width, height,
              Settings::CanonicalizeEnum(setup));
+}
+
+std::pair<int, int> MainWindow::HarborPictureSpace() const {
+    // The picture's space in device pixels: the screen when full screen, else the window's
+    // central area.
+    QSize size = ui->centralwidget->size();
+    qreal ratio = devicePixelRatioF();
+    if ((isFullScreen() || ui->action_Fullscreen->isChecked()) && screen() != nullptr) {
+        size = screen()->size();
+        ratio = screen()->devicePixelRatio();
+    }
+    return {static_cast<int>(size.width() * ratio), static_cast<int>(size.height() * ratio)};
+}
+
+void MainWindow::HarborFollowWindowSize() {
+    // Eden fixes the render scale when the GPU is created: images already rescaled, the
+    // framebuffers built from them and the Vulkan memory budget all use it, so a new scale takes
+    // effect at the next console start (the Harbor menu's Restart, or HOME's Restart).
+    if (!harbor_console || !emulation_running || !harbor_resolution_in_use ||
+        !HarborDesktop::AutoResolution()) {
+        return;
+    }
+    const auto [width, height] = HarborPictureSpace();
+    const auto wanted = HarborDesktop::AutoResolutionFor(width, height, Settings::IsDockedMode());
+    if (wanted == harbor_resolution_pending.value_or(*harbor_resolution_in_use)) {
+        return;
+    }
+    harbor_resolution_pending = wanted;
+    LOG_INFO(Frontend,
+             "harbor: window {}x{} wants resolution scale {} (in use: {}); it applies at the next "
+             "console start (Restart)",
+             width, height, Settings::CanonicalizeEnum(wanted),
+             Settings::CanonicalizeEnum(*harbor_resolution_in_use));
 }
 
 void MainWindow::HarborConsoleStep(int done) {
@@ -775,13 +817,24 @@ void MainWindow::HarborConsoleStep(int done) {
     if (harbor_status) {
         harbor_status->hide();
     }
+    if (harbor_stopped_page) {
+        harbor_stopped_page->hide();
+    }
     LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
+    if (!emulation_running && harbor_stopped_page) {
+        LOG_ERROR(Frontend, "harbor: the HOME menu could not be loaded");
+        harbor_stopped_page->ShowCannotStart(tr("The HOME menu could not be loaded (see the log)."),
+                                             HarborDesktop::DarkTheme(nullptr));
+    }
 }
 
 void MainWindow::HarborRestartConsole() {
     // As a console does on a restart, the library is read again: an update or DLC added meanwhile
     // is there for HOME.
     LOG_INFO(Frontend, "harbor: the console restarts");
+    if (harbor_stopped_page) {
+        harbor_stopped_page->hide();
+    }
     QtCommon::system->GetContentProvider().Refresh();
     harbor_console_steps = HarborConsoleConnected;
     connect(
@@ -2262,6 +2315,10 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         [this](std::size_t program_index_) { render_window->ExecuteProgram(program_index_); });
 
     QtCommon::system->RegisterExitCallback([this] {
+        // Harbor: the console's own exit (not a stop the user asked for) shows "Harbor stopped".
+        if (!harbor_stopping.load()) {
+            harbor_guest_exit = true;
+        }
         QtCommon::emu_thread->ForceStop();
         render_window->Exit();
     });
@@ -2469,6 +2526,13 @@ void MainWindow::OnEmulationStopped() {
             QTimer::singleShot(0, this, [this] { close(); });
             break;
         case HarborSetup::PowerRequest::None:
+            // The console stopped on its own: "Harbor stopped". A stop the user asked for (the
+            // Harbor menu, closing the window) shows nothing.
+            if (harbor_guest_exit.exchange(false) && harbor_stopped_page) {
+                LOG_INFO(Frontend, "harbor: the console stopped: its root program exited");
+                harbor_stopped_page->ShowStopped(tr("The console's root program exited."),
+                                                 HarborDesktop::DarkTheme(nullptr));
+            }
             break;
         }
     } else if (game_list->IsEmpty()) {
@@ -2477,6 +2541,8 @@ void MainWindow::OnEmulationStopped() {
         game_list->show();
     }
     game_list->SetFilterFocus();
+    harbor_stopping = false;
+    harbor_guest_exit = false;
     tas_label->clear();
     input_subsystem->GetTas()->Stop();
     OnTasStateChanged();
@@ -2523,6 +2589,7 @@ void MainWindow::ShutdownGame() {
     if (!emulation_running) {
         return;
     }
+    harbor_stopping = true;
 
     // TODO(crueter): make this common as well (frontend_common?)
     play_time_manager->Stop();
@@ -4876,6 +4943,8 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
     emit sizeChanged(event->size());
+    // Harbor: the automatic render scale follows the window once a resize has settled.
+    harbor_resize_timer.start(500);
 }
 
 void MainWindow::moveEvent(QMoveEvent* event) {

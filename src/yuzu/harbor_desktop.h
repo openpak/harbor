@@ -7,11 +7,15 @@
 #pragma once
 
 #include <array>
+#include <functional>
+
+#include <QWidget>
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
 
-class QWidget;
+class QLabel;
+class QPushButton;
 
 namespace Core {
 class System;
@@ -41,5 +45,34 @@ void AskCrashConsent(QWidget* parent);
 
 /// The newest crash report not offered yet, if any: view, save a copy, or delete it.
 void OfferLastCrashReport(QWidget* parent);
+
+/// Whether Harbor's own screens are dark: the console's colour set while it runs, its saved one
+/// while it is stopped, the desktop's before the console has booted once. Behaviour follows the
+/// Ryujinx Harbor (MIT-licensed Ryujinx base), App.FollowConsoleTheme.
+bool DarkTheme(Core::System* running);
+
+/// "Harbor stopped" (the console stopped on its own, with the reason) or "Harbor cannot start",
+/// drawn in the console's colours, in place of the console's picture: Start again, Set up again,
+/// Exit. A stop the user asked for never shows it. The graphics driver row is Android's only.
+class StoppedPage final : public QWidget {
+public:
+    struct Actions {
+        std::function<void()> start_again;
+        std::function<void()> set_up_again;
+        std::function<void()> exit;
+    };
+
+    StoppedPage(QWidget* parent, Actions actions);
+
+    void ShowStopped(const QString& reason, bool dark);
+    void ShowCannotStart(const QString& reason, bool dark);
+
+private:
+    void Show(const QString& heading, const QString& reason, bool dark, bool start_again);
+
+    QLabel* heading;
+    QLabel* message;
+    QPushButton* start_again;
+};
 
 } // namespace HarborDesktop

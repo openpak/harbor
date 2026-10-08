@@ -9,7 +9,9 @@
 #include <map>
 #include <memory>
 #include <thread>
+#include <atomic>
 #include <optional>
+#include <utility>
 
 #include <filesystem>
 #include <QMainWindow>
@@ -48,6 +50,9 @@ class GImageInfo;
 class GRenderWindow;
 class HarborControl;
 class HarborMenu;
+namespace HarborDesktop {
+class StoppedPage;
+}
 class LoadingScreen;
 class OverlayDialog;
 class ControllerDialog;
@@ -551,6 +556,12 @@ private:
     std::thread harbor_connect;
     bool harbor_openpak_stopped = false;
     QTimer harbor_letterbox_timer;
+    QTimer harbor_resize_timer;
+    std::optional<Settings::ResolutionSetup> harbor_resolution_in_use;
+    std::optional<Settings::ResolutionSetup> harbor_resolution_pending;
+    HarborDesktop::StoppedPage* harbor_stopped_page = nullptr; // "Harbor stopped" / "cannot start"
+    std::atomic<bool> harbor_stopping{false};   // a stop the user asked for is under way
+    std::atomic<bool> harbor_guest_exit{false}; // the console's root program exited by itself
     QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
@@ -559,6 +570,8 @@ private:
     void HarborStopOpenPak();
     void HarborUpdateLetterbox();
     void HarborApplyAutoResolution();
+    std::pair<int, int> HarborPictureSpace() const;
+    void HarborFollowWindowSize();
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
