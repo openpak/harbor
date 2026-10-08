@@ -48,4 +48,24 @@ bool TakeChanged();
 /// The single layer that stands for the host screen, sized to `frame`.
 Tegra::FramebufferConfig MakeLayer(const Frame& frame);
 
+// Harbor's sleep and dimming, done here so every host and a hidden window show them.
+
+/// The address of the one-pixel black layer the presenter draws for sleep and dimming.
+constexpr u64 ShadeAddress = ~u64{1};
+
+/// The console sleeps: the whole surface is black (letterbox too), the console's picture is not
+/// shown. Wins over the host screen and the dimming.
+void SetBlackout(bool blackout);
+bool Blackout();
+/// idle's dimming: a black layer at `level` (0 none .. 1 black) over the console's picture.
+void SetDim(float level);
+float DimLevel();
+
+/// Whether `address` is one of the host's own layers (the host screen or the shade).
+bool IsHostAddress(u64 address);
+/// The pixels of a host layer: the host screen's picture, or the shade's one pixel.
+std::shared_ptr<const Frame> FrameFor(u64 address);
+/// The shade layer: opaque black for the blackout, premultiplied black at the dim level otherwise.
+Tegra::FramebufferConfig MakeShadeLayer();
+
 } // namespace VideoCore::HostScreen

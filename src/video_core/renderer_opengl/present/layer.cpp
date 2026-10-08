@@ -121,8 +121,8 @@ FramebufferTextureInfo Layer::PrepareRenderTarget(const Tegra::FramebufferConfig
 
 FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuffer) {
     const VAddr framebuffer_addr{framebuffer.address + framebuffer.offset};
-    // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
-    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress;
+    // Harbor's host layers (the host screen, the sleep and dim shade) are not in guest memory: it is always uploaded from its own pixels.
+    const bool host_screen = VideoCore::HostScreen::IsHostAddress(framebuffer.address);
     const auto accelerated_info =
         host_screen ? std::nullopt
                     : rasterizer.AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride);
@@ -146,7 +146,7 @@ FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig&
     const u64 size_in_bytes{Tegra::Texture::CalculateSize(
         true, bytes_per_pixel, framebuffer.stride, framebuffer.height, 1, block_height_log2, 0)};
     if (host_screen) {
-        const auto frame = VideoCore::HostScreen::Current();
+        const auto frame = VideoCore::HostScreen::FrameFor(framebuffer.address);
         const u64 size = u64{framebuffer.width} * framebuffer.height * 4;
         if (frame && frame->width == framebuffer.width && frame->height == framebuffer.height &&
             frame->rgba.size() >= size && gl_framebuffer_data.size() >= size) {

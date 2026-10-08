@@ -14,6 +14,8 @@ std::mutex mutex;
 std::shared_ptr<const Frame> current;
 std::atomic_bool active{false};
 std::atomic_bool changed{false};
+std::atomic_bool blackout{false};
+std::atomic<float> dim_level{0.0f};
 } // namespace
 
 void Show() {
@@ -63,6 +65,51 @@ Tegra::FramebufferConfig MakeLayer(const Frame& frame) {
     layer.transform_flags = Service::android::BufferTransformFlags::Unset;
     layer.crop_rect = {0, 0, static_cast<int>(frame.width), static_cast<int>(frame.height)};
     layer.blending = Tegra::BlendMode::Opaque;
+    return layer;
+}
+
+void SetBlackout(bool value) {
+    if (blackout.exchange(value) != value) {
+        changed = true;
+    }
+}
+
+bool Blackout() {
+    return blackout.load();
+}
+
+void SetDim(float level) {
+    if (dim_level.exchange(level) != level) {
+        changed = true;
+    }
+}
+
+float DimLevel() {
+    return dim_level.load();
+}
+
+bool IsHostAddress(u64 address) {
+    return address == HostAddress || address == ShadeAddress;
+}
+
+std::shared_ptr<const Frame> FrameFor(u64 address) {
+    if (address != ShadeAddress) {
+        return Current();
+    }
+    auto frame = std::make_shared<Frame>();
+    frame->width = 1;
+    frame->height = 1;
+    // Premultiplied black: only the alpha says how much of the picture is covered.
+    const float level = blackout ? 1.0f : dim_level.load();
+    frame->rgba = {0, 0, 0, static_cast<u8>(level * 255.0f + 0.5f)};
+    return frame;
+}
+
+Tegra::FramebufferConfig MakeShadeLayer() {
+    Frame pixel{.width = 1, .height = 1, .rgba = {}};
+    Tegra::FramebufferConfig layer = MakeLayer(pixel);
+    layer.address = ShadeAddress;
+    layer.blending = blackout ? Tegra::BlendMode::Opaque : Tegra::BlendMode::Premultiplied;
     return layer;
 }
 
