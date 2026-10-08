@@ -6,8 +6,6 @@ package org.yuzu.yuzu_emu.harbor
 import android.app.Activity
 import android.content.Intent
 import android.media.AudioManager
-import android.content.res.Configuration
-import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.TextView
@@ -38,12 +36,12 @@ class HarborStartActivity : Activity() {
             return
         }
         volumeControlStream = AudioManager.STREAM_MUSIC
-        // The paper colour of the setup's current theme, so nothing flashes between screens.
-        val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-            Configuration.UI_MODE_NIGHT_YES
+        // The console's theme (its saved colour set, the phone's before a first boot), as the setup
+        // and the stopped screen use it, so nothing flashes between screens.
+        val dark = HarborTheme.dark(this)
         status = TextView(this).apply {
-            setBackgroundColor(if (dark) PAPER_DARK else PAPER_LIGHT)
-            setTextColor(if (dark) INK_DARK else INK_LIGHT)
+            setBackgroundColor(if (dark) HarborTheme.PAPER_DARK else HarborTheme.PAPER_LIGHT)
+            setTextColor(if (dark) HarborTheme.INK_DARK else HarborTheme.INK_LIGHT)
             gravity = Gravity.CENTER
             textSize = 18f
             setText(R.string.harbor_starting)
@@ -57,7 +55,8 @@ class HarborStartActivity : Activity() {
 
         HarborNative.initialize()
         val afterSetup = intent.getBooleanExtra(EXTRA_AFTER_SETUP, false)
-        thread(name = "HarborStart") {
+        // Crash reports: asked once, or last time's report offered, before the console boots.
+        HarborCrashReports.onLaunch(this) { thread(name = "HarborStart") {
             val check = HarborNative.checkConsole()
             val ready = check.isEmpty()
             Log.info("[Harbor] start: ready=$ready afterSetup=$afterSetup")
@@ -75,7 +74,7 @@ class HarborStartActivity : Activity() {
                     }
                 }
             }
-        }
+        } }
     }
 
     private lateinit var status: TextView
@@ -87,9 +86,5 @@ class HarborStartActivity : Activity() {
 
     companion object {
         const val EXTRA_AFTER_SETUP = "harborAfterSetup"
-        private val PAPER_LIGHT = Color.rgb(0xeb, 0xeb, 0xeb)
-        private val PAPER_DARK = Color.rgb(0x2d, 0x2d, 0x2d)
-        private val INK_LIGHT = Color.rgb(0x2d, 0x2d, 0x2d)
-        private val INK_DARK = Color.rgb(0xeb, 0xeb, 0xeb)
     }
 }

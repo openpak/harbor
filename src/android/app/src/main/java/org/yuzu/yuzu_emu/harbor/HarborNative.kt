@@ -77,6 +77,9 @@ object HarborNative {
     /** The console's theme: 1 Basic Black, 0 Basic White, -1 while no console runs. */
     external fun consoleTheme(): Int
 
+    /** The console's saved theme: 1 Basic Black, 0 Basic White, -1 before its first boot. */
+    external fun savedConsoleTheme(): Int
+
     /** The console's picture on the emulation surface (left, top, right, bottom), empty while none runs. */
     external fun pictureRect(): IntArray
 }

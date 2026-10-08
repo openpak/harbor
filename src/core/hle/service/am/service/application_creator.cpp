@@ -16,6 +16,7 @@
 #include "core/hle/service/am/service/application_creator.h"
 #include "core/hle/service/am/window_system.h"
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/ns/application_manager_interface.h"
 #include "core/loader/loader.h"
 #include "core/launch_timestamp_cache.h"
 #include "core/hle/api_version.h"
@@ -81,6 +82,9 @@ Result IApplicationCreator::CreateApplication(
     Out<SharedPointer<IApplicationAccessor>> out_application_accessor, u64 application_id) {
     LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
     Core::LaunchTimestampCache::SaveLaunchTimestamp(application_id);
+    // The title is now the most recently played: HOME lists its records again and moves the tile
+    // to the front, as a console does.
+    NS::NotifyApplicationRecordsChanged();
     R_RETURN(
         CreateGuestApplication(out_application_accessor, system, m_window_system, application_id));
 }

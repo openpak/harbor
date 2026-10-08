@@ -161,6 +161,8 @@ add_executable(yuzu
     game/search_field.h game/search_field.cpp
 
     harbor_control.cpp
+    harbor_desktop.cpp
+    harbor_desktop.h
     harbor_control.h
     harbor_system_keys.cpp
     harbor_system_keys.h

@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/ns/async_result.h"
 #include "core/hle/service/ns/language.h"
@@ -21,10 +23,19 @@ namespace Service::NS {
 /// part of the installed content, as on a console after the downloads finished.
 [[nodiscard]] u32 GetInstalledApplicationVersion(Core::System& system, u64 application_id);
 
+/// The HOME library: one record per application found in the content providers, most recently
+/// played or touched first.
+[[nodiscard]] std::vector<ApplicationRecord> ListLibraryApplicationRecords(Core::System& system);
+
+/// Signals the record update event of every IApplicationManagerInterface, so HOME lists again.
+void NotifyApplicationRecordsChanged();
+
 class IApplicationManagerInterface final : public ServiceFramework<IApplicationManagerInterface> {
 public:
     explicit IApplicationManagerInterface(Core::System& system_);
     ~IApplicationManagerInterface() override;
+
+    void SignalRecordUpdate();
 
     Result UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id);
     Result GetApplicationControlData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,

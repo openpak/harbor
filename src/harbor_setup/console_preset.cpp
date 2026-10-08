@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <cstddef>
+#include <fstream>
+
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet_manager.h"
+#include "core/hle/service/set/setting_formats/system_settings.h"
 #include "frontend_common/secret_store.h"
 #include "harbor_setup/harbor_setup.h"
 
@@ -60,6 +64,37 @@ PowerRequest ConsolePowerRequest(Core::System& system) {
     default:
         return PowerRequest::None;
     }
+}
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): the host theme is the
+// console's saved colour set once there is one, the platform's before.
+std::optional<bool> SavedConsoleDarkTheme() {
+    return ReadConsoleDarkTheme(Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) /
+                                "system/save/8000000000000050/settings.dat");
+}
+
+std::optional<bool> ReadConsoleDarkTheme(const std::filesystem::path& path) {
+    // set:sys keeps its settings as a 16-byte header ('yuzu_set', version >= 4) and the struct.
+    constexpr std::size_t HeaderSize = 16;
+    constexpr u64 Magic = Common::MakeMagic('y', 'u', 'z', 'u', '_', 's', 'e', 't');
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return std::nullopt;
+    }
+    u64 magic = 0;
+    u32 version = 0;
+    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (!file || magic != Magic || version < 4) {
+        return std::nullopt;
+    }
+    u32 color_set = 0;
+    file.seekg(HeaderSize + offsetof(Service::Set::SystemSettings, color_set_id));
+    file.read(reinterpret_cast<char*>(&color_set), sizeof(color_set));
+    if (!file) {
+        return std::nullopt;
+    }
+    return color_set == static_cast<u32>(Service::Set::ColorSet::BasicBlack);
 }
 
 } // namespace HarborSetup

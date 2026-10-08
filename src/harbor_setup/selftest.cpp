@@ -6,16 +6,20 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <string>
 #include <vector>
 
+#include "core/hle/service/set/setting_formats/system_settings.h"
 #include "harbor_setup/chime.h"
 #include "harbor_setup/device_check.h"
 #include "harbor_setup/driver_catalog.h"
+#include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/keys.h"
 #include "harbor_setup/record.h"
 #include "harbor_setup/wizard.h"
@@ -343,6 +347,24 @@ void TestPickerBackAndDriverPage(const std::filesystem::path& dir) {
     }
 }
 
+// G4.CON.5: the host theme is the console's saved colour set, the platform's before a boot.
+void TestConsoleTheme(const std::filesystem::path& dir) {
+    const auto path = dir / "settings.dat";
+    Check(!ReadConsoleDarkTheme(path), "theme: no settings file follows the platform");
+    const auto write = [&](unsigned char color) {
+        std::string bytes(16 + sizeof(Service::Set::SystemSettings), '\0');
+        const char magic[] = "yuzu_set";
+        std::memcpy(bytes.data(), magic, 8);
+        bytes[8] = 4;
+        bytes[16 + offsetof(Service::Set::SystemSettings, color_set_id)] = static_cast<char>(color);
+        std::ofstream(path, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    };
+    write(1);
+    Check(ReadConsoleDarkTheme(path) == std::optional<bool>{true}, "theme: Basic Black is dark");
+    write(0);
+    Check(ReadConsoleDarkTheme(path) == std::optional<bool>{false}, "theme: Basic White is light");
+}
+
 void TestChime() {
     const auto samples = Chime::Samples(0);
     Check(samples.size() == static_cast<size_t>(Chime::SampleRate * Chime::DurationMs / 1000), "chime: 180 ms");
@@ -368,6 +390,7 @@ int main() {
     TestDriverCatalog();
     TestFlow(dir);
     TestPickerBackAndDriverPage(dir);
+    TestConsoleTheme(dir);
     TestChime();
 
     std::filesystem::remove_all(dir);
