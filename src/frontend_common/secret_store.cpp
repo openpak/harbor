@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "common/logging.h"
+#include "core/harbor_calibration/calibration.h"
 #include "core/openpak/secret_store.h"
 #include "frontend_common/secret_store.h"
 
@@ -26,6 +27,9 @@ bool RoundTrip(OpenPak::SecretStore& store) {
 } // namespace
 
 bool InstallSecretStore() {
+    // Before anything reads a secret: each console (NAND) keeps its own.
+    Harbor::InstallSecretNamespace();
+
     static std::mutex mutex;
     static std::optional<bool> installed;
     std::scoped_lock lock{mutex};
