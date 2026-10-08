@@ -125,10 +125,16 @@ OpenPak `saves` server (signing with the OpenPak modulus, §6.4) bridges console
 stays open is §7.3: matching nnSdk's exact derivation, which only matters for a console reading
 an archive *without* the server's package.
 
-## Not done here (other owners)
+## Consumers wired
 
-- fs `OpenBisStorage(CalibrationBinary)` returns the user's dumped real PRODINFO when one exists;
-  in console mode it should return this binary (identity and privacy).
-- spl `GetConfig(DeviceId)`, nsd `GetDeviceId`, ldn `GetFakeMac`, wlan/sockets `GetMacAddress`,
-  btm/bt address: read `Harbor::Calibration::Get()`.
+- fs `OpenBISPartitionStorage(CalibrationBinary)`: this binary in a HOME session, never a dumped
+  PRODINFO (fsp-srv `OpenBisStorage` itself is still unimplemented, so no guest reaches it yet).
+- spl `GetConfig(DeviceId)`, nsd `GetDeviceId` (unknown contract: 16 hex digits), ldn station MAC,
+  wlan:lcl / wlan:soc `GetMacAddress`: from `Harbor::Calibration::Get()`.
+- OpenPak TLS: `Harbor::InstallClientIdentity()` runs in core before the services start; a server
+  this install has no certificate for gets the calibration's TLS certificate and key.
+- Not wired: btm `GetHostDeviceProperty` / btdrv `GetAdapterProperties` (23.x layout not
+  established, no caller seen); ethc `GetMacAddress` (a wired adapter, not in CAL0); the starter's
+  Internet pages show "System MAC address: ---" and "LAN MAC address: ---", fed by a nifm call
+  not yet identified.
 - set:sys `GetMiiAuthorId` already is a per-install random UUID in the system settings save.
