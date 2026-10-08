@@ -244,21 +244,60 @@ void AppletManager::CreateAndInsertByFrontendAppletParameters(
         m_power_request = PowerRequest::None;
         m_sleeping = false;
     }
+    {
+        std::scoped_lock lk{m_ended_lock};
+        m_applets_ended = false;
+    }
     m_cv.notify_all();
 }
 
 void AppletManager::RequestExit() {
-    std::scoped_lock lk{m_lock};
-    if (m_window_system) {
-        m_window_system->OnExitRequested();
+    if (!m_home_session) {
+        std::scoped_lock lk{m_lock};
+        if (m_window_system) {
+            m_window_system->OnExitRequested();
+        }
+        return;
+    }
+
+    {
+        std::scoped_lock lk{m_lock};
+        if (!m_window_system) {
+            return;
+        }
+        m_window_system->RequestShutdownSequence();
+    }
+
+    // The sequence terminates what has not exited after its own timeout; this one only bounds
+    // the host's wait if the window system stops updating.
+    std::unique_lock lk{m_ended_lock};
+    if (!m_ended_cv.wait_for(lk, WindowSystem::ShutdownExitTimeout + std::chrono::seconds{2},
+                             [this] { return m_applets_ended; })) {
+        LOG_WARNING(Service_AM, "am: shutdown: applets still running; the host stops them");
     }
 }
 
 void AppletManager::RequestPower(PowerRequest request) {
     m_power_request = request;
-    LOG_INFO(Service_AM, "HOME menu requested {}; stopping the emulated system",
+    LOG_INFO(Service_AM, "HOME menu requested {}; ending the applets first",
              request == PowerRequest::Reboot ? "reboot" : "shutdown");
+    {
+        std::scoped_lock lk{m_lock};
+        if (m_window_system) {
+            // The system exits once the last applet has ended (WindowSystem).
+            m_window_system->RequestShutdownSequence();
+            return;
+        }
+    }
     m_system.Exit();
+}
+
+void AppletManager::OnAppletsEnded() {
+    {
+        std::scoped_lock lk{m_ended_lock};
+        m_applets_ended = true;
+    }
+    m_ended_cv.notify_all();
 }
 
 void AppletManager::PowerButtonMiddlePress() {
