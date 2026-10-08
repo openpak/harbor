@@ -62,6 +62,8 @@ add_library(
     fs/fs_util.h
     fs/path_util.cpp
     fs/path_util.h
+    harbor_crash.cpp
+    harbor_crash.h
     hash.h
     heap_tracker.cpp
     heap_tracker.h
@@ -260,3 +262,9 @@ if(ANDROID)
 endif()
 
 create_target_directory_groups(common)
+
+if (NOT ANDROID AND NOT WIN32)
+    # harbor_crash_selftest: crash-report scrubbing, consent, offer, pruning and a real native crash.
+    add_executable(harbor_crash_selftest harbor_crash_selftest.cpp)
+    target_link_libraries(harbor_crash_selftest PRIVATE common)
+endif()

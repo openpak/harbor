@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <thread>
 #include <optional>
@@ -549,11 +550,15 @@ private:
     int harbor_console_steps = 0;
     std::thread harbor_connect;
     bool harbor_openpak_stopped = false;
+    QTimer harbor_letterbox_timer;
     QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
     void HarborAddMenu();
+    void HarborConsoleAction(const std::string& name);
     void HarborStopOpenPak();
+    void HarborUpdateLetterbox();
+    void HarborApplyAutoResolution();
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)

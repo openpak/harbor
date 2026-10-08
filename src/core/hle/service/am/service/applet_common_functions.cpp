@@ -52,17 +52,22 @@ IAppletCommonFunctions::IAppletCommonFunctions(Core::System& system_,
 
 IAppletCommonFunctions::~IAppletCommonFunctions() = default;
 
+// Whether this applet wants HOME double clicks (kept per applet and answered back). No double
+// click is detected by the button poller here, so nothing more happens with it.
 Result IAppletCommonFunctions::SetHomeButtonDoubleClickEnabled(
     bool home_button_double_click_enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, home_button_double_click_enabled={}",
-                home_button_double_click_enabled);
+    LOG_DEBUG(Service_AM, "called, home_button_double_click_enabled={}",
+              home_button_double_click_enabled);
+    std::scoped_lock lk{applet->lock};
+    applet->home_button_double_click_enabled = home_button_double_click_enabled;
     R_SUCCEED();
 }
 
 Result IAppletCommonFunctions::GetHomeButtonDoubleClickEnabled(
     Out<bool> out_home_button_double_click_enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_home_button_double_click_enabled = false;
+    std::scoped_lock lk{applet->lock};
+    *out_home_button_double_click_enabled = applet->home_button_double_click_enabled;
+    LOG_DEBUG(Service_AM, "called, enabled={}", *out_home_button_double_click_enabled);
     R_SUCCEED();
 }
 

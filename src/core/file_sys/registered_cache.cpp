@@ -1431,6 +1431,9 @@ void ExternalContentProvider::ScanDirectory(const VirtualDir& dir) {
 void ExternalContentProvider::ProcessNSP(const VirtualFile& file) {
     const auto nsp = OpenContainerAsNsp(file, Loader::FileType::NSP);
     if (!nsp) {
+        // A broken or unreadable file is left out; the rest of the folder still loads.
+        LOG_WARNING(Service_FS, "External content: skipped {}: not a readable NSP",
+                    file->GetName());
         return;
     }
 
@@ -1441,6 +1444,8 @@ void ExternalContentProvider::ProcessNSP(const VirtualFile& file) {
 void ExternalContentProvider::ProcessXCI(const VirtualFile& file) {
     const auto nsp = OpenContainerAsNsp(file, Loader::FileType::XCI);
     if (!nsp) {
+        LOG_WARNING(Service_FS, "External content: skipped {}: not a readable XCI",
+                    file->GetName());
         return;
     }
 

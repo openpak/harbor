@@ -4,7 +4,6 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -44,6 +43,7 @@ object HarborConsole {
     /** Registers the library, applies the console preset and starts the HOME menu in place of `from`. */
     fun boot(from: Activity) {
         active = true
+        HarborSleep.reset()
         HarborNative.setConsoleMode(true)
         // What Eden's main screen sets up before any game: the multiplayer/network layer.
         NativeLibrary.initMultiplayer()
@@ -53,9 +53,9 @@ object HarborConsole {
                 NativeLibrary.initializeSystem(true)
             }
             HarborNative.applyConsolePreset()
-            Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
-            // The driver loads now, so a selected one that failed stops the boot here, not in HOME.
-            val driverProblem = HarborNative.checkGpuDriver()
+            // The driver loads now, so a selected one that failed stops the boot here, not in HOME,
+            // and the console never starts on the phone's own driver in its place.
+            val driverProblem = ensureDriver().ifEmpty { HarborNative.checkGpuDriver() }
             if (driverProblem.isNotEmpty()) {
                 Log.error("[Harbor] console not started: $driverProblem")
                 from.runOnUiThread { showDriverRefusal(from, driverProblem) }
@@ -153,43 +153,43 @@ object HarborConsole {
             if (GpuDriverHelper.installedCustomDriverData.name != null) {
                 GpuDriverHelper.installDefaultDriver()
             }
-            return "the phone's (not an Adreno GPU)"
+            Log.info("[Harbor] console start: graphics driver the phone's (not an Adreno GPU)")
+            return ""
+        }
+        val path = StringSetting.DRIVER_PATH.getString()
+        // A chosen driver whose package is gone is a failure, not the phone's driver.
+        if (path.isNotEmpty() && !File(path).exists()) {
+            return "The chosen graphics driver (${File(path).name}) is no longer installed."
         }
         val chosen = GpuDriverHelper.customDriverSettingData
         if (GpuDriverHelper.installedCustomDriverData != chosen) {
-            val path = StringSetting.DRIVER_PATH.getString()
-            if (chosen.name == null || !File(path).exists()) {
+            if (path.isEmpty() || chosen.name == null) {
                 GpuDriverHelper.installDefaultDriver()
             } else if (!GpuDriverHelper.installCustomDriver(File(path))) {
-                Log.warning("[Harbor] the chosen graphics driver could not be unpacked")
+                return "The chosen graphics driver (${chosen.name}) could not be unpacked."
             }
         }
         val installed = GpuDriverHelper.installedCustomDriverData
-        return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
+        Log.info("[Harbor] console start: graphics driver " +
+            (installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"))
+        return ""
     }
 
     /**
-     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver): the console does
-     * not boot on the phone's own driver instead. The setup chooses another; Exit closes Harbor.
+     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver, or its package
+     * is gone or broken): the console does not boot on the phone's own driver instead. The driver
+     * choice opens at once (HarborStoppedActivity): another installed driver that fits, the
+     * recommended one downloaded, or the phone's own after a warning, then a restart into it.
      */
     fun showDriverRefusal(from: Activity, problem: String) {
         if (from.isFinishing) {
             return
         }
-        val dialog = AlertDialog.Builder(from, HarborTheme.alertTheme(from))
-            .setTitle(R.string.harbor_driver_failed_title)
-            .setMessage(problem + "\n\n" + from.getString(R.string.harbor_driver_failed_hint))
-            .setCancelable(false)
-            .setPositiveButton(R.string.harbor_menu_setup_again) { _, _ ->
-                HarborNative.stopOpenPak()
-                restartIntoSetup(from)
-            }
-            .setNegativeButton(R.string.harbor_menu_exit) { _, _ ->
-                HarborNative.stopOpenPak()
-                from.finishAndRemoveTask()
-            }
-            .show()
-        HarborPanelInput.attach(dialog)
+        Log.error("[Harbor] the graphics driver could not be loaded: $problem")
+        from.startActivity(HarborStoppedActivity.driverFailed(from, problem))
+        @Suppress("DEPRECATION")
+        from.overridePendingTransition(0, 0)
+        from.finish()
     }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */
@@ -228,6 +228,7 @@ object HarborConsole {
 
     /** "Harbor stopped" with `reason` in place of `activity` (the emulation screen). */
     fun showStopped(activity: Activity, reason: String) {
+        HarborSleep.reset()
         Log.info("[Harbor] the console stopped: $reason")
         HarborAudioFocus.release()
         activity.startActivity(HarborStoppedActivity.stopped(activity, reason))
@@ -393,4 +394,203 @@ object HarborConsole {
         }
     }
 
+    // Console backups: the NAND zipped with its device key sealed by a passphrase the user sets.
+    // The passphrase lives only in this field between the question and the file picker's answer.
+    private var backupPassphrase: String? = null
+    private const val MIN_PASSPHRASE = 8
+
+    private fun askPassphrase(activity: EmulationActivity, message: Int, answer: (String?) -> Unit) {
+        val field = android.widget.EditText(activity).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setMessage(message)
+            .setView(field)
+            .setPositiveButton(android.R.string.ok) { _, _ -> answer(field.text.toString()) }
+            .setNegativeButton(android.R.string.cancel) { _, _ -> answer(null) }
+            .setCancelable(false)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    private fun tell(activity: Activity, message: String, then: () -> Unit = {}) {
+        MaterialAlertDialogBuilder(activity)
+            .setMessage(message)
+            .setPositiveButton(android.R.string.ok, null)
+            .setOnDismissListener { then() }
+            .show()
+    }
+
+    internal fun askBackupPassphrase(activity: EmulationActivity) {
+        askPassphrase(activity, R.string.harbor_backup_passphrase) { first ->
+            if (first == null) return@askPassphrase
+            if (first.length < MIN_PASSPHRASE) {
+                Toast.makeText(activity, R.string.harbor_backup_passphrase_short, Toast.LENGTH_LONG).show()
+                return@askPassphrase
+            }
+            askPassphrase(activity, R.string.harbor_backup_passphrase_again) { second ->
+                if (second == null) return@askPassphrase
+                if (second != first) {
+                    Toast.makeText(activity, R.string.harbor_backup_passphrase_differs, Toast.LENGTH_LONG).show()
+                    return@askPassphrase
+                }
+                backupPassphrase = first
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.ROOT)
+                    .format(java.util.Date())
+                activity.harborBackupTarget.launch("harbor-console-$stamp.zip")
+            }
+        }
+    }
+
+    /** The picked file for a backup: console stopped, key sealed, NAND zipped, sealed key removed. */
+    fun backUpTo(activity: EmulationActivity, uri: Uri?) {
+        val passphrase = backupPassphrase
+        backupPassphrase = null
+        if (uri == null || passphrase == null) return
+        stopThen(activity) {
+            val progress = MaterialAlertDialogBuilder(activity)
+                .setMessage(R.string.harbor_backup_working)
+                .setCancelable(false)
+                .show()
+            thread(name = "HarborBackup") {
+                val ok = try {
+                    val nand = File(HarborNative.nandDirectory())
+                    HarborNative.sealDeviceKey(passphrase) &&
+                        FileUtil.zipFromInternalStorage(
+                            nand,
+                            nand.absolutePath,
+                            java.io.BufferedOutputStream(activity.contentResolver.openOutputStream(uri)),
+                            compression = false
+                        ) == org.yuzu.yuzu_emu.model.TaskState.Completed
+                } catch (e: Exception) {
+                    Log.warning("[Harbor] console backup failed: ${e.message}")
+                    false
+                } finally {
+                    HarborNative.removeSealedDeviceKey()
+                }
+                Log.info("[Harbor] console backup ${if (ok) "written" else "failed"}")
+                activity.runOnUiThread {
+                    progress.dismiss()
+                    tell(activity, activity.getString(if (ok) R.string.harbor_backup_done else R.string.harbor_backup_failed)) {
+                        restartConsole(activity)
+                    }
+                }
+            }
+        }
+    }
+
+    internal fun confirmRestore(activity: EmulationActivity) {
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_restore)
+            .setMessage(R.string.harbor_restore_confirm)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                activity.harborRestoreSource.launch(arrayOf("application/zip"))
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
+    /** A picked backup: console stopped, the NAND replaced, then its device key's passphrase. */
+    fun restoreFrom(activity: EmulationActivity, uri: Uri) {
+        stopThen(activity) {
+            val progress = MaterialAlertDialogBuilder(activity)
+                .setMessage(R.string.harbor_restore_working)
+                .setCancelable(false)
+                .show()
+            thread(name = "HarborRestore") {
+                val failure = try {
+                    replaceNand(uri)
+                } catch (e: Exception) {
+                    Log.warning("[Harbor] console restore failed: ${e.message}")
+                    R.string.harbor_restore_failed
+                }
+                activity.runOnUiThread {
+                    progress.dismiss()
+                    if (failure != null) {
+                        tell(activity, activity.getString(failure)) { restartConsole(activity) }
+                    } else {
+                        unlockRestoredKey(activity)
+                    }
+                }
+            }
+        }
+    }
+
+    /** The backup into nand.restore, checked, then swapped in for the NAND. Null when it worked. */
+    private fun replaceNand(uri: Uri): Int? {
+        val nand = File(HarborNative.nandDirectory())
+        val incoming = File(nand.path + ".restore")
+        val previous = File(nand.path + ".previous")
+        incoming.deleteRecursively()
+        incoming.mkdirs()
+        FileUtil.unzipToInternalStorage(uri.toString(), incoming)
+        if (!File(incoming, "calibration/prodinfo.bin").isFile) {
+            incoming.deleteRecursively()
+            return R.string.harbor_restore_not_backup
+        }
+        previous.deleteRecursively()
+        if (!nand.renameTo(previous)) {
+            incoming.deleteRecursively()
+            return R.string.harbor_restore_failed
+        }
+        if (!incoming.renameTo(nand)) {
+            previous.renameTo(nand)
+            return R.string.harbor_restore_failed
+        }
+        previous.deleteRecursively()
+        HarborNative.reloadCalibration()
+        Log.info("[Harbor] console restored from a backup")
+        return null
+    }
+
+    private fun unlockRestoredKey(activity: EmulationActivity) {
+        if (!HarborNative.deviceKeyRestorePending()) {
+            HarborNative.removeSealedDeviceKey()
+            tell(activity, activity.getString(R.string.harbor_restore_done)) { restartConsole(activity) }
+            return
+        }
+        askPassphrase(activity, R.string.harbor_restore_passphrase) { passphrase ->
+            if (passphrase == null) {
+                tell(activity, activity.getString(R.string.harbor_restore_locked)) { restartConsole(activity) }
+                return@askPassphrase
+            }
+            thread(name = "HarborRestoreKey") {
+                val result = HarborNative.restoreDeviceKey(passphrase)
+                activity.runOnUiThread {
+                    when (result) {
+                        0 -> tell(activity, activity.getString(R.string.harbor_restore_done)) { restartConsole(activity) }
+                        1 -> {
+                            Toast.makeText(activity, R.string.harbor_restore_wrong, Toast.LENGTH_LONG).show()
+                            unlockRestoredKey(activity)
+                        }
+                        else -> tell(activity, activity.getString(R.string.harbor_restore_locked)) { restartConsole(activity) }
+                    }
+                }
+            }
+        }
+    }
+
+    internal fun confirmNewConsole(activity: EmulationActivity) {
+        val dialog = MaterialAlertDialogBuilder(activity)
+            .setTitle(R.string.harbor_menu_new_console)
+            .setMessage(R.string.harbor_new_console_confirm)
+            .setPositiveButton(R.string.harbor_menu_new_console) { _, _ ->
+                stopThen(activity) {
+                    thread(name = "HarborNewConsole") {
+                        val made = HarborNative.makeNewConsole()
+                        activity.runOnUiThread {
+                            tell(
+                                activity,
+                                activity.getString(if (made) R.string.harbor_new_console_done else R.string.harbor_new_console_failed)
+                            ) { restartConsole(activity) }
+                        }
+                    }
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
 }

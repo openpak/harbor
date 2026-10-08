@@ -85,6 +85,8 @@ add_library(harbor_setup_core STATIC
     device_probe.cpp
     driver_catalog.cpp
     driver_catalog.h
+    driver_recovery.cpp
+    driver_recovery.h
     harbor_setup.h
     host.h
     keys.cpp

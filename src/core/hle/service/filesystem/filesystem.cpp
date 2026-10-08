@@ -780,6 +780,15 @@ void FileSystemController::CreateFactories(FileSys::VfsFilesystem& vfs, bool ove
 
         for (const auto& dir_path : Settings::values.external_content_dirs) {
             if (!dir_path.empty()) {
+#ifndef __ANDROID__
+                // A folder that has gone is logged and left out; the others still load. (Android
+                // folders can be content URIs, which only the VFS resolves.)
+                if (!Common::FS::IsDir(dir_path)) {
+                    LOG_WARNING(Service_FS, "External content: folder not found or not readable: {}",
+                                dir_path);
+                    continue;
+                }
+#endif
                 LOG_DEBUG(Service_FS, "Attempting to open directory: {}", dir_path);
                 auto dir = vfs.OpenDirectory(dir_path, FileSys::OpenMode::Read);
                 if (dir != nullptr) {

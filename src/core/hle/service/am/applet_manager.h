@@ -51,6 +51,9 @@ public:
 
     void CreateAndInsertByFrontendAppletParameters(std::unique_ptr<Process> process,
                                                    const FrontendAppletParameters& params);
+    // The host stops emulation. In a HOME session this runs the shutdown sequence and returns
+    // once every applet has ended (or the sequence timed out), so no guest code runs into
+    // services that are shutting down.
     void RequestExit();
     void OperationModeChanged();
 
@@ -82,18 +85,28 @@ public:
     // From the window system (PowerButtonShortPressing in a HOME session).
     void ToggleSleep();
 
-    // The guest asked for a reboot (IGlobalStateController 4, IOverlayFunctions 11). The session
-    // stops; the frontend reads this afterwards to start it again with the same data.
+    // The guest asked for a reboot or a shutdown (IGlobalStateController 3/4, IOverlayFunctions
+    // 10/11). In a HOME session the applets end first (the window system's shutdown sequence),
+    // then the session stops; the frontend reads this afterwards to start it again with the same
+    // data or to close.
     enum class PowerRequest { None, Shutdown, Reboot };
     void RequestPower(PowerRequest request);
     [[nodiscard]] PowerRequest GetPowerRequest() const { return m_power_request.load(); }
     [[nodiscard]] bool IsRestartRequested() const { return GetPowerRequest() == PowerRequest::Reboot; }
+
+    // The window system's shutdown sequence has no applet left.
+    void OnAppletsEnded();
 
 private:
     Core::System& m_system;
 
     std::mutex m_lock;
     std::condition_variable m_cv;
+
+    // HOME session shutdown: set once every applet has ended (under m_ended_lock).
+    std::mutex m_ended_lock;
+    std::condition_variable m_ended_cv;
+    bool m_applets_ended{};
 
     WindowSystem* m_window_system{};
     std::atomic<bool> m_home_session{};

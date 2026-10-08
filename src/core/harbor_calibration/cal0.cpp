@@ -10,6 +10,7 @@
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/kdf.h>
 #include <openssl/param_build.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
@@ -452,6 +453,99 @@ DeviceKey DeriveKey(const DeviceKey& device_key, std::string_view label) {
     std::memcpy(out.data(), mac, out.size());
     OPENSSL_cleanse(mac, sizeof(mac));
     return out;
+}
+
+namespace {
+
+// The sealed device key: "HBDK", version, scrypt log2(N), r, p, a zero byte, 16 bytes of salt,
+// 12 bytes of nonce, the 16-byte key encrypted, the 16-byte GCM tag. The header and the device id
+// are the associated data.
+constexpr u32 SealMagic = 0x4B444248; // "HBDK"
+constexpr u8 SealVersion = 1;
+constexpr u8 ScryptLogN = 15;
+constexpr u8 ScryptR = 8;
+constexpr u8 ScryptP = 1;
+constexpr std::size_t SealHeader = 4 + 4 + 16 + 12;
+constexpr std::size_t SealSize = SealHeader + 16 + 16;
+
+bool PassphraseKey(std::string_view passphrase, const u8* salt, u8 log_n, u8 r, u8 p,
+                   std::array<u8, 32>& out) {
+    return EVP_PBE_scrypt(passphrase.data(), passphrase.size(), salt, 16, u64{1} << log_n, r, p,
+                          u64{256} << 20, out.data(), out.size()) == 1;
+}
+
+std::array<u8, SealHeader + 8> SealAad(const u8* header, u64 device_id) {
+    std::array<u8, SealHeader + 8> aad{};
+    std::memcpy(aad.data(), header, SealHeader);
+    std::memcpy(aad.data() + SealHeader, &device_id, 8);
+    return aad;
+}
+
+} // namespace
+
+std::vector<u8> SealDeviceKey(const DeviceKey& device_key, u64 device_id,
+                              std::string_view passphrase) {
+    std::vector<u8> out(SealSize, 0);
+    std::memcpy(out.data(), &SealMagic, 4);
+    out[4] = SealVersion;
+    out[5] = ScryptLogN;
+    out[6] = ScryptR;
+    out[7] = ScryptP;
+    std::array<u8, 32> key{};
+    if (!Random(out.data() + 8, 16 + 12) ||
+        !PassphraseKey(passphrase, out.data() + 8, ScryptLogN, ScryptR, ScryptP, key)) {
+        return {};
+    }
+    const auto aad = SealAad(out.data(), device_id);
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    int length = 0;
+    const bool ok =
+        ctx != nullptr &&
+        EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, key.data(), out.data() + 24) == 1 &&
+        EVP_EncryptUpdate(ctx, nullptr, &length, aad.data(), static_cast<int>(aad.size())) == 1 &&
+        EVP_EncryptUpdate(ctx, out.data() + SealHeader, &length, device_key.data(),
+                          static_cast<int>(device_key.size())) == 1 &&
+        EVP_EncryptFinal_ex(ctx, out.data() + SealHeader + length, &length) == 1 &&
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, out.data() + SealHeader + 16) == 1;
+    EVP_CIPHER_CTX_free(ctx);
+    OPENSSL_cleanse(key.data(), key.size());
+    return ok ? out : std::vector<u8>{};
+}
+
+std::optional<DeviceKey> OpenDeviceKey(std::span<const u8> sealed, u64 device_id,
+                                       std::string_view passphrase) {
+    u32 magic = 0;
+    if (sealed.size() != SealSize) {
+        return std::nullopt;
+    }
+    std::memcpy(&magic, sealed.data(), 4);
+    if (magic != SealMagic || sealed[4] != SealVersion || sealed[5] < 10 || sealed[5] > 20) {
+        return std::nullopt;
+    }
+    std::array<u8, 32> key{};
+    if (!PassphraseKey(passphrase, sealed.data() + 8, sealed[5], sealed[6], sealed[7], key)) {
+        return std::nullopt;
+    }
+    const auto aad = SealAad(sealed.data(), device_id);
+    std::array<u8, 16> tag{};
+    std::memcpy(tag.data(), sealed.data() + SealHeader + 16, 16);
+    DeviceKey device_key{};
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    int length = 0;
+    const bool ok =
+        ctx != nullptr &&
+        EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, key.data(), sealed.data() + 24) == 1 &&
+        EVP_DecryptUpdate(ctx, nullptr, &length, aad.data(), static_cast<int>(aad.size())) == 1 &&
+        EVP_DecryptUpdate(ctx, device_key.data(), &length, sealed.data() + SealHeader, 16) == 1 &&
+        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag.data()) == 1 &&
+        EVP_DecryptFinal_ex(ctx, device_key.data() + length, &length) == 1;
+    EVP_CIPHER_CTX_free(ctx);
+    OPENSSL_cleanse(key.data(), key.size());
+    if (!ok) {
+        OPENSSL_cleanse(device_key.data(), device_key.size());
+        return std::nullopt;
+    }
+    return device_key;
 }
 
 std::vector<u8> Generate(const DeviceKey& device_key) {

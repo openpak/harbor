@@ -8,6 +8,7 @@
 #include <cstring>
 #include <ctime>
 #include <fmt/chrono.h>
+#include "common/harbor_crash.h"
 #include "common/logging.h"
 #include "common/scm_rev.h"
 #include "common/swap.h"
@@ -109,10 +110,34 @@ static void GenerateErrorReport(Core::System& system, Result error_code, const F
         info.backtrace_size, info.ArchAsString(), info.unk10);
 }
 
+// Harbor: a guest fatal leaves a crash report for the next launch to offer (once the user has
+// agreed to keep them). Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+static void RecordHarborCrashReport(Core::System& system, Result error_code, FatalType fatal_type,
+                                    const FatalInfo& info) {
+    if (!Common::HarborCrash::Recording()) {
+        return;
+    }
+    const auto code = fmt::format("{:04}-{:04d}", 2000 + static_cast<u32>(error_code.GetModule()),
+                                  static_cast<u32>(error_code.GetDescription()));
+    std::string details = fmt::format("Fatal policy: {}\n", static_cast<u32>(fatal_type));
+    if (info.backtrace_size != 0) {
+        details += fmt::format("Architecture: {}\nPC: {:016x}\nSP: {:016x}\nFAR: {:016x}\n"
+                               "ESR: {:016x}\nProgram entry point: {:016x}\nBacktrace:\n",
+                               info.ArchAsString(), u64{info.pc}, u64{info.sp}, u64{info.far},
+                               u64{info.esr}, u64{info.program_entry_point});
+        for (u32 i = 0; i < std::min<u32>(info.backtrace_size, 32); i++) {
+            details += fmt::format("    {:016x}\n", u64{info.backtrace[i]});
+        }
+    }
+    Common::HarborCrash::RecordGuestFatal(system.GetApplicationProcessProgramID(), code,
+                                          error_code.raw, details);
+}
+
 static void ThrowFatalError(Core::System& system, Result error_code, FatalType fatal_type,
                             const FatalInfo& info) {
     LOG_ERROR(Service_Fatal, "Threw fatal error type {} with error code {:#x}", fatal_type,
               error_code.raw);
+    RecordHarborCrashReport(system, error_code, fatal_type, info);
 
     switch (fatal_type) {
     case FatalType::ErrorReportAndScreen:

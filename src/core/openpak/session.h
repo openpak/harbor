@@ -115,6 +115,9 @@ bool HasDeviceAccount(const std::string& uid);
 /// dropped from this process.
 void ForgetProfile(const std::string& uid);
 
+/// ForgetProfile for every user this process has signed in: the console became another one.
+void ForgetAllProfiles();
+
 /// The beat for the active user: presence renewals, the invitation inbox and the friends caches,
 /// and a sign-in when the active user changes. Starts the Penne push. Idempotent.
 void StartHeartbeat(std::function<std::string()> current_title_id);
