@@ -283,6 +283,14 @@ void OlscChecks(const std::filesystem::path& dir) {
           "archive fields parse as the sysmodule reads them");
     Check(!olsc::ParseArchiveList("{}") && !olsc::ParseArchiveList("not json"),
           "a reply that is not a list is refused");
+    {
+        std::string with_commit = record(11, "fixed", 1, "null", "");
+        with_commit.replace(with_commit.find("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), 43,
+                            "iHdmVUQzIhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        const auto parsed = olsc::ParseArchiveList(wrap(with_commit));
+        Check(parsed && parsed->size() == 1 && (*parsed)[0].commit_id == 0x1122334455667788,
+              "an archive's commit id is read from encoded_digest");
+    }
     Check(olsc::ParseArchiveList(wrap("")) && olsc::ParseArchiveList(wrap(""))->empty(),
           "an empty cloud reads as an empty list");
     // A record the sysmodule's record check refuses fails the whole list (2179-3201), so a

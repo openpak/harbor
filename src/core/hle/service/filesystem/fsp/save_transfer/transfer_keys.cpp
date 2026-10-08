@@ -186,6 +186,18 @@ std::optional<Key128> DeriveTransferKey(const FsKeySources& sources, KeyIndex in
     return std::nullopt;
 }
 
+std::optional<FsKeySources> FsKeySourcesFromNand(const FileSys::RegisteredCache& system_nand) {
+    const auto nca = system_nand.GetEntry(BootImagePackageId, FileSys::ContentRecordType::Data);
+    const auto romfs = nca ? FileSys::ExtractRomFS(nca->GetRomFS()) : nullptr;
+    const auto nx = romfs ? romfs->GetSubdirectory("nx") : nullptr;
+    const auto package2 = nx ? nx->GetFile("package2") : nullptr;
+    if (!package2) {
+        LOG_WARNING(Service_FS, "save transfer: no BootImagePackage package2 in the system NAND");
+        return std::nullopt;
+    }
+    return FindFsKeySources(package2->ReadAllBytes());
+}
+
 std::optional<FsKeySources> InstalledFsKeySources(Core::System& system) {
     static std::mutex mutex;
     static std::optional<FsKeySources> cached;
@@ -194,18 +206,10 @@ std::optional<FsKeySources> InstalledFsKeySources(Core::System& system) {
         return cached;
     }
     const auto* contents = system.GetFileSystemController().GetSystemNANDContents();
-    const auto nca =
-        contents ? contents->GetEntry(BootImagePackageId, FileSys::ContentRecordType::Data)
-                 : nullptr;
-    const auto romfs = nca ? FileSys::ExtractRomFS(nca->GetRomFS()) : nullptr;
-    const auto nx = romfs ? romfs->GetSubdirectory("nx") : nullptr;
-    const auto package2 = nx ? nx->GetFile("package2") : nullptr;
-    if (!package2) {
-        LOG_WARNING(Service_FS, "save transfer: no BootImagePackage package2 in the system NAND");
+    if (contents == nullptr) {
         return std::nullopt;
     }
-    const auto bytes = package2->ReadAllBytes();
-    cached = FindFsKeySources(bytes);
+    cached = FsKeySourcesFromNand(*contents);
     LOG_INFO(Service_FS, "save transfer: FS key sources {}", cached ? "found" : "not found");
     return cached;
 }
