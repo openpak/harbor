@@ -25,6 +25,7 @@
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/applet_manager.h"
+#include "core/hle/service/am/window_system.h"
 #include "core/hle/service/am/service/application_functions.h"
 #include "core/hle/service/am/service/storage.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -158,9 +159,9 @@ IApplicationFunctions::IApplicationFunctions(Core::System& system_, std::shared_
         {66, D<&IApplicationFunctions::InitializeGamePlayRecording>, "InitializeGamePlayRecording"},
         {67, D<&IApplicationFunctions::SetGamePlayRecordingState>, "SetGamePlayRecordingState"},
         {68, nullptr, "RequestFlushGamePlayingMovieForDebug"},
-        {70, nullptr, "RequestToShutdown"},
-        {71, nullptr, "RequestToReboot"},
-        {72, nullptr, "RequestToSleep"},
+        {70, D<&IApplicationFunctions::RequestToShutdown>, "RequestToShutdown"},
+        {71, D<&IApplicationFunctions::RequestToReboot>, "RequestToReboot"},
+        {72, D<&IApplicationFunctions::RequestToSleep>, "RequestToSleep"},
         {80, nullptr, "ExitAndRequestToShowThanksMessage"},
         {90, D<&IApplicationFunctions::EnableApplicationCrashReport>, "EnableApplicationCrashReport"},
         {100, D<&IApplicationFunctions::InitializeApplicationCopyrightFrameBuffer>, "InitializeApplicationCopyrightFrameBuffer"},
@@ -719,6 +720,29 @@ Result IApplicationFunctions::Unknown330(Out<u8> out) {
     LOG_DEBUG(Service_AM, "called");
     *out = 0;
     R_SUCCEED();
+}
+
+// A (system) application's power requests take the same paths as the HOME menu's (the 23.0.1 am
+// calls its shutdown, reboot and sleep sequences for 70-72).
+Result IApplicationFunctions::RequestToShutdown() {
+    LOG_INFO(Service_AM, "called");
+    R_SUCCEED_IF(!system.GetAppletManager().IsHomeSession());
+    system.GetAppletManager().RequestPower(AppletManager::PowerRequest::Shutdown);
+    R_SUCCEED();
+}
+
+Result IApplicationFunctions::RequestToReboot() {
+    LOG_INFO(Service_AM, "called");
+    R_SUCCEED_IF(!system.GetAppletManager().IsHomeSession());
+    system.GetAppletManager().RequestPower(AppletManager::PowerRequest::Reboot);
+    R_SUCCEED();
+}
+
+Result IApplicationFunctions::RequestToSleep() {
+    LOG_INFO(Service_AM, "called");
+    auto* const window_system = system.GetAppletManager().GetWindowSystem();
+    R_UNLESS(window_system != nullptr, AM::ResultNotImplemented);
+    R_RETURN(window_system->StartSleepSequence(nullptr));
 }
 
 Result IApplicationFunctions::PrepareForJit() {

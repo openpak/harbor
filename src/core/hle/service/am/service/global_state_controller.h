@@ -18,6 +18,7 @@ public:
     ~IGlobalStateController() override;
 
 private:
+    void StartSleepSequence(HLERequestContext& ctx);
     Result StartShutdownSequence();
     Result StartRebootSequence();
     Result IsAutoPowerDownRequested(Out<bool> out_is_requested);

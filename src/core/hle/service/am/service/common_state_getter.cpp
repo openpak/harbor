@@ -52,8 +52,8 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_, std::shared_ptr<Ap
         {11, D<&ICommonStateGetter::ReleaseSleepLock>, "ReleaseSleepLock"},
         {12, D<&ICommonStateGetter::ReleaseSleepLockTransiently>, "ReleaseSleepLockTransiently"},
         {13, D<&ICommonStateGetter::GetAcquiredSleepLockEvent>, "GetAcquiredSleepLockEvent"},
-        {14, nullptr, "GetWakeupCount"}, //11.0.0+
-        {15, nullptr, "Unknown15"}, //19.0.0+
+        {14, D<&ICommonStateGetter::GetWakeupCount>, "GetWakeupCount"}, //11.0.0+
+        {15, D<&ICommonStateGetter::GetSleepSequenceIdleEvent>, "GetSleepSequenceIdleEvent"}, //19.0.0+
         {20, D<&ICommonStateGetter::PushToGeneralChannel>, "PushToGeneralChannel"},
         {30, D<&ICommonStateGetter::GetHomeButtonReaderLockAccessor>, "GetHomeButtonReaderLockAccessor"},
         {31, D<&ICommonStateGetter::GetReaderLockAccessorEx>, "GetReaderLockAccessorEx"}, //2.0.0+
@@ -86,10 +86,10 @@ ICommonStateGetter::ICommonStateGetter(Core::System& system_, std::shared_ptr<Ap
         {300, D<&ICommonStateGetter::GetSettingsPlatformRegion>, "GetSettingsPlatformRegion"},
         {400, nullptr, "ActivateMigrationService"},
         {401, nullptr, "DeactivateMigrationService"},
-        {500, nullptr, "DisableSleepTillShutdown"},
-        {501, nullptr, "SuppressDisablingSleepTemporarily"},
-        {502, nullptr, "IsSleepEnabled"},
-        {503, nullptr, "IsDisablingSleepSuppressed"},
+        {500, D<&ICommonStateGetter::DisableSleepTillShutdown>, "DisableSleepTillShutdown"},
+        {501, D<&ICommonStateGetter::SuppressDisablingSleepTemporarily>, "SuppressDisablingSleepTemporarily"},
+        {502, D<&ICommonStateGetter::IsSleepEnabled>, "IsSleepEnabled"},
+        {503, D<&ICommonStateGetter::IsDisablingSleepSuppressed>, "IsDisablingSleepSuppressed"},
         {600, nullptr, "SetHidInputMagnificationForApplication"}, //20.0.0+
         {610, D<&ICommonStateGetter::Unknown610>, "Unknown610"}, //21.0.0+
         {611, D<&ICommonStateGetter::Unknown611>, "Unknown611"}, //22.0.0+
@@ -138,13 +138,15 @@ Result ICommonStateGetter::GetCurrentFocusState(Out<FocusState> out_focus_state)
     R_SUCCEED();
 }
 
-// The sleep lock holds a pending system sleep back until the applet releases it. This system never
-// sleeps (sleep is not emulated), so a request is granted at once, a release lets it go, and a
-// transient release (let a pending sleep through, then hold again) is held again at once.
-// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+// The sleep lock holds a sleep sequence back until the applet answers its RequestToPrepareSleep
+// with a release (sleep_sequence.cpp). Without a window system (no am session) it is granted at once.
 Result ICommonStateGetter::RequestToAcquireSleepLock() {
     LOG_DEBUG(Service_AM, "called");
 
+    if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+        window_system->RequestToAcquireSleepLock(*m_applet);
+        R_SUCCEED();
+    }
     {
         std::scoped_lock lk{m_applet->lock};
         m_applet->sleep_lock_enabled = true;
@@ -156,6 +158,9 @@ Result ICommonStateGetter::RequestToAcquireSleepLock() {
 Result ICommonStateGetter::ReleaseSleepLock() {
     LOG_DEBUG(Service_AM, "called");
 
+    if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+        R_RETURN(window_system->ReleaseSleepLock(*m_applet));
+    }
     {
         std::scoped_lock lk{m_applet->lock};
         m_applet->sleep_lock_enabled = false;
@@ -167,19 +172,64 @@ Result ICommonStateGetter::ReleaseSleepLock() {
 Result ICommonStateGetter::ReleaseSleepLockTransiently() {
     LOG_DEBUG(Service_AM, "called");
 
-    // No sleep is pending: the lock is taken again straight away and stays acquired.
-    {
-        std::scoped_lock lk{m_applet->lock};
-        m_applet->sleep_lock_enabled = true;
+    if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+        R_RETURN(window_system->ReleaseSleepLockTransiently(*m_applet));
     }
-    m_applet->sleep_lock_event.Signal(system.Kernel());
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::GetAcquiredSleepLockEvent(
     OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_WARNING(Service_AM, "called");
+    LOG_DEBUG(Service_AM, "called");
     *out_event = m_applet->sleep_lock_event.GetHandle();
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::GetWakeupCount(Out<u64> out_count) {
+    auto* window_system = system.GetAppletManager().GetWindowSystem();
+    *out_count = window_system ? window_system->GetWakeupCount() : 0;
+    LOG_DEBUG(Service_AM, "called, count={}", *out_count);
+    R_SUCCEED();
+}
+
+// Signalled while no sleep or shutdown sequence runs (the 23.0.1 am's power-state event at
+// +0xA0; overlayDisp waits on it).
+Result ICommonStateGetter::GetSleepSequenceIdleEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_AM, "called");
+    auto* window_system = system.GetAppletManager().GetWindowSystem();
+    R_UNLESS(window_system != nullptr, AM::ResultNotImplemented);
+    *out_event = window_system->GetSleepSequenceIdleEvent();
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::DisableSleepTillShutdown() {
+    LOG_INFO(Service_AM, "called");
+    if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+        window_system->DisableSleepTillShutdown();
+    }
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::SuppressDisablingSleepTemporarily(s64 duration_ns) {
+    LOG_INFO(Service_AM, "called, duration_ns={}", duration_ns);
+    if (auto* window_system = system.GetAppletManager().GetWindowSystem()) {
+        R_RETURN(window_system->SuppressDisablingSleepTemporarily(duration_ns));
+    }
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::IsSleepEnabled(Out<bool> out_is_enabled) {
+    auto* window_system = system.GetAppletManager().GetWindowSystem();
+    *out_is_enabled = window_system == nullptr || window_system->IsSleepEnabled();
+    LOG_DEBUG(Service_AM, "called, enabled={}", *out_is_enabled);
+    R_SUCCEED();
+}
+
+Result ICommonStateGetter::IsDisablingSleepSuppressed(Out<bool> out_is_suppressed) {
+    auto* window_system = system.GetAppletManager().GetWindowSystem();
+    *out_is_suppressed = window_system != nullptr && window_system->IsDisablingSleepSuppressed();
+    LOG_DEBUG(Service_AM, "called, suppressed={}", *out_is_suppressed);
     R_SUCCEED();
 }
 

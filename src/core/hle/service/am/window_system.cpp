@@ -18,6 +18,7 @@
 #include "core/hle/service/am/event_observer.h"
 #include "core/hle/service/am/process_creation.h"
 #include "core/hle/service/am/service/lock_accessor.h"
+#include "core/hle/service/am/sleep_sequence.h"
 #include "core/hle/service/am/window_system.h"
 #include "core/hle/service/caps/caps_overlay_screenshot.h"
 #include "core/hle/service/friend/friend_service.h"
@@ -58,6 +59,7 @@ WindowSystem::WindowSystem(Core::System& system) : m_system(system) {
             this->RequestUpdate();
             return std::nullopt;
         });
+    m_sleep = std::make_unique<SleepSequence>(system);
 }
 
 WindowSystem::~WindowSystem() {
@@ -89,6 +91,7 @@ void WindowSystem::Update() {
         }
 
         this->UpdateShutdownSequenceLocked();
+        this->UpdateSleepSequenceLocked();
 
         // Loop through all applets and remove terminated applets.
         this->PruneTerminatedAppletsLocked();
@@ -106,10 +109,13 @@ void WindowSystem::Update() {
         // If the home menu is being locked into the foreground, handle that.
         if (!this->LockHomeMenuIntoForegroundLocked()) {
             const bool overlay_takes_input = this->DoesOverlayTakeInputLocked();
+            // During a sleep sequence am's sleep window holds the foreground.
+            Applet* const foreground =
+                m_sleep->TakesForeground() ? nullptr : m_foreground_requested_applet;
 
             this->UpdateAppletStateLocked(m_overlay_display, true, overlay_takes_input);
-            this->UpdateAppletStateLocked(m_home_menu, m_foreground_requested_applet == m_home_menu, overlay_takes_input);
-            this->UpdateAppletStateLocked(m_application, m_foreground_requested_applet == m_application, overlay_takes_input);
+            this->UpdateAppletStateLocked(m_home_menu, foreground == m_home_menu, overlay_takes_input);
+            this->UpdateAppletStateLocked(m_application, foreground == m_application, overlay_takes_input);
         }
     }
 
@@ -474,8 +480,8 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
                                       AppletMessage::DetectLongPressingHomeButton);
         return;
     case SystemButtonType::PowerButtonShortPressing:
-        // A short press puts the console to sleep, or wakes it (AppletManager::ToggleSleep).
-        m_system.GetAppletManager().ToggleSleep();
+        // Wakes a sleeping console; otherwise the HOME menu hears it and decides (sleep_sequence.cpp).
+        this->OnPowerButtonShortPressLocked();
         return;
     case SystemButtonType::PowerButtonLongPressing:
         if (m_overlay_display == nullptr) {
@@ -548,6 +554,9 @@ void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
     LOG_INFO(Service_AM, "system button press, type={}", static_cast<u32>(type));
     std::scoped_lock lk{m_lock};
     if (m_system.GetAppletManager().IsHomeSession()) {
+        if (this->SwallowButtonAroundSleepLocked(type)) {
+            return;
+        }
         this->RouteSystemButtonLocked(type);
         return;
     }

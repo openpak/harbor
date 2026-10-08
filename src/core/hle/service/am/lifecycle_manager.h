@@ -119,6 +119,20 @@ public:
 
     void OnOperationAndPerformanceModeChanged(Kernel::KernelCore& kernel);
 
+    // A sleep sequence asks a sleep-lock holder to get ready (RequestToPrepareSleep goes out
+    // once); the applet's release answers it.
+    void RequestToPrepareSleep(Kernel::KernelCore& kernel) {
+        m_has_requested_request_to_prepare_sleep = true;
+        m_has_acknowledged_request_to_prepare_sleep = false;
+        this->SignalSystemEventIfNeeded(kernel);
+    }
+
+    void ClearRequestToPrepareSleep(Kernel::KernelCore& kernel) {
+        m_has_requested_request_to_prepare_sleep = false;
+        m_has_acknowledged_request_to_prepare_sleep = false;
+        this->SignalSystemEventIfNeeded(kernel);
+    }
+
 public:
     void SetFocusStateChangedNotificationEnabled(Kernel::KernelCore& kernel, bool enabled) {
         m_focus_state_changed_notification_enabled = enabled;

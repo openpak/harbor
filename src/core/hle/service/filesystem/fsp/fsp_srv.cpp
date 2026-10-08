@@ -40,6 +40,7 @@
 #include "core/hle/service/filesystem/fsp/fs_i_storage.h"
 #include "core/hle/service/filesystem/fsp/fsp_srv.h"
 #include "core/hle/service/filesystem/fsp/save_data_transfer_prohibiter.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_ipc.h"
 #include "core/hle/service/filesystem/romfs_controller.h"
 #include "core/hle/service/filesystem/save_data_controller.h"
 #include "core/hle/service/hle_ipc.h"
@@ -109,7 +110,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {71, D<&FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute>, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute"},
         {80, nullptr, "OpenSaveDataMetaFile"},
         {81, nullptr, "OpenSaveDataTransferManager"},
-        {82, nullptr, "OpenSaveDataTransferManagerVersion2"},
+        {82, D<&FSP_SRV::OpenSaveDataTransferManagerVersion2>, "OpenSaveDataTransferManagerVersion2"},
         {83, D<&FSP_SRV::OpenSaveDataTransferProhibiter>, "OpenSaveDataTransferProhibiter"},
         {84, nullptr, "ListApplicationAccessibleSaveDataOwnerId"},
         {85, nullptr, "OpenSaveDataTransferManagerForSaveDataRepair"},
@@ -156,7 +157,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {613, nullptr, "VerifySaveDataFileSystemBySaveDataSpaceId"},
         {614, nullptr, "CorruptSaveDataFileSystemBySaveDataSpaceId"},
         {615, nullptr, "QuerySaveDataInternalStorageTotalSize"},
-        {616, nullptr, "GetSaveDataCommitId"},
+        {616, D<&FSP_SRV::GetSaveDataCommitId>, "GetSaveDataCommitId"},
         {617, nullptr, "UnregisterExternalKey"},
         {620, nullptr, "SetSdCardEncryptionSeed"},
         {630, nullptr, "SetSdCardAccessibility"},
@@ -417,8 +418,12 @@ Result FSP_SRV::OpenSaveDataFileSystem(OutInterface<IFileSystem> out_interface,
         break;
     }
 
-    *out_interface =
+    auto file_system =
         std::make_shared<IFileSystem>(system, std::move(dir), SizeGetter::FromStorageId(fsc, id));
+    file_system->SetCommitHook([controller = save_data_controller, space_id, attribute] {
+        controller->RecordSaveDataCommit(space_id, attribute);
+    });
+    *out_interface = std::move(file_system);
 
     R_SUCCEED();
 }
@@ -583,6 +588,17 @@ Result FSP_SRV::FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
     R_THROW(FileSys::ResultTargetNotFound);
 }
 
+Result FSP_SRV::GetSaveDataCommitId(Out<s64> out_commit_id, FileSys::SaveDataSpaceId space_id,
+                                    u64 save_data_id) {
+    // The commit id kept in the save's extra data (set at create, renewed on every commit).
+    FileSys::SaveDataAttribute attribute{};
+    R_TRY(FindSaveDataById(&attribute, space_id, save_data_id));
+    FileSys::SaveDataExtraData extra_data{};
+    R_TRY(save_data_controller->ReadSaveDataExtraData(&extra_data, space_id, attribute));
+    *out_commit_id = extra_data.commit_id;
+    R_SUCCEED();
+}
+
 Result FSP_SRV::ReadExtraDataById(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                   FileSys::SaveDataSpaceId space_id, u64 save_data_id) {
     R_UNLESS(save_data_controller != nullptr, FileSys::ResultPermissionDenied);
@@ -678,6 +694,13 @@ Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataSpaceId(
     OutBuffer<BufferAttr_HipcMapAlias> out_buffer, FileSys::SaveDataSpaceId space_id,
     u64 save_data_id) {
     R_RETURN(ReadExtraDataById(out_buffer, space_id, save_data_id));
+}
+
+Result FSP_SRV::OpenSaveDataTransferManagerVersion2(
+    OutInterface<SaveTransfer::ISaveDataTransferManagerVersion2> out_manager) {
+    LOG_INFO(Service_FS, "called");
+    *out_manager = std::make_shared<SaveTransfer::ISaveDataTransferManagerVersion2>(system);
+    R_SUCCEED();
 }
 
 Result FSP_SRV::OpenSaveDataTransferProhibiter(

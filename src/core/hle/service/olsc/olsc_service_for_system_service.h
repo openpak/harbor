@@ -28,6 +28,8 @@ class DaemonSettings;
 
 namespace Service::OLSC {
 
+class TransferQueue;
+
 class IAsyncLatestVersionPlayablePlatformsRequest;
 class IDaemonController;
 class IRemoteStorageController;
@@ -75,6 +77,8 @@ private:
     std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings;
     /// Runs the network work behind the async objects (the archive list).
     std::shared_ptr<OpenPak::AsyncWorker> worker;
+    /// The session's transfer task queue (RSC 1/12 register, TTLC reads it).
+    std::shared_ptr<TransferQueue> queue;
 };
 
 /// The 23.x request behind olsc:s 1001: which platforms the title's latest version plays on.
