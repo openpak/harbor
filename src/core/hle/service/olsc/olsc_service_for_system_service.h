@@ -19,9 +19,12 @@ class KEvent;
 class KReadableEvent;
 } // namespace Kernel
 
-namespace OpenPak::Olsc {
+namespace OpenPak {
+class AsyncWorker;
+namespace Olsc {
 class DaemonSettings;
 }
+} // namespace OpenPak
 
 namespace Service::OLSC {
 
@@ -58,6 +61,8 @@ private:
                                       Common::UUID user_id);
     Result GetDaemonController(Out<SharedPointer<IDaemonController>> out_interface);
     Result GetDataTransferPolicy(Out<DataTransferPolicy> out_policy, u64 application_id);
+    Result DeleteDataTransferPolicyCache(u64 application_id);
+    Result ClearDataTransferPolicyCache();
     Result GetDataTransferPolicy209(Out<DataTransferPolicy> out_policy, u64 application_id);
     Result RequestLatestVersionPlayablePlatforms(
         Out<SharedPointer<IAsyncLatestVersionPlayablePlatformsRequest>> out_request,
@@ -68,6 +73,8 @@ private:
 
     /// The daemon's settings, shared by every IDaemonController of this service.
     std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings;
+    /// Runs the network work behind the async objects (the archive list).
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
 /// The 23.x request behind olsc:s 1001: which platforms the title's latest version plays on.

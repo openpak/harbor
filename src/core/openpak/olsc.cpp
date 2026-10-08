@@ -152,6 +152,26 @@ std::optional<ArchiveInfo> LatestFor(const std::vector<ArchiveInfo>& archives,
     return latest;
 }
 
+std::vector<ArchiveInfo> LatestPerApplication(const std::vector<ArchiveInfo>& archives) {
+    std::map<std::uint64_t, ArchiveInfo> latest;
+    for (const auto& archive : archives) {
+        if (latest.contains(archive.application_id)) {
+            continue;
+        }
+        if (auto found = LatestFor(archives, archive.application_id)) {
+            latest.emplace(archive.application_id, *found);
+        }
+    }
+    std::vector<ArchiveInfo> out;
+    for (auto& [application_id, archive] : latest) {
+        out.push_back(archive);
+    }
+    std::stable_sort(out.begin(), out.end(), [](const ArchiveInfo& a, const ArchiveInfo& b) {
+        return a.saved_at > b.saved_at;
+    });
+    return out;
+}
+
 ArchiveCache& ArchiveCache::Instance() {
     static ArchiveCache cache;
     return cache;
@@ -180,6 +200,18 @@ void ArchiveCache::Refresh(const std::string& uid, int max_age_s) {
             entry.fetched_at = Now();
         }
     }).detach();
+}
+
+bool ArchiveCache::RefreshNow(const std::string& uid) {
+    if (uid.empty() || !Session::Enabled() || !Session::HasDeviceAccount(uid)) {
+        return false;
+    }
+    auto archives = FetchArchives(uid);
+    if (!archives) {
+        return false;
+    }
+    Put(uid, std::move(*archives));
+    return true;
 }
 
 std::optional<std::vector<ArchiveInfo>> ArchiveCache::Get(const std::string& uid) const {
@@ -270,6 +302,7 @@ void DaemonSettings::SetApplicationAutoTransfer(const std::string& uid,
 void DaemonSettings::Load() {
     const std::string text = Platform::ReadFile(file);
     if (text.empty()) {
+        LOG_DEBUG(Service_OLSC, "olsc settings: none stored yet");
         return;
     }
     const auto json = nlohmann::json::parse(text, nullptr, false);
@@ -296,6 +329,7 @@ void DaemonSettings::Load() {
         }
         users[uid] = std::move(user);
     }
+    LOG_DEBUG(Service_OLSC, "olsc settings: {} user(s) loaded", users.size());
 }
 
 void DaemonSettings::Save() const {

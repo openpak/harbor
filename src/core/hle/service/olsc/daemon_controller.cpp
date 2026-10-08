@@ -56,6 +56,7 @@ Result IDaemonController::GetGlobalAutoUploadSetting(Out<bool> out_is_enabled,
                                                      Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
     *out_is_enabled = settings->GlobalAutoUpload(user_id.RawString());
+    LOG_DEBUG(Service_OLSC, "global auto upload is {}", *out_is_enabled);
     R_SUCCEED();
 }
 
@@ -77,6 +78,7 @@ Result IDaemonController::GetGlobalAutoDownloadSetting(Out<bool> out_is_enabled,
                                                        Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
     *out_is_enabled = settings->GlobalAutoDownload(user_id.RawString());
+    LOG_DEBUG(Service_OLSC, "global auto download is {}", *out_is_enabled);
     R_SUCCEED();
 }
 

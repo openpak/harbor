@@ -63,6 +63,10 @@ DataInfo PackDataInfo(const ArchiveInfo& archive);
 std::optional<ArchiveInfo> LatestFor(const std::vector<ArchiveInfo>& archives,
                                      std::uint64_t application_id);
 
+/// What IRemoteStorageController 26 ListDataInfo lists: one archive per title, as LatestFor picks
+/// it, newest first.
+std::vector<ArchiveInfo> LatestPerApplication(const std::vector<ArchiveInfo>& archives);
+
 /// The archive cache for firmware users (uid: the 32 hex digits acc prints a UserId as).
 /// Lookup never blocks; Refresh fetches on a thread of its own and fills the cache when the
 /// server answers. A failed fetch keeps what was there.
@@ -73,6 +77,10 @@ public:
     /// Fetch `uid`'s list unless one was fetched in the last `max_age_s` seconds or a fetch is
     /// under way. Needs a configured console server and a linked user; otherwise does nothing.
     void Refresh(const std::string& uid, int max_age_s = 30);
+
+    /// Fetch `uid`'s list now (blocking: an async task's work, never an IPC thread). True when
+    /// the server answered with a list, which then replaces the cached one.
+    bool RefreshNow(const std::string& uid);
 
     /// The cached list for `uid`, or nullopt when none has been fetched.
     std::optional<std::vector<ArchiveInfo>> Get(const std::string& uid) const;

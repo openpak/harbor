@@ -13,6 +13,7 @@
 #include "core/hle/service/olsc/olsc_service_for_system_service.h"
 #include "core/hle/service/olsc/remote_storage_controller.h"
 #include "core/hle/service/olsc/transfer_task_list_controller.h"
+#include "core/openpak/async_worker.h"
 #include "core/openpak/olsc.h"
 
 namespace Service::OLSC {
@@ -35,10 +36,10 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
         {104, nullptr, "GetLastErrorEventHolder"},
         {105, D<&IOlscServiceForSystemService::GetTransferTaskErrorInfo>, "GetTransferTaskErrorInfo"},
         {200, D<&IOlscServiceForSystemService::GetDataTransferPolicy>, "GetDataTransferPolicy"},
-        {201, nullptr, "DeleteDataTransferPolicyCache"},
+        {201, D<&IOlscServiceForSystemService::DeleteDataTransferPolicyCache>, "DeleteDataTransferPolicyCache"},
         {202, nullptr, "Unknown202"},
         {203, nullptr, "RequestUpdateDataTransferPolicyCacheAsync"},
-        {204, nullptr, "ClearDataTransferPolicyCache"},
+        {204, D<&IOlscServiceForSystemService::ClearDataTransferPolicyCache>, "ClearDataTransferPolicyCache"},
         {205, nullptr, "RequestGetDataTransferPolicyAsync"},
         {206, nullptr, "Unknown206"}, //21.0.0+
         {209, D<&IOlscServiceForSystemService::GetDataTransferPolicy209>, "Unknown209"}, //22.0.0+
@@ -89,10 +90,7 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
 
     RegisterHandlers(functions);
 
-    // A console keeps these in olsc's system save; Harbor keeps them beside the NAND saves.
-    settings = std::make_shared<OpenPak::Olsc::DaemonSettings>(
-        Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
-        "olsc-settings.json");
+    worker = std::make_shared<OpenPak::AsyncWorker>(system, "olsc:OpenPak");
 }
 
 IOlscServiceForSystemService::~IOlscServiceForSystemService() = default;
@@ -108,13 +106,20 @@ Result IOlscServiceForSystemService::GetRemoteStorageController(
     Out<SharedPointer<IRemoteStorageController>> out_interface, Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called");
     // The controller speaks for one user (the sysmodule's takes the Uid here, 0x10 bytes in).
-    *out_interface = std::make_shared<IRemoteStorageController>(system, user_id);
+    *out_interface = std::make_shared<IRemoteStorageController>(system, user_id, worker);
     R_SUCCEED();
 }
 
 Result IOlscServiceForSystemService::GetDaemonController(
     Out<SharedPointer<IDaemonController>> out_interface) {
     LOG_INFO(Service_OLSC, "called");
+    if (!settings) {
+        // A console keeps these in olsc's system save; Harbor keeps them beside the NAND saves.
+        // Read on first use, once the data directory is the session's.
+        settings = std::make_shared<OpenPak::Olsc::DaemonSettings>(
+            Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
+            "olsc-settings.json");
+    }
     *out_interface = std::make_shared<IDaemonController>(system, settings);
     R_SUCCEED();
 }
@@ -126,6 +131,18 @@ Result IOlscServiceForSystemService::GetDataTransferPolicy(
     policy.upload_policy = 0;
     policy.download_policy = 0;
     *out_policy = policy;
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::DeleteDataTransferPolicyCache(u64 application_id) {
+    // 0x21d1e0 case 201: u64 in, nothing out. Harbor keeps no policy cache (200 answers zeros).
+    LOG_DEBUG(Service_OLSC, "called, app={:016X}", application_id);
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::ClearDataTransferPolicyCache() {
+    // 0x21d1e0 case 204: nothing in or out. "Update List" sends it first.
+    LOG_DEBUG(Service_OLSC, "called");
     R_SUCCEED();
 }
 
@@ -219,10 +236,9 @@ Result IAsyncLatestVersionPlayablePlatformsRequest::GetSystemEvent(
 }
 
 Result IAsyncLatestVersionPlayablePlatformsRequest::GetPlayablePlatforms(Out<u32> out_platforms) {
-    // What pegasus /v1/apps/<id>/latest/platforms -> ["NX"] would give, as the Ryujinx Harbor
-    // answers; the output layout of 100 is not confirmed in the sysmodule.
-    LOG_UNKNOWN_CONTRACT(Service_OLSC,
-                         "olsc 1001 request 100 answered u32 1 (NX only)");
+    // Four bytes out (0x2289f0). What pegasus /v1/apps/<id>/latest/platforms -> ["NX"] would
+    // give, as the Ryujinx Harbor answers; the bit meaning is not established.
+    LOG_UNKNOWN_CONTRACT(Service_OLSC, "olsc 1001 request 100 answered u32 1 (NX only)");
     *out_platforms = 1;
     R_SUCCEED();
 }

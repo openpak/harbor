@@ -269,6 +269,17 @@ void OlscChecks(const std::filesystem::path& dir) {
     const auto latest = list ? olsc::LatestFor(*list, 0x0100A00000BB0000) : std::nullopt;
     Check(latest && latest->id == 8, "GetDataInfo answers the newest fixed archive");
     Check(list && !olsc::LatestFor(*list, 0x0100000000000001), "another title has no cloud data");
+    if (list) {
+        auto more = *list;
+        olsc::ArchiveInfo other;
+        other.id = 20;
+        other.application_id = 0x0100000000000001;
+        other.saved_at = 5000;
+        more.push_back(other);
+        const auto per_title = olsc::LatestPerApplication(more);
+        Check(per_title.size() == 2 && per_title[0].id == 20 && per_title[1].id == 8,
+              "ListDataInfo lists one archive per title, newest first");
+    }
 
     olsc::ArchiveInfo a;
     a.id = 0x1122334455667788;
