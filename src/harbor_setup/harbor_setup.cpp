@@ -114,17 +114,7 @@ int RunWizard(Host& host) {
         // positional gamepad buttons as Xbox semantics (bottom = A), so its swap gives the Switch's.
         brls::Application::setSwapInputKeys(true);
         brls::Application::setGlobalQuit(false);
-
-        // Focus: a static 3-unit mint ring over the lit row colour of each theme.
-        brls::getStyle().addMetric("brls/highlight/stroke_width", 3);
-        for (const bool dark : {false, true}) {
-            brls::Theme theme = dark ? brls::Theme::getDarkTheme() : brls::Theme::getLightTheme();
-            theme.addColor("brls/highlight/color1", nvgRGB(0x39, 0xef, 0xd2));
-            theme.addColor("brls/highlight/color2", nvgRGB(0x39, 0xdf, 0xe4));
-            theme.addColor("brls/highlight/background",
-                           dark ? nvgRGB(0x20, 0x20, 0x20) : nvgRGB(0xff, 0xff, 0xff));
-            theme.addColor("brls/click_pulse", nvgRGBA(0x39, 0xef, 0xd2, 38));
-        }
+        ApplyBorealisStyle();
         SetDarkTheme(SystemDarkTheme());
 
         FitCanvas();

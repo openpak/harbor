@@ -27,6 +27,9 @@ bool SystemDarkTheme();
 void SetDarkTheme(bool dark);
 bool DarkTheme();
 
+/// The focus ring and lit-row colours of both themes (after Borealis has started).
+void ApplyBorealisStyle();
+
 /// Scales the 1280x720 design canvas uniformly into the window (Borealis alone scales by width).
 void FitCanvas();
 

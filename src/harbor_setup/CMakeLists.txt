@@ -89,26 +89,34 @@ add_library(harbor_setup_core STATIC
     host.h
     keys.cpp
     keys.h
+    menu.h
+    menu_input.cpp
+    menu_input.h
     record.cpp
     record.h
     wizard.cpp
     wizard.h)
-target_link_libraries(harbor_setup_core PUBLIC common core frontend_common nlohmann_json::nlohmann_json
+target_link_libraries(harbor_setup_core PUBLIC common core frontend_common hid_core input_common video_core nlohmann_json::nlohmann_json
                       PRIVATE Vulkan::Headers)
 set_target_properties(harbor_setup_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# The wizard's window.
+# The wizard's window, and the Harbor menu drawn offscreen onto the console's screen.
 add_library(harbor_setup STATIC
     chime.cpp
     chime.h
     harbor_setup.cpp
+    menu.cpp
+    menu_view.cpp
+    menu_view.h
+    ui.cpp
+    ui.h
     view.cpp
     view.h
     "${HARBOR_SETUP_FONT_CPP}")
 if (NOT ANDROID)
     target_sources(harbor_setup PRIVATE desktop.cpp)
 endif()
-target_link_libraries(harbor_setup PUBLIC harbor_setup_core PRIVATE borealis SDL3::SDL3)
+target_link_libraries(harbor_setup PUBLIC harbor_setup_core PRIVATE borealis SDL3::SDL3 ${CMAKE_DL_LIBS})
 # Its classes derive from Borealis' views, which are built with RTTI.
 target_compile_options(harbor_setup PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-frtti>)
 set_target_properties(harbor_setup PROPERTIES POSITION_INDEPENDENT_CODE ON)

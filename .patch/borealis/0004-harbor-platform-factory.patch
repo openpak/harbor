@@ -1,0 +1,26 @@
+--- a/library/include/borealis/core/platform.hpp
++++ b/library/include/borealis/core/platform.hpp
+@@ -271,6 +271,11 @@
+     static Platform* createPlatform();
+ 
+     /**
++     * Harbor: when set, createPlatform returns what this makes (a frontend-owned window and input).
++     */
++    static inline Platform* (*factory)() = nullptr;
++
++    /**
+      * App locale, empty for default
+      */
+     static inline std::string APP_LOCALE_DEFAULT = LOCALE_AUTO;
+--- a/library/lib/core/platform.cpp
++++ b/library/lib/core/platform.cpp
+@@ -44,6 +44,9 @@
+ 
+ Platform* Platform::createPlatform()
+ {
++    if (Platform::factory)
++        return Platform::factory();
++
+ #if defined(__SWITCH__)
+     return new SwitchPlatform();
+ #elif defined(ANDROID)
