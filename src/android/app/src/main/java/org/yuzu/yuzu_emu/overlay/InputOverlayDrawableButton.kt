@@ -16,6 +16,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput.ButtonState
 import org.yuzu.yuzu_emu.features.input.model.NativeButton
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
+import org.yuzu.yuzu_emu.overlay.model.OverlayControl
 import org.yuzu.yuzu_emu.overlay.model.OverlayControlData
 
 /**
@@ -97,6 +98,10 @@ class InputOverlayDrawableButton(
 
         return false
     }
+
+    /** Harbor's power button: a host action (sleep, power menu), never a controller button. */
+    val isPower: Boolean
+        get() = overlayControlData.id == OverlayControl.BUTTON_POWER.id
 
     /** Harbor console mode: InputOverlay tracks the fingers and sets the drawn state. */
     fun setPressed(pressed: Boolean) {

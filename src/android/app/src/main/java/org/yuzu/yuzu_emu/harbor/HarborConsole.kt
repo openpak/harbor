@@ -4,7 +4,6 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.widget.LinearLayout
@@ -53,6 +52,7 @@ object HarborConsole {
     /** Registers the library, applies the console preset and starts the HOME menu in place of `from`. */
     fun boot(from: Activity) {
         active = true
+        HarborSleep.reset()
         HarborNative.setConsoleMode(true)
         // What Eden's main screen sets up before any game: the multiplayer/network layer.
         NativeLibrary.initMultiplayer()
@@ -62,9 +62,9 @@ object HarborConsole {
                 NativeLibrary.initializeSystem(true)
             }
             HarborNative.applyConsolePreset()
-            Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
-            // The driver loads now, so a selected one that failed stops the boot here, not in HOME.
-            val driverProblem = HarborNative.checkGpuDriver()
+            // The driver loads now, so a selected one that failed stops the boot here, not in HOME,
+            // and the console never starts on the phone's own driver in its place.
+            val driverProblem = ensureDriver().ifEmpty { HarborNative.checkGpuDriver() }
             if (driverProblem.isNotEmpty()) {
                 Log.error("[Harbor] console not started: $driverProblem")
                 from.runOnUiThread { showDriverRefusal(from, driverProblem) }
@@ -160,43 +160,43 @@ object HarborConsole {
             if (GpuDriverHelper.installedCustomDriverData.name != null) {
                 GpuDriverHelper.installDefaultDriver()
             }
-            return "the phone's (not an Adreno GPU)"
+            Log.info("[Harbor] console start: graphics driver the phone's (not an Adreno GPU)")
+            return ""
+        }
+        val path = StringSetting.DRIVER_PATH.getString()
+        // A chosen driver whose package is gone is a failure, not the phone's driver.
+        if (path.isNotEmpty() && !File(path).exists()) {
+            return "The chosen graphics driver (${File(path).name}) is no longer installed."
         }
         val chosen = GpuDriverHelper.customDriverSettingData
         if (GpuDriverHelper.installedCustomDriverData != chosen) {
-            val path = StringSetting.DRIVER_PATH.getString()
-            if (chosen.name == null || !File(path).exists()) {
+            if (path.isEmpty() || chosen.name == null) {
                 GpuDriverHelper.installDefaultDriver()
             } else if (!GpuDriverHelper.installCustomDriver(File(path))) {
-                Log.warning("[Harbor] the chosen graphics driver could not be unpacked")
+                return "The chosen graphics driver (${chosen.name}) could not be unpacked."
             }
         }
         val installed = GpuDriverHelper.installedCustomDriverData
-        return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
+        Log.info("[Harbor] console start: graphics driver " +
+            (installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"))
+        return ""
     }
 
     /**
-     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver): the console does
-     * not boot on the phone's own driver instead. The setup chooses another; Exit closes Harbor.
+     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver, or its package
+     * is gone or broken): the console does not boot on the phone's own driver instead. The driver
+     * choice opens at once (HarborStoppedActivity): another installed driver that fits, the
+     * recommended one downloaded, or the phone's own after a warning, then a restart into it.
      */
     fun showDriverRefusal(from: Activity, problem: String) {
         if (from.isFinishing) {
             return
         }
-        val dialog = AlertDialog.Builder(from, HarborTheme.alertTheme(from))
-            .setTitle(R.string.harbor_driver_failed_title)
-            .setMessage(problem + "\n\n" + from.getString(R.string.harbor_driver_failed_hint))
-            .setCancelable(false)
-            .setPositiveButton(R.string.harbor_menu_setup_again) { _, _ ->
-                HarborNative.stopOpenPak()
-                restartIntoSetup(from)
-            }
-            .setNegativeButton(R.string.harbor_menu_exit) { _, _ ->
-                HarborNative.stopOpenPak()
-                from.finishAndRemoveTask()
-            }
-            .show()
-        HarborPanelInput.attach(dialog)
+        Log.error("[Harbor] the graphics driver could not be loaded: $problem")
+        from.startActivity(HarborStoppedActivity.driverFailed(from, problem))
+        @Suppress("DEPRECATION")
+        from.overridePendingTransition(0, 0)
+        from.finish()
     }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */
@@ -235,6 +235,7 @@ object HarborConsole {
 
     /** "Harbor stopped" with `reason` in place of `activity` (the emulation screen). */
     fun showStopped(activity: Activity, reason: String) {
+        HarborSleep.reset()
         Log.info("[Harbor] the console stopped: $reason")
         HarborAudioFocus.release()
         activity.startActivity(HarborStoppedActivity.stopped(activity, reason))
