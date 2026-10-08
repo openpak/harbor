@@ -136,6 +136,8 @@ add_library(core STATIC
     file_sys/romfs.h
     file_sys/romfs_factory.cpp
     file_sys/romfs_factory.h
+    file_sys/save_image/save_image.h
+    file_sys/save_image/save_image_stub.cpp
     file_sys/savedata_factory.cpp
     file_sys/savedata_factory.h
     file_sys/sdmc_factory.cpp
