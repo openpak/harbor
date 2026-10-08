@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/window_system.h"
@@ -77,7 +78,7 @@ Result IGlobalStateController::UpdateDefaultDisplayResolution() {
 IGlobalStateController::~IGlobalStateController() = default;
 
 Result IGlobalStateController::LoadAndApplyIdlePolicySettings() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IGlobalStateController 10 LoadAndApplyIdlePolicySettings: not emulated: the idle policy (dimming, auto-sleep) is not applied");
     R_SUCCEED();
 }
 

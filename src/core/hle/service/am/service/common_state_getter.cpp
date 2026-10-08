@@ -254,20 +254,20 @@ Result ICommonStateGetter::SetVrModeEnabled(bool is_vr_mode_enabled) {
 }
 
 Result ICommonStateGetter::SetLcdBacklighOffEnabled(bool is_lcd_backlight_off_enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called. is_lcd_backlight_off_enabled={}",
-                is_lcd_backlight_off_enabled);
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 52 SetLcdBacklighOffEnabled: not emulated: the backlight is not switched; enabled={}", is_lcd_backlight_off_enabled);
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::BeginVrModeEx() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // VR mode is kept per applet and answered by IsVrModeEnabled.
+    LOG_DEBUG(Service_AM, "called");
     std::scoped_lock lk{m_applet->lock};
     m_applet->vr_mode_enabled = true;
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::EndVrModeEx() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
     std::scoped_lock lk{m_applet->lock};
     m_applet->vr_mode_enabled = false;
     R_SUCCEED();
@@ -305,7 +305,7 @@ void ICommonStateGetter::SetCpuBoostMode(HLERequestContext& ctx) {
 }
 
 Result ICommonStateGetter::GetBuiltInDisplayType(Out<s32> out_display_type) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 68 GetBuiltInDisplayType: answered 0 (the values are not established)");
     *out_display_type = 0;
     R_SUCCEED();
 }
@@ -349,13 +349,14 @@ Result ICommonStateGetter::PerformSystemButtonPressingIfInFocus(SystemButtonType
 }
 
 Result ICommonStateGetter::EnableStartupLogoDisappearedMessage() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // The startup logo is gone at once here, so the message comes at once.
+    LOG_DEBUG(Service_AM, "called");
     m_applet->lifecycle_manager.PushUnorderedMessage(system.Kernel(), AppletMessage::StartupLogoDisappeared);
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::GetOperationModeSystemInfo(Out<u32> out_operation_mode_system_info) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 200 GetOperationModeSystemInfo: answered 0 (the meaning is not established)");
     *out_operation_mode_system_info = 0;
     R_SUCCEED();
 }
@@ -384,7 +385,7 @@ Result ICommonStateGetter::GetSettingsPlatformRegion(
 }
 
 Result ICommonStateGetter::SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 900 SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled: kept per applet, not acted on at ExecuteProgram");
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->request_exit_to_library_applet_at_execute_next_program_enabled = true;
@@ -456,14 +457,14 @@ Result ICommonStateGetter::EndVrMode3d() {
 }
 
 Result ICommonStateGetter::IsVrModeEnabled3d(Out<bool> out_is_vr_mode_enabled_3d) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
     std::scoped_lock lk{m_applet->lock};
     *out_is_vr_mode_enabled_3d = m_applet->vr_mode_enabled_3d;
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::GetVrLaboGoggleViewport(Out<s32> out_x, Out<s32> out_y, Out<s32> out_width, Out<s32> out_height) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 1003 GetVrLaboGoggleViewport: answered the full 1280x720 screen (not established)");
     *out_x = 0;
     *out_y = 0;
     *out_width = 1280;
@@ -472,14 +473,14 @@ Result ICommonStateGetter::GetVrLaboGoggleViewport(Out<s32> out_x, Out<s32> out_
 }
 
 Result ICommonStateGetter::GetPanelPhysicalSizeForSpecificTitle(Out<f32> out_width, Out<f32> out_height) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 1004 GetPanelPhysicalSizeForSpecificTitle: answered 137.25 x 77.2 mm (not established)");
     *out_width = 137250.0f / 1000.0f;
     *out_height = 77200.0f / 1000.0f;
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::GetPanelResolutionForSpecificTitle(Out<s32> out_width, Out<s32> out_height) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 1005 GetPanelResolutionForSpecificTitle: answered 1280x720 (not established)");
     *out_width = 1280;
     *out_height = 720;
     R_SUCCEED();

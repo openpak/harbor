@@ -288,7 +288,8 @@ Result IApplicationFunctions::GetDesiredLanguage(Out<u64> out_language_code) {
 }
 
 Result IApplicationFunctions::SetTerminateResult(Result terminate_result) {
-    LOG_INFO(Service_AM, "(STUBBED) called, result={:#x} ({:04}-{:04})",
+    // Kept per applet: it is what the application's accessor reports when it ends.
+    LOG_INFO(Service_AM, "called, result={:#x} ({:04}-{:04})",
              terminate_result.GetInnerValue(),
              static_cast<u32>(terminate_result.GetModule()) + 2000,
              terminate_result.GetDescription());
@@ -459,13 +460,14 @@ Result IApplicationFunctions::EndBlockingHomeButton() {
 }
 
 Result IApplicationFunctions::NotifyRunning(Out<bool> out_became_running) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // The application is running from its first call on.
+    LOG_DEBUG(Service_AM, "called");
     *out_became_running = true;
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::GetPseudoDeviceId(Out<Common::UUID> out_pseudo_device_id) {
-    LOG_WARNING(Service_AM, "(stubbed)");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 50 GetPseudoDeviceId: derived from the title seed alone; a console also mixes in a per-console secret");
     R_UNLESS(out_pseudo_device_id != nullptr, ResultUnknown);
 
     // This should be hashed with the device specific hash
@@ -487,19 +489,20 @@ Result IApplicationFunctions::GetPseudoDeviceId(Out<Common::UUID> out_pseudo_dev
 
 Result IApplicationFunctions::IsGamePlayRecordingSupported(
     Out<bool> out_is_game_play_recording_supported) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_is_game_play_recording_supported = m_applet->game_play_recording_supported;
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 65 IsGamePlayRecordingSupported: not emulated: gameplay recording; answered false");
+    *out_is_game_play_recording_supported = false;
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::InitializeGamePlayRecording(
     u64 transfer_memory_size, InCopyHandle<Kernel::KTransferMemory> transfer_memory_handle) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 66 InitializeGamePlayRecording: not emulated: gameplay recording; the memory is accepted and unused");
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::SetMediaPlaybackStateForApplication(bool enabled) {
-    LOG_WARNING(Service_AM, "(stubbed) {}", enabled);
+    // Kept per applet (it holds the idle timer back on a console).
+    LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
     std::scoped_lock lk{m_applet->lock};
     m_applet->media_playback_state = enabled;
     R_SUCCEED();
@@ -507,7 +510,8 @@ Result IApplicationFunctions::SetMediaPlaybackStateForApplication(bool enabled) 
 
 Result IApplicationFunctions::SetGamePlayRecordingState(
     GamePlayRecordingState game_play_recording_state) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Kept per applet; nothing is recorded here.
+    LOG_DEBUG(Service_AM, "called, state={}", game_play_recording_state);
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->game_play_recording_state = game_play_recording_state;
@@ -516,7 +520,8 @@ Result IApplicationFunctions::SetGamePlayRecordingState(
 }
 
 Result IApplicationFunctions::EnableApplicationCrashReport(bool enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Kept per applet.
+    LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->application_crash_report_enabled = enabled;
@@ -527,19 +532,19 @@ Result IApplicationFunctions::EnableApplicationCrashReport(bool enabled) {
 Result IApplicationFunctions::InitializeApplicationCopyrightFrameBuffer(
     s32 width, s32 height, u64 transfer_memory_size,
     InCopyHandle<Kernel::KTransferMemory> transfer_memory_handle) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 100 InitializeApplicationCopyrightFrameBuffer: not emulated: the copyright overlay for captures; accepted");
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::SetApplicationCopyrightImage(
     s32 x, s32 y, s32 width, s32 height, WindowOriginMode window_origin_mode,
     InBuffer<BufferAttr_HipcMapTransferAllowsNonSecure | BufferAttr_HipcMapAlias> image_data) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 101 SetApplicationCopyrightImage: not emulated: the copyright overlay for captures; image dropped");
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::SetApplicationCopyrightVisibility(bool visible) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, is_visible={}", visible);
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IApplicationFunctions 102 SetApplicationCopyrightVisibility: not emulated: the copyright overlay for captures; visible={}", visible);
     R_SUCCEED();
 }
 
@@ -654,7 +659,8 @@ Result IApplicationFunctions::GetPreviousProgramIndex(Out<s32> out_previous_prog
 
 Result IApplicationFunctions::GetGpuErrorDetectedSystemEvent(
     OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Never signalled: no GPU error detection here.
+    LOG_DEBUG(Service_AM, "called");
     *out_event = m_applet->gpu_error_detected_event.GetHandle();
     R_SUCCEED();
 }
@@ -716,7 +722,8 @@ Result IApplicationFunctions::Unknown330(Out<u8> out) {
 }
 
 Result IApplicationFunctions::PrepareForJit() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Kept per applet; the jit service needs nothing more.
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->jit_service_launched = true;

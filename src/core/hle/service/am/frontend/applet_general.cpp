@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "common/assert.h"
 #include "common/hex_util.h"
 #include "common/logging.h"
@@ -25,14 +26,14 @@ static void LogCurrentStorage(Kernel::KernelCore& kernel, std::shared_ptr<Applet
     while (R_SUCCEEDED(applet->caller_applet_broker->GetInData().Pop(kernel, &storage))) {
         const auto data = storage->GetData();
         // The size only: the data can hold user ids and typed text.
-        LOG_INFO(Service_AM, "called (STUBBED), during {} received normal data with size={:08X}",
+        LOG_INFO(Service_AM, "no frontend: during {} received normal data with size={:08X}",
                  prefix, data.size());
     }
 
     while (R_SUCCEEDED(applet->caller_applet_broker->GetInteractiveInData().Pop(kernel, &storage))) {
         const auto data = storage->GetData();
         LOG_INFO(Service_AM,
-                 "called (STUBBED), during {} received interactive data with size={:08X}",
+                 "no frontend: during {} received interactive data with size={:08X}",
                  prefix, data.size());
     }
 }
@@ -215,20 +216,25 @@ StubApplet::StubApplet(Core::System& system_, std::shared_ptr<Applet> applet_, A
 
 StubApplet::~StubApplet() = default;
 
+// A library applet with no host frontend (outside a HOME session, where the firmware's own applets
+// run): it takes the caller's data, answers 0x1000 zero bytes and exits.
 void StubApplet::Initialize() {
-    LOG_WARNING(Service_AM, "called (STUBBED)");
+    LOG_UNKNOWN_CONTRACT(Service_AM,
+                         "library applet {} has no host frontend; it answers 0x1000 zero bytes "
+                         "and exits",
+                         static_cast<u32>(id));
     FrontendApplet::Initialize();
 
     LogCurrentStorage(system.Kernel(), applet.lock(), "Initialize");
 }
 
 Result StubApplet::GetStatus() const {
-    LOG_WARNING(Service_AM, "called (STUBBED)");
+    LOG_DEBUG(Service_AM, "called");
     return ResultSuccess;
 }
 
 void StubApplet::ExecuteInteractive() {
-    LOG_WARNING(Service_AM, "called (STUBBED)");
+    LOG_DEBUG(Service_AM, "called");
     LogCurrentStorage(system.Kernel(), applet.lock(), "ExecuteInteractive");
 
     PushOutData(std::make_shared<IStorage>(system, std::vector<u8>(0x1000)));
@@ -237,7 +243,7 @@ void StubApplet::ExecuteInteractive() {
 }
 
 void StubApplet::Execute() {
-    LOG_WARNING(Service_AM, "called (STUBBED)");
+    LOG_DEBUG(Service_AM, "called");
     LogCurrentStorage(system.Kernel(), applet.lock(), "Execute");
 
     PushOutData(std::make_shared<IStorage>(system, std::vector<u8>(0x1000)));

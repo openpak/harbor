@@ -6,6 +6,7 @@
 
 #include <atomic>
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/file_sys/common_funcs.h"
@@ -171,7 +172,7 @@ Result ILibraryAppletSelfAccessor::GetMainAppletIdentityInfo(
 
 Result ILibraryAppletSelfAccessor::CanUseApplicationCore(Out<bool> out_can_use_application_core) {
     // TODO: This appears to read the NPDM from state and check the core mask of the applet.
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ILibraryAppletSelfAccessor 13 CanUseApplicationCore: answered false (the NPDM core mask is not read)");
     *out_can_use_application_core = false;
     R_SUCCEED();
 }
@@ -400,7 +401,8 @@ Result ILibraryAppletSelfAccessor::GetMainAppletAvailableUsers(
 
 Result ILibraryAppletSelfAccessor::ShouldSetGpuTimeSliceManually(
     Out<bool> out_should_set_gpu_time_slice_manually) {
-    LOG_INFO(Service_AM, "(STUBBED) called");
+    // False: this system has no GPU time slicing.
+    LOG_DEBUG(Service_AM, "called");
     *out_should_set_gpu_time_slice_manually = false;
     R_SUCCEED();
 }

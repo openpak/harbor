@@ -4,7 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
+#include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/frontend/applets.h"
 #include "core/hle/service/am/service/library_applet_accessor.h"
@@ -78,8 +80,11 @@ Result IProcessWindingController::PopContext(Out<SharedPointer<IStorage>> out_co
     LOG_INFO(Service_AM, "called");
 
     if (m_applet->context_stack.empty()) {
-        LOG_ERROR(Service_AM, "Context stack is empty");
-        R_THROW(ResultUnknown);
+        // As the Ryujinx Harbor answers (MIT-licensed Ryujinx base): no data (2128-0002).
+        LOG_UNKNOWN_CONTRACT(Service_AM,
+                             "IProcessWindingController 22 PopContext on an empty stack: "
+                             "answered NotAvailable");
+        R_THROW(ResultNoDataInChannel);
     }
 
     *out_context = m_applet->context_stack.top();

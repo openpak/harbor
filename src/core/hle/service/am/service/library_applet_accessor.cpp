@@ -125,7 +125,8 @@ Result ILibraryAppletAccessor::GetResult() {
 }
 
 Result ILibraryAppletAccessor::PresetLibraryAppletGpuTimeSliceZero() {
-    LOG_INFO(Service_AM, "(STUBBED) called");
+    // Accepted: this system has no GPU time slicing.
+    LOG_DEBUG(Service_AM, "called");
     R_SUCCEED();
 }
 
@@ -154,7 +155,7 @@ Result ILibraryAppletAccessor::Terminate() {
 }
 
 Result ILibraryAppletAccessor::Unknown90() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ILibraryAppletAccessor 90 Unknown90: answered success with no effect (the command is not documented)");
     R_SUCCEED();
 }
 
@@ -229,7 +230,7 @@ Result ILibraryAppletAccessor::GetPopInteractiveOutDataEvent(
 }
 
 Result ILibraryAppletAccessor::GetIndirectLayerConsumerHandle(Out<u64> out_handle) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ILibraryAppletAccessor 160 GetIndirectLayerConsumerHandle: answered 0xdeadbeef (indirect layers are not emulated)");
 
     // We require a non-zero handle to be valid. Using 0xdeadbeef allows us to trace if this is
     // actually used anywhere

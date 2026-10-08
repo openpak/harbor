@@ -17,6 +17,7 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
+#include "common/redact.h"
 #include "common/settings.h"
 #include <algorithm>
 
@@ -232,7 +233,9 @@ Result IAudioController::AcquireTargetNotification(
     R_SUCCEED();
 }
 Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_audio_controller) {
-    LOG_DEBUG(Audio, "Creating duplicate audio controller interface");
+    // Undocumented (19.0.0+): another audctl object; this one is answered, as Eden did, where the
+    // Ryujinx Harbor opens a new session (the two share their state either way).
+    LOG_UNKNOWN_CONTRACT(Audio, "audctl 5000: answered this audctl object again");
     UseConsoleGain();
 
     // Return a new reference to this controller instance
