@@ -196,6 +196,19 @@ struct Url {
 };
 static_assert(sizeof(Url) == 0xA0);
 
+/// The module's size rule for a profile image URL (friends contract §A.11, 0x1b3f80, which 11000
+/// GetProfileImageUrl exposes): 256 on a /1/ or /2/ URL is the URL as it is; any other size or
+/// URL asks the image server for that size with `?width=N&height=N`.
+inline std::string ProfileImageUrl(std::string_view url, std::int32_t size) {
+    const bool full_size = size == 256 && (url.find("/1/") != std::string_view::npos ||
+                                           url.find("/2/") != std::string_view::npos);
+    std::string out{url};
+    if (!full_size) {
+        out += "?width=" + std::to_string(size) + "&height=" + std::to_string(size);
+    }
+    return out;
+}
+
 /// A play-history registration key (10700 / 10701).
 struct PlayHistoryRegistrationKey {
     std::uint16_t type;

@@ -821,15 +821,19 @@ private:
     }
 
     Result GetProfileImageUrl(Out<Fr::Url> out_url, Fr::Url url, s32 size) {
-        // The game hands in the thumbnail URL from a friend's record and asks for the URL to fetch.
-        // An empty answer is a placeholder avatar where a console shows the real one: nx-baas puts
-        // cdn-image-<...>.baas.nintendo.com/1/<userId> in the friend payload, that host is
-        // redirected to OpenPak, and it serves the image. Pass it through (openpak/ryujinx
-        // 201c5c451).
-        // ponytail: unchanged, not resized. `size` selects a variant on hardware and nx-baas serves
-        // /1/ and /2/; revisit if a title asks for a size we do not have.
-        LOG_DEBUG(Service_Friend, "called, size={}", size);
-        *out_url = url;
+        // The caller hands in the thumbnail URL from a record and asks for the URL to fetch. nx-baas
+        // puts cdn-image-<...>.baas.nintendo.com/1/<userId> in its payloads, that host is
+        // redirected to OpenPak, and it serves the image. The module's size rule applies: myPage
+        // asks for 128 in the friend-code search dialog, and a 256 picture there is a "?".
+        const std::string in(url.path, ::strnlen(url.path, sizeof(url.path)));
+        const std::string sized = Fr::ProfileImageUrl(in, size);
+        LOG_DEBUG(Service_Friend, "called, size={}, sized={}", size, sized.size() != in.size());
+        *out_url = {};
+        if (sized.size() < sizeof(out_url->path)) {
+            std::memcpy(out_url->path, sized.data(), sized.size());
+        } else {
+            *out_url = url;
+        }
         R_SUCCEED();
     }
 
