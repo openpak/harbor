@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <string_view>
 
@@ -186,6 +188,18 @@ BatteryState PSM::ReadBattery() const {
             return ClampBattery(power_status.percentage, power_status.charging
                                                              ? ChargerType::RegularCharger
                                                              : ChargerType::Unplugged);
+        }
+#else
+        // Test runs: HARBOR_TEST_BATTERY names a file holding "<percent> <charging 0|1>", read
+        // on every poll, so a desktop run can play a battery's changes.
+        if (const char* path = std::getenv("HARBOR_TEST_BATTERY"); path != nullptr) {
+            std::ifstream file{path};
+            int percentage = -1;
+            int charging = 0;
+            if (file >> percentage >> charging && percentage >= 0) {
+                return ClampBattery(percentage, charging != 0 ? ChargerType::RegularCharger
+                                                              : ChargerType::Unplugged);
+            }
         }
 #endif
         return {100, ChargerType::RegularCharger};
