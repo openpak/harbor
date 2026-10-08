@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 #include <optional>
 #include <string>
@@ -143,7 +144,7 @@ IReadOnlyApplicationControlDataInterface::IReadOnlyApplicationControlDataInterfa
         {1, D<&IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage>, "GetApplicationDesiredLanguage"},
         {2, D<&IReadOnlyApplicationControlDataInterface::ConvertApplicationLanguageToLanguageCode>, "ConvertApplicationLanguageToLanguageCode"},
         {3, D<&IReadOnlyApplicationControlDataInterface::ConvertLanguageCodeToApplicationLanguage>, "ConvertLanguageCodeToApplicationLanguage"},
-        {4, nullptr, "SelectApplicationDesiredLanguage"},
+        {4, D<&IReadOnlyApplicationControlDataInterface::SelectApplicationDesiredLanguage>, "SelectApplicationDesiredLanguage"},
         {5, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData2>, "GetApplicationControlData"},
         {10, &IReadOnlyApplicationControlDataInterface::ListApplicationIcon, "ListApplicationIcon"},
         {13, &IReadOnlyApplicationControlDataInterface::ListApplicationTitle, "ListApplicationTitle"},
@@ -224,6 +225,35 @@ Result IReadOnlyApplicationControlDataInterface::GetApplicationDesiredLanguage(
 
     LOG_ERROR(Service_NS, "Could not find a valid language! supported_languages={:08X}",
               supported_languages);
+    R_THROW(Service::NS::ResultApplicationLanguageNotFound);
+}
+
+// 4: the input is an array of nn::settings::LanguageCode (u64 each; myPage passes the languages an
+// invitation has messages in, "en-US" for Dinkum). The answer is the first language of the system
+// language's priority list that is among them, as an ApplicationLanguage like 1 answers. The input
+// is observed; the output type is inferred (with one candidate an index would be the same 0).
+Result IReadOnlyApplicationControlDataInterface::SelectApplicationDesiredLanguage(
+    Out<ApplicationLanguage> out_desired_language, InBuffer<BufferAttr_HipcMapAlias> candidates) {
+    std::vector<u64> codes(candidates.size() / sizeof(u64));
+    std::memcpy(codes.data(), candidates.data(), codes.size() * sizeof(u64));
+    LOG_WARNING(Service_NS,
+                "unknown contract: IReadOnlyApplicationControlDataInterface 4, {} candidate(s)",
+                codes.size());
+
+    const auto language_code =
+        Set::GetLanguageCodeFromIndex(static_cast<s32>(Settings::values.language_index.GetValue()));
+    const auto application_language = ConvertToApplicationLanguage(language_code);
+    R_UNLESS(application_language.has_value(), Service::NS::ResultApplicationLanguageNotFound);
+    const auto priority_list = GetApplicationLanguagePriorityList(*application_language);
+    R_UNLESS(priority_list != nullptr, Service::NS::ResultApplicationLanguageNotFound);
+
+    for (const auto lang : *priority_list) {
+        const auto code = ConvertToLanguageCode(lang);
+        if (code && std::find(codes.begin(), codes.end(), static_cast<u64>(*code)) != codes.end()) {
+            *out_desired_language = lang;
+            R_SUCCEED();
+        }
+    }
     R_THROW(Service::NS::ResultApplicationLanguageNotFound);
 }
 

@@ -25,6 +25,8 @@ public:
                                      u64 application_id);
     Result GetApplicationDesiredLanguage(Out<ApplicationLanguage> out_desired_language,
                                          u32 supported_languages);
+    Result SelectApplicationDesiredLanguage(Out<ApplicationLanguage> out_desired_language,
+                                            InBuffer<BufferAttr_HipcMapAlias> candidates);
     Result ConvertApplicationLanguageToLanguageCode(Out<u64> out_language_code,
                                                     ApplicationLanguage application_language);
     Result GetApplicationControlData2(
