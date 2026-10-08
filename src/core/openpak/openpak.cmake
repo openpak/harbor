@@ -54,8 +54,10 @@ target_sources(core PRIVATE
 option(HARBOR_OPENPAK_CHECK "Build harbor-openpak-check" OFF)
 if (HARBOR_OPENPAK_CHECK)
     list(TRANSFORM HARBOR_OPENPAK_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
-    add_executable(harbor-openpak-check openpak/check/openpak_check.cpp ${HARBOR_OPENPAK_SOURCES})
+    add_executable(harbor-openpak-check openpak/check/openpak_check.cpp ${HARBOR_OPENPAK_SOURCES}
+                   ${CMAKE_CURRENT_SOURCE_DIR}/hle/service/filesystem/fsp/save_transfer/transfer_crypto.cpp
+                   ${CMAKE_CURRENT_SOURCE_DIR}/hle/service/filesystem/fsp/save_transfer/transfer_archive.cpp)
     target_include_directories(harbor-openpak-check PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(harbor-openpak-check PRIVATE common fmt::fmt nlohmann_json::nlohmann_json
-                          httplib::httplib OpenSSL::SSL OpenSSL::Crypto)
+                          httplib::httplib OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
 endif()

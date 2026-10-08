@@ -674,6 +674,12 @@ add_library(core STATIC
     hle/service/filesystem/fsp/fsp_srv.cpp
     hle/service/filesystem/fsp/fsp_srv.h
     hle/service/filesystem/fsp/fsp_types.h
+    hle/service/filesystem/fsp/save_transfer/transfer_archive.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_archive.h
+    hle/service/filesystem/fsp/save_transfer/transfer_crypto.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_crypto.h
+    hle/service/filesystem/fsp/save_transfer/transfer_keys.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_keys.h
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.cpp
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.h
     hle/service/filesystem/romfs_controller.cpp

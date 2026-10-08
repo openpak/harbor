@@ -24,12 +24,17 @@
 #include <string>
 #include <vector>
 
+#include <openssl/core_names.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 
 #include "common/logging.h"
 #include "common/redact.h"
 #include "core/openpak/boot_connection.h"
 #include "core/openpak/network_profile.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_archive.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
 #include "core/openpak/olsc.h"
 #include "core/openpak/platform.h"
 
@@ -359,6 +364,167 @@ void OlscChecks(const std::filesystem::path& dir) {
     }
 }
 
+void SaveTransferChecks(const std::filesystem::path& dir) {
+    namespace st = Service::FileSystem::SaveTransfer;
+    std::puts("save transfer crypto");
+    const auto hex = [](std::string_view text) {
+        st::Key128 out{};
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] = static_cast<u8>(std::stoi(std::string{text.substr(i * 2, 2)}, nullptr, 16));
+        }
+        return out;
+    };
+    // Random inputs, expected value from openssl enc -aes-128-ecb -d chained as spl does.
+    Check(st::DeriveKey(hex("b752f982ab4f9189815a04e3d3d11039"),
+                        hex("702d17df75e47669fd76fcf6a3a8ebfd"),
+                        hex("098ee32b29a899ec731ebdc51b0ab22e"),
+                        hex("f95b61685f1b14b7ccfeb0f34bd7c8a6"),
+                        hex("a5dd2526e7d4b63caadf35a00ec4a24d")) ==
+              hex("1211b7f6923cea2257ba681808b341e3"),
+          "key derivation chains GenerateAesKek and GenerateAesKey as spl does");
+    Check(st::MasterKeyIndex(5) == 4 && st::MasterKeyIndex(1) == 0 && st::MasterKeyIndex(0) == 0,
+          "key generation N uses master key N-1");
+    // RFC 4493, example 2.
+    const auto rfc_key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+    const auto rfc_msg = hex("6bc1bee22e409f96e93d7e117393172a");
+    Check(st::Cmac(rfc_key, rfc_msg) == hex("070a16b46b4d4144f79bdd9dd04a287c"),
+          "AES-CMAC matches RFC 4493");
+
+    st::Key128 key{};
+    st::RandomBytes(key);
+    st::Key128 iv{};
+    st::RandomBytes(iv);
+    std::vector<u8> payload(0x1fd0);
+    st::RandomBytes(payload);
+    st::Key128 tag{};
+    const auto stream = st::EncryptStream(key, iv, st::StreamKeyGeneration, payload, &tag);
+    Check(stream.size() == 0x2000 && std::memcmp(stream.data(), "AGS0", 4) == 0 &&
+              stream[6] == 5 && stream[7] == 0 && std::memcmp(stream.data() + 0x10, iv.data(), 16) == 0,
+          "an initial data stream is 0x2000 bytes: AGS0, key generation 5, IV, tag");
+    const auto back = st::DecryptStream(key, stream);
+    Check(back && *back == payload, "a stream decrypts to its payload");
+    auto tampered = stream;
+    tampered[0x40] ^= 1;
+    Check(!st::DecryptStream(key, tampered), "a changed stream byte fails the GCM tag");
+
+    std::vector<u8> plain(0x30000);
+    for (std::size_t i = 0; i < plain.size(); ++i) {
+        plain[i] = static_cast<u8>((i / 0x1000) & 0xff);
+    }
+    const auto packed = st::RawDeflate(plain);
+    const auto unpacked = st::RawInflate(packed, plain.size());
+    Check(packed.size() < plain.size() && packed[0] != 0x78 && unpacked && *unpacked == plain,
+          "raw deflate (no zlib header) round trips");
+
+    // A throwaway RSA key made here; the console's check is RSA-PSS-SHA256 against a modulus.
+    EVP_PKEY* rsa = EVP_RSA_gen(2048);
+    const auto pem = dir / "ksp-test.pem";
+    std::FILE* file = std::fopen(pem.string().c_str(), "wb");
+    PEM_write_PrivateKey(file, rsa, nullptr, nullptr, 0, nullptr, nullptr);
+    std::fclose(file);
+    BIGNUM* n = nullptr;
+    EVP_PKEY_get_bn_param(rsa, OSSL_PKEY_PARAM_RSA_N, &n);
+    st::Modulus modulus{};
+    BN_bn2binpad(n, modulus.data(), static_cast<int>(modulus.size()));
+    BN_free(n);
+    EVP_PKEY_free(rsa);
+
+    st::KeySeedPackageContent content;
+    st::RandomBytes(content.key_seed);
+    st::RandomBytes(content.initial_data_mac);
+    st::RandomBytes(content.challenge);
+    st::Key128 body_key{};
+    st::RandomBytes(body_key);
+    const auto package = st::BuildKeySeedPackage(content, 5, body_key, pem.string());
+    std::filesystem::remove(pem);
+    Check(package.has_value(), "a key seed package is built with a PEM key");
+    if (package) {
+        const auto bytes = [](const st::KeySeedPackage& p) {
+            std::array<u8, 0x200> out{};
+            std::memcpy(out.data(), &p, sizeof(p));
+            return out;
+        };
+        const auto good = bytes(*package);
+        const auto opened = st::OpenKeySeedPackage(good, body_key, modulus, content.challenge);
+        Check(opened.error == st::PackageError::None &&
+                  opened.content.key_seed == content.key_seed &&
+                  opened.content.initial_data_mac == content.initial_data_mac,
+              "SetKeySeedPackage opens it and recovers the seed and the MAC");
+        st::Key128 other{};
+        st::RandomBytes(other);
+        Check(st::OpenKeySeedPackage(good, body_key, modulus, other).error ==
+                  st::PackageError::Challenge,
+              "another session's challenge is 2-7004");
+        auto bad_tag = good;
+        bad_tag[0x20] ^= 1;
+        Check(st::OpenKeySeedPackage(bad_tag, body_key, modulus, content.challenge).error ==
+                  st::PackageError::Mac,
+              "a changed tag is 2-7002");
+        auto other_modulus = modulus;
+        other_modulus[0x80] ^= 1;
+        Check(st::OpenKeySeedPackage(good, body_key, other_modulus, content.challenge).error ==
+                  st::PackageError::Signature,
+              "another signing key is 2-7003");
+        auto bad_version = good;
+        bad_version[1] = 1;
+        Check(st::OpenKeySeedPackage(bad_version, body_key, modulus, content.challenge).error ==
+                  st::PackageError::Version,
+              "version 0x100 is refused first");
+    }
+}
+
+void SaveArchiveChecks() {
+    namespace st = Service::FileSystem::SaveTransfer;
+    std::puts("save transfer archive");
+    st::ArchiveSource source;
+    source.stream.resize(5 * 0x4000 + 0x1234);
+    for (std::size_t i = 0; i < source.stream.size(); ++i) {
+        source.stream[i] = static_cast<u8>(i % 251 < 200 ? 0 : i);
+    }
+    st::RandomBytes(source.extra_data);
+    st::RandomBytes(source.integrity_seed);
+    st::Key128 stream_key{};
+    st::Key128 mac_key{};
+    st::RandomBytes(stream_key);
+    st::RandomBytes(mac_key);
+    st::ArchiveWriter writer{source, stream_key, mac_key};
+    Check(!writer.SetDivisionCount(65) && writer.SetDivisionCount(3), "division count 1..64");
+    const auto ids = writer.ChunkIds();
+    Check(ids.size() == 4 && ids[0] == 0x1000 && ids[2] == 0x1002 && ids[3] == 0,
+          "data chunks are 0x1000+n, the meta chunk 0 comes last");
+    writer.SetAad(st::MakeAad(0x0100A5A020D5E000, 42));
+    const auto first = writer.Chunk(0x1001);
+    const auto again = writer.Chunk(0x1001);
+    Check(first && again && *first == *again, "a chunk reads the same on every open");
+    const auto meta = writer.Chunk(0);
+    Check(meta && meta->size() == st::MetaChunkSize, "the meta chunk is 8 KiB");
+    const auto& content = writer.Content();
+    Check(content.division_count == 3 && content.chunk_sizes[0] > 0 &&
+              content.extra_data == source.extra_data && content.hash_salt == source.integrity_seed,
+          "the initial data records the chunks, the extra data and the seed");
+    const auto mac = writer.InitialDataMac();
+
+    st::ArchiveReader reader;
+    Check(reader.Open(*meta, stream_key, mac_key, mac) == st::ArchiveReader::Error::None,
+          "the importer opens the meta chunk and the package's MAC matches");
+    Check(reader.Content().aad == st::MakeAad(0x0100A5A020D5E000, 42),
+          "the AAD travels in the initial data");
+    st::ArchiveReader wrong;
+    st::Key128 other_mac{};
+    st::RandomBytes(other_mac);
+    Check(wrong.Open(*meta, stream_key, mac_key, other_mac) == st::ArchiveReader::Error::Mac,
+          "another MAC is refused");
+    auto bad = *writer.Chunk(0x1000);
+    bad[0x30] ^= 1;
+    Check(reader.Push(0x1000, bad) == st::ArchiveReader::Error::Chunk, "a changed chunk is refused");
+    bool all = true;
+    for (const u16 id : {u16{0x1002}, u16{0x1000}, u16{0x1001}}) {
+        all = all && reader.Push(id, *writer.Chunk(id)) == st::ArchiveReader::Error::None;
+    }
+    Check(all && reader.Complete() && reader.Stream() == source.stream,
+          "chunks in any order give back the save image stream");
+}
+
 void RedactChecks() {
     std::puts("redaction");
     Check(fmt::format("{}", Common::Redact(0x1234ULL)) == "<redacted>", "Redact hides a value");
@@ -393,6 +559,8 @@ int SelfTest(bool online) {
     FetchChecks();
     RedactChecks();
     OlscChecks(dir);
+    SaveTransferChecks(dir);
+    SaveArchiveChecks();
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {
