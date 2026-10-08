@@ -202,4 +202,16 @@ void SaveDataController::InitializeSaveDataExtraData(FileSys::SaveDataSpaceId sp
     factory->WriteExtraData(ToStoredSpace(space), attribute, extra_data);
 }
 
+void SaveDataController::RecordSaveDataCommit(FileSys::SaveDataSpaceId space,
+                                              const FileSys::SaveDataAttribute& attribute) {
+    FileSys::SaveDataExtraData extra_data{};
+    if (ReadSaveDataExtraData(&extra_data, space, attribute).IsError()) {
+        return;
+    }
+    extra_data.timestamp = static_cast<s64>(std::time(nullptr));
+    std::random_device random;
+    extra_data.commit_id = static_cast<s64>((u64{random()} << 32) | random());
+    factory->WriteExtraData(ToStoredSpace(space), attribute, extra_data);
+}
+
 } // namespace Service::FileSystem

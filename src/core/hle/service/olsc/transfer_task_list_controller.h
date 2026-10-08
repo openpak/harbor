@@ -7,13 +7,19 @@
 #pragma once
 
 #include <array>
+#include <memory>
 
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
 
+namespace OpenPak {
+class AsyncWorker;
+}
+
 namespace Service::OLSC {
 
 class INativeHandleHolder;
+class TransferQueue;
 class IStopperObject;
 
 /// nn::olsc::TransferTaskInfo (0x30), as the 23.0.1 sysmodule fills it from a task (0x1a9850,
@@ -25,7 +31,9 @@ using TransferTaskInfo = std::array<u8, 0x30>;
 
 class ITransferTaskListController final : public ServiceFramework<ITransferTaskListController> {
 public:
-    explicit ITransferTaskListController(Core::System& system_);
+    ITransferTaskListController(Core::System& system_,
+                                std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                                std::shared_ptr<TransferQueue> queue_);
     ~ITransferTaskListController() override;
 
 private:
@@ -37,9 +45,16 @@ private:
     Result ListTransferTaskInfo(Out<s32> out_count,
                                 OutArray<TransferTaskInfo, BufferAttr_HipcMapAlias> out_infos,
                                 u8 filter, s32 offset);
+    Result DeleteTransferTask(u8 filter, u64 task_id);
+    Result RaiseTransferTaskPriority(u8 filter, u64 task_id);
+    Result GetTransferTaskLastResult(u8 filter, u64 task_id);
+    Result SuspendTransferTask(u8 filter, u64 task_id);
     Result GetTransferTaskProgress(Out<std::array<u8, 0x18>> out_progress, u8 filter, u64 task_id);
     Result GetCurrentTransferTaskInfo(Out<TransferTaskInfo> out_info, u8 filter);
     Result FindTransferTaskInfo(Out<TransferTaskInfo> out_info, std::array<u64, 4> query);
+
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::shared_ptr<TransferQueue> queue;
 };
 
 } // namespace Service::OLSC

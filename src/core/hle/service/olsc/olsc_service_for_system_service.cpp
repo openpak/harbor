@@ -12,6 +12,7 @@
 #include "core/hle/service/olsc/daemon_controller.h"
 #include "core/hle/service/olsc/olsc_service_for_system_service.h"
 #include "core/hle/service/olsc/remote_storage_controller.h"
+#include "core/hle/service/olsc/transfer_runner.h"
 #include "core/hle/service/olsc/transfer_task_list_controller.h"
 #include "core/openpak/async_worker.h"
 #include "core/openpak/olsc.h"
@@ -91,6 +92,7 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
     RegisterHandlers(functions);
 
     worker = std::make_shared<OpenPak::AsyncWorker>(system, "olsc:OpenPak");
+    queue = TransferQueue::For(system);
 }
 
 IOlscServiceForSystemService::~IOlscServiceForSystemService() = default;
@@ -98,7 +100,7 @@ IOlscServiceForSystemService::~IOlscServiceForSystemService() = default;
 Result IOlscServiceForSystemService::GetTransferTaskListController(
     Out<SharedPointer<ITransferTaskListController>> out_interface) {
     LOG_INFO(Service_OLSC, "called");
-    *out_interface = std::make_shared<ITransferTaskListController>(system);
+    *out_interface = std::make_shared<ITransferTaskListController>(system, worker, queue);
     R_SUCCEED();
 }
 
@@ -111,7 +113,7 @@ Result IOlscServiceForSystemService::GetRemoteStorageController(
         Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
         "olsc-archives.json");
     // The controller speaks for one user (the sysmodule's takes the Uid here, 0x10 bytes in).
-    *out_interface = std::make_shared<IRemoteStorageController>(system, user_id, worker);
+    *out_interface = std::make_shared<IRemoteStorageController>(system, user_id, worker, queue);
     R_SUCCEED();
 }
 
