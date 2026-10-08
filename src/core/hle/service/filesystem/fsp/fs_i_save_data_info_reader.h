@@ -37,10 +37,16 @@ public:
     Result ReadSaveDataInfo(Out<u64> out_count,
                             OutArray<SaveDataInfo, BufferAttr_HipcMapAlias> out_entries);
 
+    /// Every save in the space, as the reader lists them.
+    static std::vector<SaveDataInfo> FindAllSaves(SaveDataController& save_data_controller,
+                                                  FileSys::SaveDataSpaceId space);
+
 private:
-    void FindAllSaves(FileSys::SaveDataSpaceId space);
-    void FindNormalSaves(FileSys::SaveDataSpaceId space, const FileSys::VirtualDir& type);
-    void FindTemporaryStorageSaves(FileSys::SaveDataSpaceId space, const FileSys::VirtualDir& type);
+    static void FindNormalSaves(std::vector<SaveDataInfo>& info, FileSys::SaveDataSpaceId space,
+                                const FileSys::VirtualDir& type);
+    static void FindTemporaryStorageSaves(std::vector<SaveDataInfo>& info,
+                                          FileSys::SaveDataSpaceId space,
+                                          const FileSys::VirtualDir& type);
 
     std::shared_ptr<SaveDataController> save_data_controller;
     std::vector<SaveDataInfo> info;
