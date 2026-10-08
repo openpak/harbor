@@ -680,6 +680,10 @@ add_library(core STATIC
     hle/service/filesystem/fsp/save_transfer/transfer_crypto.h
     hle/service/filesystem/fsp/save_transfer/transfer_keys.cpp
     hle/service/filesystem/fsp/save_transfer/transfer_keys.h
+    hle/service/filesystem/fsp/save_transfer/transfer_service.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_service.h
+    hle/service/filesystem/fsp/save_transfer/transfer_ipc.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_ipc.h
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.cpp
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.h
     hle/service/filesystem/romfs_controller.cpp

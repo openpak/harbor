@@ -40,6 +40,7 @@
 #include "core/hle/service/filesystem/fsp/fs_i_storage.h"
 #include "core/hle/service/filesystem/fsp/fsp_srv.h"
 #include "core/hle/service/filesystem/fsp/save_data_transfer_prohibiter.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_ipc.h"
 #include "core/hle/service/filesystem/romfs_controller.h"
 #include "core/hle/service/filesystem/save_data_controller.h"
 #include "core/hle/service/hle_ipc.h"
@@ -109,7 +110,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {71, D<&FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute>, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute"},
         {80, nullptr, "OpenSaveDataMetaFile"},
         {81, nullptr, "OpenSaveDataTransferManager"},
-        {82, nullptr, "OpenSaveDataTransferManagerVersion2"},
+        {82, D<&FSP_SRV::OpenSaveDataTransferManagerVersion2>, "OpenSaveDataTransferManagerVersion2"},
         {83, D<&FSP_SRV::OpenSaveDataTransferProhibiter>, "OpenSaveDataTransferProhibiter"},
         {84, nullptr, "ListApplicationAccessibleSaveDataOwnerId"},
         {85, nullptr, "OpenSaveDataTransferManagerForSaveDataRepair"},
@@ -693,6 +694,13 @@ Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataSpaceId(
     OutBuffer<BufferAttr_HipcMapAlias> out_buffer, FileSys::SaveDataSpaceId space_id,
     u64 save_data_id) {
     R_RETURN(ReadExtraDataById(out_buffer, space_id, save_data_id));
+}
+
+Result FSP_SRV::OpenSaveDataTransferManagerVersion2(
+    OutInterface<SaveTransfer::ISaveDataTransferManagerVersion2> out_manager) {
+    LOG_INFO(Service_FS, "called");
+    *out_manager = std::make_shared<SaveTransfer::ISaveDataTransferManagerVersion2>(system);
+    R_SUCCEED();
 }
 
 Result FSP_SRV::OpenSaveDataTransferProhibiter(
