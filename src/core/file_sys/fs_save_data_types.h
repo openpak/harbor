@@ -162,13 +162,18 @@ struct SaveDataExtraData {
     u64 owner_id;
     s64 timestamp;
     u32 flags;
-    INSERT_PADDING_BYTES(4);
+    SaveDataFormatType format_type;
+    INSERT_PADDING_BYTES(3);
     s64 available_size;
     s64 journal_size;
     s64 commit_id;
     INSERT_PADDING_BYTES(0x190);
 };
 static_assert(sizeof(SaveDataExtraData) == 0x200, "SaveDataExtraData has invalid size.");
+static_assert(offsetof(SaveDataExtraData, owner_id) == 0x40);
+static_assert(offsetof(SaveDataExtraData, format_type) == 0x54);
+static_assert(offsetof(SaveDataExtraData, available_size) == 0x58);
+static_assert(offsetof(SaveDataExtraData, commit_id) == 0x68);
 static_assert(std::is_trivially_copyable_v<SaveDataExtraData>,
               "Data type must be trivially copyable.");
 
