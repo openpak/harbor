@@ -9,6 +9,7 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.Rect
@@ -44,6 +45,9 @@ import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.overlay.model.OverlayControl
 import org.yuzu.yuzu_emu.overlay.model.OverlayControlData
 import org.yuzu.yuzu_emu.overlay.model.OverlayLayout
+import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborNative
+import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.NativeConfig
 
 /**
@@ -173,6 +177,12 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
             drawGrid(canvas)
         }
 
+        // Harbor: the controls follow the console's Basic Black theme (the art inverted; the
+        // art itself is Basic White's), with no change in size or position.
+        val inverted = HarborConsole.active && harborDarkTheme
+        if (inverted) {
+            canvas.saveLayer(null, harborInvertPaint)
+        }
         for (button in overlayButtons) {
             button.draw(canvas)
         }
@@ -181,6 +191,9 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         }
         for (joystick in overlayJoysticks) {
             joystick.draw(canvas)
+        }
+        if (inverted) {
+            canvas.restore()
         }
     }
 
@@ -230,6 +243,9 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
 
         if (inEditMode) {
             return onTouchWhileEditing(event)
+        }
+        if (HarborConsole.active) {
+            return harborTouch(event)
         }
 
         var shouldUpdateView = false
@@ -353,6 +369,9 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
     }
 
     private fun isTouchInputConsumed(track_id: Int): Boolean {
+        if (harborFingers.containsKey(track_id)) {
+            return true
+        }
         for (button in overlayButtons) {
             if (button.trackId == track_id) {
                 return true
@@ -369,6 +388,293 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
             }
         }
         return false
+    }
+
+    // Harbor console mode: the touch controls as the Ryujinx Harbor's pad (PadOverlay.cs). Behaviour
+    // follows the Ryujinx Harbor (MIT-licensed Ryujinx base): a finger slides from one button onto
+    // another, two fingers on one button keep it held until both lift, one finger at a time is the
+    // touch screen and only on the console's picture, and the controls fade to 15 % after three
+    // seconds without a new touch.
+
+    /** Each finger that went down on a button, and the button under it now (null: on none). */
+    private val harborFingers = HashMap<Int, InputOverlayDrawableButton?>()
+
+    /** How many fingers hold each button. */
+    private val harborHeld = HashMap<NativeButton, Int>()
+
+    private var harborTouchFinger = -1
+    private var harborTouching = false
+    private var harborPicture: Rect? = null
+    private var harborDarkTheme = false
+    private val harborInvertPaint = Paint().apply {
+        colorFilter = ColorMatrixColorFilter(
+            floatArrayOf(
+                -1f, 0f, 0f, 0f, 255f,
+                0f, -1f, 0f, 0f, 255f,
+                0f, 0f, -1f, 0f, 255f,
+                0f, 0f, 0f, 1f, 0f
+            )
+        )
+    }
+    private val harborFade = Runnable {
+        if (!inEditMode) {
+            animate().alpha(HARBOR_FADED_ALPHA).setDuration(HARBOR_FADE_MS).start()
+        }
+    }
+    private val harborThemePoll = object : Runnable {
+        override fun run() {
+            val theme = HarborNative.consoleTheme()
+            if (theme >= 0 && (theme == 1) != harborDarkTheme) {
+                harborDarkTheme = theme == 1
+                Log.info("[Harbor] touch controls: theme ${if (harborDarkTheme) "Basic Black" else "Basic White"}")
+                invalidate()
+            }
+            postDelayed(this, HARBOR_THEME_POLL_MS)
+        }
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (HarborConsole.active) {
+            post(harborThemePoll)
+            harborWake()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(harborThemePoll)
+        removeCallbacks(harborFade)
+        harborReleaseAll()
+        super.onDetachedFromWindow()
+    }
+
+    /** A new touch: the controls at full opacity, fading again three seconds later. */
+    private fun harborWake() {
+        removeCallbacks(harborFade)
+        animate().cancel()
+        alpha = 1f
+        postDelayed(harborFade, HARBOR_FADE_DELAY_MS)
+    }
+
+    private fun harborPort(): Int = if (NativeInput.getStyleIndex(0) == NpadStyleIndex.Handheld) 8 else 0
+
+    private fun harborTouch(event: MotionEvent): Boolean {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+            harborWake()
+        }
+        if (action == MotionEvent.ACTION_CANCEL) {
+            harborReleaseAll()
+            invalidate()
+            return true
+        }
+        val port = harborPort()
+        var redraw = false
+        // D-pads and sticks first: a finger they take is theirs. The d-pad slides between its
+        // eight directions.
+        for (dpad in overlayDpads) {
+            if (!dpad.updateStatus(event, true)) {
+                continue
+            }
+            NativeInput.onOverlayButtonEvent(port, dpad.up, dpad.upStatus)
+            NativeInput.onOverlayButtonEvent(port, dpad.down, dpad.downStatus)
+            NativeInput.onOverlayButtonEvent(port, dpad.left, dpad.leftStatus)
+            NativeInput.onOverlayButtonEvent(port, dpad.right, dpad.rightStatus)
+            playHaptics(event)
+            redraw = true
+        }
+        for (joystick in overlayJoysticks) {
+            if (!joystick.updateStatus(event)) {
+                continue
+            }
+            NativeInput.onOverlayJoystickEvent(port, joystick.joystick, joystick.xAxis, joystick.realYAxis)
+            NativeInput.onOverlayButtonEvent(port, joystick.button, joystick.buttonStatus)
+            playHaptics(event)
+            redraw = true
+        }
+        redraw = harborButtons(event, port) || redraw
+        if (redraw) {
+            invalidate()
+        }
+        if (BooleanSetting.TOUCHSCREEN.getBoolean()) {
+            harborTouchScreen(event)
+        }
+        return true
+    }
+
+    private fun harborButtons(event: MotionEvent, port: Int): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                val id = event.getPointerId(index)
+                if (harborOwnedByDpadOrStick(id)) {
+                    return false
+                }
+                val button = harborButtonAt(event.getX(index), event.getY(index), 1f) ?: return false
+                harborFingers[id] = button
+                harborPress(button, port)
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                var changed = false
+                for (i in 0 until event.pointerCount) {
+                    val id = event.getPointerId(i)
+                    if (!harborFingers.containsKey(id)) {
+                        continue
+                    }
+                    val current = harborFingers[id]
+                    val x = event.getX(i)
+                    val y = event.getY(i)
+                    if (current != null && harborContains(current, x, y, HARBOR_HIT_SLOP)) {
+                        continue
+                    }
+                    // Off the button it was on: let it go, and press the one the finger slid onto.
+                    val next = harborButtonAt(x, y, 1f)
+                    if (next === current) {
+                        continue
+                    }
+                    current?.let { harborRelease(it, port) }
+                    harborFingers[id] = next
+                    next?.let { harborPress(it, port) }
+                    changed = true
+                }
+                return changed
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val id = event.getPointerId(event.actionIndex)
+                if (!harborFingers.containsKey(id)) {
+                    return false
+                }
+                val button = harborFingers.remove(id) ?: return false
+                harborRelease(button, port)
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun harborOwnedByDpadOrStick(id: Int): Boolean =
+        overlayDpads.any { it.trackId == id } || overlayJoysticks.any { it.trackId == id }
+
+    /** The button under the point, the nearest centre when slop makes two overlap. */
+    private fun harborButtonAt(x: Float, y: Float, slop: Float): InputOverlayDrawableButton? =
+        overlayButtons.filter { harborContains(it, x, y, slop) }.minByOrNull {
+            val dx = x - it.bounds.exactCenterX()
+            val dy = y - it.bounds.exactCenterY()
+            dx * dx + dy * dy
+        }
+
+    private fun harborContains(button: InputOverlayDrawableButton, x: Float, y: Float, slop: Float): Boolean {
+        val bounds = button.bounds
+        return kotlin.math.abs(x - bounds.exactCenterX()) <= bounds.width() / 2f * slop &&
+            kotlin.math.abs(y - bounds.exactCenterY()) <= bounds.height() / 2f * slop
+    }
+
+    private fun harborPress(button: InputOverlayDrawableButton, port: Int) {
+        val count = (harborHeld[button.button] ?: 0) + 1
+        harborHeld[button.button] = count
+        button.setPressed(true)
+        if (count == 1) {
+            NativeInput.onOverlayButtonEvent(port, button.button, NativeInput.ButtonState.PRESSED)
+            if (BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+            }
+        }
+    }
+
+    private fun harborRelease(button: InputOverlayDrawableButton, port: Int) {
+        val count = ((harborHeld[button.button] ?: 0) - 1).coerceAtLeast(0)
+        if (count > 0) {
+            harborHeld[button.button] = count
+            return
+        }
+        harborHeld.remove(button.button)
+        button.setPressed(false)
+        NativeInput.onOverlayButtonEvent(port, button.button, NativeInput.ButtonState.RELEASED)
+        if (BooleanSetting.HAPTIC_FEEDBACK.getBoolean()) {
+            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
+        }
+    }
+
+    /** Lets go of every button and the touch screen (the view goes, the controls are rebuilt). */
+    private fun harborReleaseAll() {
+        if (harborHeld.isNotEmpty()) {
+            val port = harborPort()
+            for (button in harborHeld.keys) {
+                NativeInput.onOverlayButtonEvent(port, button, NativeInput.ButtonState.RELEASED)
+            }
+        }
+        for (button in harborFingers.values) {
+            button?.setPressed(false)
+        }
+        harborHeld.clear()
+        harborFingers.clear()
+        if (harborTouching) {
+            NativeInput.onTouchReleased(harborTouchFinger)
+        }
+        harborTouching = false
+        harborTouchFinger = -1
+    }
+
+    /** One finger at a time is the console's touch screen, and only on its picture. */
+    private fun harborTouchScreen(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                val id = event.getPointerId(index)
+                if (harborTouchFinger != -1 || isTouchInputConsumed(id)) {
+                    return
+                }
+                harborTouchFinger = id
+                harborPicture = harborPictureRect()
+                harborTouchAt(event.getX(index), event.getY(index))
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (harborTouchFinger == -1) {
+                    return
+                }
+                val index = event.findPointerIndex(harborTouchFinger)
+                if (index >= 0) {
+                    harborTouchAt(event.getX(index), event.getY(index))
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(event.actionIndex) != harborTouchFinger) {
+                    return
+                }
+                if (harborTouching) {
+                    NativeInput.onTouchReleased(harborTouchFinger)
+                }
+                harborTouching = false
+                harborTouchFinger = -1
+            }
+        }
+    }
+
+    // A finger on the letterbox bars is not a screen touch (Eden would clamp it to the edge).
+    private fun harborTouchAt(x: Float, y: Float) {
+        val picture = harborPicture
+        val inside = picture == null || picture.contains(x.toInt(), y.toInt())
+        when {
+            inside && !harborTouching -> {
+                NativeInput.onTouchPressed(harborTouchFinger, x, y)
+                harborTouching = true
+            }
+            inside -> NativeInput.onTouchMoved(harborTouchFinger, x, y)
+            harborTouching -> {
+                NativeInput.onTouchReleased(harborTouchFinger)
+                harborTouching = false
+            }
+        }
+    }
+
+    /** The console's picture in this view's coordinates, or null to take the whole view. */
+    private fun harborPictureRect(): Rect? {
+        val rect = HarborNative.pictureRect()
+        if (rect.size < 4 || rect[2] <= rect[0] || rect[3] <= rect[1]) {
+            return null
+        }
+        return Rect(rect[0], rect[1], rect[2], rect[3])
     }
 
     private fun onTouchWhileEditing(event: MotionEvent): Boolean {
@@ -543,7 +849,8 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         val windowSize = getSafeScreenSize(context, Pair(measuredWidth, measuredHeight))
         val overlayControlData = NativeConfig.getOverlayControlData()
         for (data in overlayControlData) {
-            if (!data.enabled) {
+            // Harbor: HOME and Capture are always on the console's touch controls.
+            if (!data.enabled && !(HarborConsole.active && data.id in HARBOR_SYSTEM_BUTTONS)) {
                 continue
             }
 
@@ -798,6 +1105,13 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         if (gameless) {
             gamelessMode = true
         }
+        if (HarborConsole.active) {
+            // The drawables are about to be replaced: nothing they hold stays held.
+            harborReleaseAll()
+            if (BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()) {
+                harborWake()
+            }
+        }
 
         // Remove all the overlay buttons from the HashSet.
         overlayButtons.clear()
@@ -1002,6 +1316,15 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
     }
 
     companion object {
+        // Harbor console mode (PadOverlay.cs): fade timing, hit slop that keeps a held button.
+        private const val HARBOR_FADE_DELAY_MS = 3000L
+        private const val HARBOR_FADE_MS = 400L
+        private const val HARBOR_FADED_ALPHA = 0.15f
+        private const val HARBOR_HIT_SLOP = 1.2f
+        private const val HARBOR_THEME_POLL_MS = 500L
+        private val HARBOR_SYSTEM_BUTTONS =
+            setOf(OverlayControl.BUTTON_HOME.id, OverlayControl.BUTTON_CAPTURE.id)
+
 
         // Increase this number every time there is a breaking change to every overlay layout
         const val OVERLAY_VERSION = 1

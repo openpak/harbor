@@ -17,6 +17,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput.ButtonState
 import org.yuzu.yuzu_emu.features.input.model.NativeAnalog
 import org.yuzu.yuzu_emu.features.input.model.NativeButton
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
+import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 
 /**
@@ -129,7 +130,8 @@ class InputOverlayDrawableJoystick(
             pressedState = true
             outerBitmap.alpha = 0
             boundsBoxBitmap.alpha = opacity
-            if (BooleanSetting.JOYSTICK_REL_CENTER.getBoolean()) {
+            // Harbor console mode: the stick's centre is where the finger lands.
+            if (BooleanSetting.JOYSTICK_REL_CENTER.getBoolean() || HarborConsole.active) {
                 virtBounds.offset(
                     xPosition - virtBounds.centerX(),
                     yPosition - virtBounds.centerY()
