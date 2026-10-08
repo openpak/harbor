@@ -213,7 +213,11 @@ void RefreshFriendRequests() {
         return;
     }
 
-    SetFriendRequests(ParseRequestList(*inbox, true), ParseRequestList(*outbox, false));
+    auto received = ParseRequestList(*inbox, true);
+    auto sent = ParseRequestList(*outbox, false);
+    LOG_DEBUG(WebService, "[OpenPak] Friend request boxes: {} received, {} sent", received.size(),
+              sent.size());
+    SetFriendRequests(std::move(received), std::move(sent));
 }
 
 void AnswerFriendRequest(std::uint64_t request_id, const std::string& state) {

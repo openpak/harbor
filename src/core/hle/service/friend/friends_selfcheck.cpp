@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// Self-check for the friends module's overlay payloads and notification queue. Eden's unit tests
+// Self-check for the friends module's overlay payloads, notification queue and image URL rule. Eden's unit tests
 // are off in the Harbor build, so this is a standalone program:
 //
 //   g++ -std=c++23 -I <src> friends_selfcheck.cpp -o friends_selfcheck && ./friends_selfcheck
@@ -16,6 +16,7 @@
 
 #include "core/hle/service/friend/friends_overlay_payloads.h"
 #include "core/hle/service/psc/ovln/ovln_types.h"
+#include "core/openpak/friend_structs.h"
 
 using namespace Service::Friend::Overlay;
 using Service::PSC::GetNotificationPayloadSize;
@@ -173,12 +174,23 @@ void Queue() {
     CHECK(NotificationQueue::Capacity == 100);
 }
 
+void ImageUrls() {
+    // friends contract §A.11: 256 on a /1/ or /2/ URL as is, anything else sized by query.
+    using OpenPak::Friends::ProfileImageUrl;
+    const std::string base = "https://cdn.example/1/0123456789abcdef";
+    CHECK(ProfileImageUrl(base, 256) == base);
+    CHECK(ProfileImageUrl(base, 128) == base + "?width=128&height=128");
+    CHECK(ProfileImageUrl("https://cdn.example/x", 256) ==
+          "https://cdn.example/x?width=256&height=256");
+}
+
 } // namespace
 
 int main() {
     Payloads();
     Permission();
     Queue();
+    ImageUrls();
     std::printf("friends self-check: OK\n");
     return 0;
 }
