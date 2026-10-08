@@ -548,11 +548,14 @@ private:
     std::thread harbor_connect;
     bool harbor_openpak_stopped = false;
     QAction* harbor_frame_gen_action = nullptr; // Harbor menu, Frame generation
+    QTimer harbor_letterbox_timer;
     QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
     void HarborAddMenu();
     void HarborStopOpenPak();
+    void HarborUpdateLetterbox();
+    void HarborApplyAutoResolution();
     // The path to the game currently running
     QString current_game_path;
     // Whether a user was set on the command line (skips UserSelector if it's forced to show up)
