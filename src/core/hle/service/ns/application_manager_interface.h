@@ -118,6 +118,7 @@ public:
                        u64 work_buffer_size,
                        InCopyHandle<Kernel::KTransferMemory> work_buffer);
     Result Unknown4058();
+    Result RequestSyncAccountContentState(std::array<u8, 0x10> key);
     Result Unknown4084();
     Result Unknown4096();
     Result Unknown4089(Out<UnknownTryPopRecord> out_record);

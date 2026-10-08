@@ -785,7 +785,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {4071, nullptr, "Unknown4071"}, //20.0.0+
         {4072, nullptr, "Unknown4072"}, //20.0.0+
         {4073, nullptr, "Unknown4073"}, //20.0.0+
-        {4074, nullptr, "Unknown4074"}, //20.0.0+
+        {4074, D<&IApplicationManagerInterface::RequestSyncAccountContentState>, "Unknown4074"}, //20.0.0+
         {4075, nullptr, "Unknown4075"}, //20.0.0+
         {4076, nullptr, "Unknown4076"}, //20.0.0+
         {4077, nullptr, "Unknown4077"}, //20.0.0+
@@ -1411,6 +1411,18 @@ Result IApplicationManagerInterface::Unknown4008(OutInterface<ICompletedAsyncVal
     unknown4008_event.Signal(system.Kernel());
     *out_event = unknown4008_event.GetHandle();
     *out_interface = std::make_shared<ICompletedAsyncValue>(system, &unknown4008_event);
+    R_SUCCEED();
+}
+
+// 23.0.1 ns (handler 0x1ac658, impl 0x160634): 16 raw bytes in (most likely an account Uid), Result
+// only, never fails. ns queues a background refresh of that key's eShop, online-licence and virtual
+// game card state through nim 2025 and the server's JSON reply; nothing comes back to the caller.
+// The starter calls it during first-time setup. No such refresh exists here (it is Nintendo's
+// eShop server), so the request is accepted and dropped; the name is Harbor's.
+Result IApplicationManagerInterface::RequestSyncAccountContentState(std::array<u8, 0x10> key) {
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "IApplicationManagerInterface 4074: accepted, no account content state "
+                         "refresh queued (the key's meaning is not established)");
     R_SUCCEED();
 }
 
