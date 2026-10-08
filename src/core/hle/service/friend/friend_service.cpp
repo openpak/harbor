@@ -148,6 +148,16 @@ std::optional<Baas::User> User(u64 id) {
     if (const auto cached = Baas::CachedUser(id)) {
         return cached;
     }
+    // The other party of a waiting request: the box already carries the flat user's three
+    // fields. myPage drops a received request whose sender's profile comes back invalid, and a
+    // sender is nobody the caches know yet.
+    for (const auto& box : {Baas::InboxRequests(), Baas::OutboxRequests()}) {
+        for (const Baas::Request& request : *box) {
+            if (request.other_id == id) {
+                return Baas::User{id, request.nickname, request.thumbnail_url, {}};
+            }
+        }
+    }
     // Last resort for the local player, who is never their own friend: their own user as of the
     // last sync. Answering an invalid slot for yourself is what a game notices first.
     if (const auto own = Baas::OwnUserSetting(); own && own->id == id) {
@@ -1033,13 +1043,8 @@ private:
             out_list[count++] = Fr::ToRequestImpl((*box)[index], user, list_type);
         }
 
-        LOG_DEBUG(Service_Friend,
-                  "called, offset={}, list_type={}, room={}, cached={}, served={}, first: "
-                  "channel={} state={} thumbnail={} route_app={}",
-                  offset, list_type, out_list.size(), box->size(), count,
-                  box->empty() ? 0 : (*box)[0].channel, box->empty() ? 0 : (*box)[0].state,
-                  box->empty() ? "-" : ((*box)[0].thumbnail_url.empty() ? "empty" : "set"),
-                  box->empty() ? 0 : (*box)[0].route.application_id != 0);
+        LOG_DEBUG(Service_Friend, "called, offset={}, list_type={}, served={} of {}", offset,
+                  list_type, count, box->size());
         *out_count = count;
         R_SUCCEED();
     }
@@ -1062,13 +1067,8 @@ private:
             out_list[count++] = Fr::ToRequestImplV2((*box)[index], user, list_type);
         }
 
-        LOG_DEBUG(Service_Friend,
-                  "called, offset={}, list_type={}, room={}, cached={}, served={}, first: "
-                  "channel={} state={} thumbnail={} route_app={}",
-                  offset, list_type, out_list.size(), box->size(), count,
-                  box->empty() ? 0 : (*box)[0].channel, box->empty() ? 0 : (*box)[0].state,
-                  box->empty() ? "-" : ((*box)[0].thumbnail_url.empty() ? "empty" : "set"),
-                  box->empty() ? 0 : (*box)[0].route.application_id != 0);
+        LOG_DEBUG(Service_Friend, "called, offset={}, list_type={}, served={} of {}", offset,
+                  list_type, count, box->size());
         *out_count = count;
         R_SUCCEED();
     }
