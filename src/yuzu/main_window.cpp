@@ -3774,9 +3774,13 @@ void MainWindow::OnToggleDockedMode() {
         QtCommon::system->HIDCore().GetEmulatedController(Core::HID::NpadIdType::Handheld);
 
     if (!is_docked && handheld->IsConnected()) {
-        QMessageBox::warning(this, tr("Invalid config detected"),
-                             tr("Handheld controller can't be used on docked mode. Pro "
-                                "controller will be selected."));
+        // Harbor console mode (and the scripted test harness) switch silently, as the Ryujinx
+        // Harbor does: a modal dialog would block the harness.
+        if (!harbor_console && !harbor_control) {
+            QMessageBox::warning(this, tr("Invalid config detected"),
+                                 tr("Handheld controller can't be used on docked mode. Pro "
+                                    "controller will be selected."));
+        }
         handheld->Disconnect();
         player_1->SetNpadStyleIndex(Core::HID::NpadStyleIndex::Fullkey);
         player_1->Connect();
