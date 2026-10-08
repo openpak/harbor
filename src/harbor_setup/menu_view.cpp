@@ -378,7 +378,7 @@ brls::View* MenuActivity::Footer() {
     const bool clearable = screen == Screen::Settings &&
                            (sub == Sub::Player || (sub == Sub::None && category == Category::Controllers));
     if (clearable) {
-        hint("X", "Clear", [this] { brls::Application::onControllerButtonPressed(brls::BUTTON_X, false); });
+        hint("X", "Clear", [] { brls::Application::onControllerButtonPressed(brls::BUTTON_X, false); });
     }
     hint("B", screen == Screen::Menu ? "Close" : "Back", [this] { Back(); });
     hint("A", "OK", [] { brls::Application::onControllerButtonPressed(brls::BUTTON_A, false); });
