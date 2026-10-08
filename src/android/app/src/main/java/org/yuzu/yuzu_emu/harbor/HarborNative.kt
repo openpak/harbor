@@ -17,11 +17,17 @@ object HarborNative {
     /** Looks up the Java side the native wizard calls into. Call on a Java thread before the wizard runs. */
     external fun initialize()
 
-    /** Keys usable, firmware with the HOME menu installed, and harbor-setup.json completed. */
-    external fun isConsoleReady(): Boolean
+    /**
+     * Keys usable, firmware with the HOME menu installed, and harbor-setup.json completed: "" when
+     * the console can boot, "setup" when the setup must run first, else why the check failed.
+     */
+    external fun checkConsole(): String
 
     /** A picker the native wizard opened has answered; a null uri means it was cancelled. */
     external fun onPicked(requestId: Int, uri: String?, name: String?)
+
+    /** A picker the native wizard asked for could not open: the wizard shows `message`. */
+    external fun onPickFailed(requestId: Int, message: String?)
 
     /** Bytes received so far; false asks the download to stop. */
     external fun downloadProgress(handle: Long, received: Long): Boolean
@@ -61,4 +67,31 @@ object HarborNative {
 
     /** Every guest thread to the log (System::LogGuestThreads), for hangs. */
     external fun logGuestThreads()
+
+    /** The console's power button held: HOME's overlay opens its power menu. */
+    external fun pressPower()
+
+    /** Whether a recommended driver exists for this GPU (T30 on an Adreno 6xx). */
+    external fun hasRecommendedDriver(): Boolean
+
+    /** Why an installed driver does not fit this GPU, or "". */
+    external fun driverProblem(name: String, library: String, minApi: Int): String
+
+    /** Downloads, installs and selects the recommended driver: [id, name, error]. Not on the UI thread. */
+    external fun installRecommendedDriver(): Array<String>
+
+    /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
+    external fun powerShortPress()
+
+    /** The console's output gain for Android's audio focus: 1 full, 0.25 ducked, 0 muted. */
+    external fun setHostGain(gain: Float)
+
+    /** The console's theme: 1 Basic Black, 0 Basic White, -1 while no console runs. */
+    external fun consoleTheme(): Int
+
+    /** The console's saved theme: 1 Basic Black, 0 Basic White, -1 before its first boot. */
+    external fun savedConsoleTheme(): Int
+
+    /** The console's picture on the emulation surface (left, top, right, bottom), empty while none runs. */
+    external fun pictureRect(): IntArray
 }

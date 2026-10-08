@@ -5,6 +5,7 @@
 // mode switches. The wizard runs in this library on the SDL thread of HarborSetupActivity (an
 // SDLActivity), with the same SDL3 Eden's audio uses: one SDL copy, one org.libsdl.app.
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -20,8 +21,14 @@
 #include "common/logging.h"
 #include "common/param_package.h"
 #include "common/settings.h"
+#include "core/hle/service/am/applet_manager.h"
+#include "core/hle/service/am/window_system.h"
+#include "core/hle/service/set/system_settings_server.h"
+#include "core/hle/service/sm/sm.h"
 #include "core/openpak/boot_connection.h"
 #include "frontend_common/joycon_rails.h"
+#include "harbor_setup/driver_catalog.h"
+#include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -62,6 +69,8 @@ jmethodID commit_driver = nullptr;
 jmethodID discard_driver = nullptr;
 jmethodID select_driver = nullptr;
 jmethodID finish_setup = nullptr;
+jclass sleep_class = nullptr;
+jmethodID sleep_changed = nullptr;
 
 std::mutex picks_mutex;
 std::map<int, PickCallback> picks;
@@ -276,6 +285,13 @@ public:
     }
 };
 
+/// This phone, probed once (the system's Vulkan driver names the GPU).
+const DeviceInfo& HarborDevice() {
+    static const DeviceInfo device =
+        ProbeDevice(Common::FS::GetEdenPathString(Common::FS::EdenPath::EdenDir), true);
+    return device;
+}
+
 } // namespace
 
 namespace Harbor {
@@ -383,20 +399,34 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     discard_driver = env->GetStaticMethodID(bridge_class, "discardDriver", "(Ljava/lang/String;)V");
     select_driver = env->GetStaticMethodID(bridge_class, "selectDriver", "(Ljava/lang/String;)Z");
     finish_setup = env->GetStaticMethodID(bridge_class, "finishSetup", "(Z)V");
+    jclass sleep_local = env->FindClass("org/yuzu/yuzu_emu/harbor/HarborSleep");
+    sleep_class = static_cast<jclass>(env->NewGlobalRef(sleep_local));
+    env->DeleteLocalRef(sleep_local);
+    sleep_changed = env->GetStaticMethodID(sleep_class, "onSleepChanged", "(Z)V");
+    // am calls this when the console goes to sleep or wakes (a short power press): HarborSleep
+    // pauses the guest and blanks the screen on the UI thread.
+    EmulationSession::GetInstance().System().GetAppletManager().SetSleepHandler([](bool sleeping) {
+        JNIEnv* thread_env = Common::Android::GetEnvForThread();
+        thread_env->CallStaticVoidMethod(sleep_class, sleep_changed, sleeping ? JNI_TRUE : JNI_FALSE);
+        ClearException(thread_env);
+    });
 }
 
-JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_isConsoleReady(JNIEnv*, jobject) {
+/// "" when the console can boot, "setup" when the setup must run first, else why the check itself
+/// failed (the launcher's "Harbor cannot start").
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkConsole(JNIEnv* env, jobject) {
     HarborSetup::Readiness readiness;
     try {
         readiness = HarborSetup::CheckReadiness();
     } catch (const std::exception& e) {
         LOG_ERROR(Frontend, "harbor: readiness check failed: {}", e.what());
-        return JNI_FALSE;
+        return Common::Android::ToJString(env, std::string{e.what()}.empty() ? "The readiness check failed."
+                                                                             : e.what());
     }
     LOG_INFO(Frontend, "harbor: readiness keys={} firmware={} qlaunch={} record_completed={}",
              readiness.keys_usable, readiness.firmware_version.empty() ? "none" : readiness.firmware_version,
              readiness.qlaunch, readiness.record_completed);
-    return readiness.Ready() ? JNI_TRUE : JNI_FALSE;
+    return Common::Android::ToJString(env, readiness.Ready() ? "" : "setup");
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(JNIEnv* env, jobject, jint id,
@@ -418,6 +448,13 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(JNIE
     const auto location = Common::Android::GetJString(env, uri);
     done(Picked{name ? Common::Android::GetJString(env, name) : location, location,
                 location.rfind("content://", 0) != 0});
+}
+
+/// A picker that could not open: the wizard says why and keeps the earlier choice.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPickFailed(JNIEnv* env, jobject, jint id,
+                                                                               jstring message) {
+    Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onPicked(env, nullptr, id, nullptr, nullptr);
+    HarborSetup::ReportPickerFailure(message ? Common::Android::GetJString(env, message) : std::string{});
 }
 
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_downloadProgress(JNIEnv*, jobject,
@@ -507,6 +544,109 @@ JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkGpuDr
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {
     return FrontendCommon::JoyconsDetached(EmulationSession::GetInstance().System().HIDCore()) ? JNI_TRUE
                                                                                              : JNI_FALSE;
+}
+
+/// The console's power button held (a middle press: the overlay's power menu with Restart and Power
+/// Off), as the Ryujinx Harbor's F5. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pressPower(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        LOG_INFO(Frontend, "harbor: power button ignored: the console is not running");
+        return;
+    }
+    session.System().GetAppletManager().PowerButtonMiddlePress();
+}
+
+/// The console's power button pressed briefly: it goes to sleep, or wakes when it sleeps
+/// (AppletManager::PowerButtonShortPress; HarborSleep does the host side).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerShortPress(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        LOG_INFO(Frontend, "harbor: power button ignored: the console is not running");
+        return;
+    }
+    session.System().GetAppletManager().PowerButtonShortPress();
+}
+
+/// Android's audio focus as a gain on the console's output (1 full, 0.25 ducked, 0 muted). The
+/// saved volume is untouched: a lower gain is the setting's per-session value, which the global
+/// config never writes, and every new session starts from the saved one.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setHostGain(JNIEnv*, jobject, jfloat gain) {
+    auto& volume = Settings::values.volume;
+    if (gain >= 1.0f) {
+        volume.SetGlobal(true);
+        return;
+    }
+    const auto saved = volume.GetValue(true);
+    volume.SetGlobal(false);
+    volume.SetValue(static_cast<u8>(static_cast<float>(saved) * std::clamp(gain, 0.0f, 1.0f)));
+}
+
+/// The console's theme for the touch controls: 1 Basic Black, 0 Basic White, -1 while no console runs.
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_consoleTheme(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        return -1;
+    }
+    const auto set_sys = session.System().ServiceManager().GetService<Service::Set::ISystemSettingsServer>(
+        "set:sys", false);
+    if (!set_sys) {
+        return -1;
+    }
+    Service::Set::ColorSet color{};
+    if (set_sys->GetColorSetId(&color).IsError()) {
+        return -1;
+    }
+    return color == Service::Set::ColorSet::BasicBlack ? 1 : 0;
+}
+
+/// The console's saved colour set for Harbor's own screens: 1 Basic Black, 0 Basic White, -1 before
+/// the console has booted once (the phone's theme then).
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_savedConsoleTheme(JNIEnv*, jobject) {
+    const auto dark = HarborSetup::SavedConsoleDarkTheme();
+    return dark ? (*dark ? 1 : 0) : -1;
+}
+
+/// Where the console's picture is on the emulation surface: left, top, right, bottom in pixels, or
+/// an empty array while no console runs. Touches outside it are not the touch screen.
+JNIEXPORT jintArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pictureRect(JNIEnv* env, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        return env->NewIntArray(0);
+    }
+    const auto& screen = session.Window().GetFramebufferLayout().screen;
+    const jint rect[4] = {static_cast<jint>(screen.left), static_cast<jint>(screen.top),
+                          static_cast<jint>(screen.right), static_cast<jint>(screen.bottom)};
+    jintArray out = env->NewIntArray(4);
+    env->SetIntArrayRegion(out, 0, 4, rect);
+    return out;
+}
+
+/// After the chosen driver failed to load: whether a recommended driver exists for this GPU.
+JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hasRecommendedDriver(JNIEnv*, jobject) {
+    return HarborSetup::HasRecommendedDriver(HarborDevice()) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Why an installed driver does not fit this GPU (its library's Adreno generation, its Android
+/// version), or "".
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_driverProblem(JNIEnv* env, jobject,
+                                                                                   jstring name,
+                                                                                   jstring library,
+                                                                                   jint min_api) {
+    return Common::Android::ToJString(
+        env, HarborSetup::DriverPackageProblem(Common::Android::GetJString(env, name),
+                                               Common::Android::GetJString(env, library), min_api,
+                                               HarborDevice()));
+}
+
+/// Downloads, installs and selects the recommended driver: [id, name, error]. Blocking; on a Java
+/// thread that called HarborNative.initialize in this process.
+JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_installRecommendedDriver(JNIEnv* env,
+                                                                                                   jobject) {
+    AndroidHost host;
+    const std::atomic_bool cancel{false};
+    const auto result = HarborSetup::InstallRecommendedDriver(host, HarborDevice(), cancel);
+    return Common::Android::ToJStringArray(env, {result.id, result.name, result.error});
 }
 
 } // extern "C"

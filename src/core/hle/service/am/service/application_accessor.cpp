@@ -6,6 +6,7 @@
 
 #include <cstring>
 
+#include "core/file_sys/common_funcs.h"
 #include "core/core.h"
 #include "core/hle/result.h"
 #include "core/hle/service/am/am_results.h"
@@ -221,7 +222,9 @@ Result IApplicationAccessor::AreAnyLibraryAppletsLeft(Out<bool> out_are_any_left
 
 Result IApplicationAccessor::GetApplicationId(Out<u64> out_application_id) {
     LOG_DEBUG(Service_AM, "called");
-    *out_application_id = m_applet->program_id;
+    // The application's id, also after ExecuteProgram moved it to another of its programs.
+    std::scoped_lock lk{m_applet->lock};
+    *out_application_id = FileSys::GetBaseTitleID(m_applet->program_id);
     R_SUCCEED();
 }
 
@@ -288,7 +291,7 @@ Result IApplicationAccessor::SetApplicationAttribute(
 
 Result IApplicationAccessor::HasSaveDataAccessPermission(Out<bool> out_has_permission,
                                                          u64 application_id) {
-    *out_has_permission = application_id == m_applet->program_id;
+    *out_has_permission = application_id == FileSys::GetBaseTitleID(m_applet->program_id);
     if (!*out_has_permission) {
         // switchbrew documents only the own-id case.
         LOG_WARNING(Service_AM, "unknown contract: IApplicationAccessor 170 for another "

@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/hle/service/am/applet.h"
@@ -51,17 +52,22 @@ IAppletCommonFunctions::IAppletCommonFunctions(Core::System& system_,
 
 IAppletCommonFunctions::~IAppletCommonFunctions() = default;
 
+// Whether this applet wants HOME double clicks (kept per applet and answered back). No double
+// click is detected by the button poller here, so nothing more happens with it.
 Result IAppletCommonFunctions::SetHomeButtonDoubleClickEnabled(
     bool home_button_double_click_enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, home_button_double_click_enabled={}",
-                home_button_double_click_enabled);
+    LOG_DEBUG(Service_AM, "called, home_button_double_click_enabled={}",
+              home_button_double_click_enabled);
+    std::scoped_lock lk{applet->lock};
+    applet->home_button_double_click_enabled = home_button_double_click_enabled;
     R_SUCCEED();
 }
 
 Result IAppletCommonFunctions::GetHomeButtonDoubleClickEnabled(
     Out<bool> out_home_button_double_click_enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_home_button_double_click_enabled = false;
+    std::scoped_lock lk{applet->lock};
+    *out_home_button_double_click_enabled = applet->home_button_double_click_enabled;
+    LOG_DEBUG(Service_AM, "called, enabled={}", *out_home_button_double_click_enabled);
     R_SUCCEED();
 }
 
@@ -91,8 +97,10 @@ Result IAppletCommonFunctions::SetGpuTimeSliceBoost(s64 time_span) {
     R_SUCCEED();
 }
 
-Result IAppletCommonFunctions::Unknown350(Out<u16> out_unknown) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result IAppletCommonFunctions::Unknown350(Out<u16> out_unknown, u64 argument) {
+    // qlaunch sends 0xF; the Ryujinx Harbor answers 0.
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IAppletCommonFunctions 350 argument={:#x}; returning 0",
+                         argument);
     *out_unknown = 0;
     R_SUCCEED();
 }

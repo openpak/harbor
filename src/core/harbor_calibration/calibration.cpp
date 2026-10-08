@@ -15,6 +15,7 @@
 #include "common/logging.h"
 #include "core/harbor_calibration/calibration.h"
 #include "core/openpak/secret_store.h"
+#include "core/openpak/session.h"
 
 namespace Harbor {
 
@@ -81,7 +82,7 @@ bool WriteFile(const std::filesystem::path& path, std::span<const u8> data) {
 
 bool StoreDeviceKey(u64 device_id, const Cal0::DeviceKey& key) {
     std::string hex = Hex(key.data(), key.size());
-    const bool kept = OpenPak::StoreSecret(SecretName(device_id), hex);
+    const bool kept = OpenPak::StoreHostSecret(SecretName(device_id), hex);
     OPENSSL_cleanse(hex.data(), hex.size());
     return kept;
 }
@@ -130,7 +131,7 @@ Loaded Load(const std::filesystem::path& path) {
     Loaded out;
     out.binary = std::move(*binary);
     const u64 device_id = Cal0::DeviceId(out.binary);
-    auto secret = OpenPak::LoadSecret(SecretName(device_id));
+    auto secret = OpenPak::LoadHostSecret(SecretName(device_id));
     std::optional<Cal0::DeviceKey> key;
     if (secret) {
         key = FromHex(*secret);
@@ -217,6 +218,33 @@ std::optional<std::vector<u8>> Calibration::SslPrivateKey() const {
 
 Cal0::DeviceKey Calibration::DeriveDeviceKey(std::string_view label) const {
     return Cal0::DeriveKey(device_key, label);
+}
+
+void InstallSecretNamespace() {
+    OpenPak::SetSecretNamespace([] {
+        const u64 device_id = Calibration::Get().DeviceId();
+        if (device_id == 0) {
+            return std::string{};
+        }
+        u8 hash[SHA256_DIGEST_LENGTH];
+        const std::string input = "harbor-console:" + std::to_string(device_id);
+        SHA256(reinterpret_cast<const u8*>(input.data()), input.size(), hash);
+        return "console-" + Hex(hash, 8);
+    });
+}
+
+void InstallClientIdentity() {
+    OpenPak::Session::SetClientIdentitySource([](std::vector<u8>& certificate,
+                                                 std::vector<u8>& key) {
+        const auto& calibration = Calibration::Get();
+        auto private_key = calibration.SslPrivateKey();
+        certificate = calibration.SslCertificate();
+        if (certificate.empty() || !private_key) {
+            return false;
+        }
+        key = std::move(*private_key);
+        return true;
+    });
 }
 
 } // namespace Harbor

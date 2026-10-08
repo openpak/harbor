@@ -8,6 +8,7 @@
 
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/file_sys/common_funcs.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
@@ -43,6 +44,23 @@ AppletIdentityInfo GetCallerIdentity(Applet& applet) {
             .application_id = 0x0100000000001000ull,
         };
     }
+}
+
+// The root of the caller chain: the application (or system applet) that started the first library
+// applet. myPage builds an invitation's application id from it. Behaviour follows the Ryujinx
+// Harbor (MIT-licensed Ryujinx base).
+AppletIdentityInfo GetMainIdentity(Applet& applet) {
+    std::shared_ptr<Applet> main = applet.caller_applet.lock();
+    if (!main) {
+        return GetCallerIdentity(applet);
+    }
+    while (const auto caller = main->caller_applet.lock()) {
+        main = caller;
+    }
+    return {
+        .applet_id = main->applet_id,
+        .application_id = main->program_id,
+    };
 }
 
 } // namespace
@@ -144,11 +162,9 @@ Result ILibraryAppletSelfAccessor::GetLibraryAppletInfo(
 
 Result ILibraryAppletSelfAccessor::GetMainAppletIdentityInfo(
     Out<AppletIdentityInfo> out_identity_info) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_identity_info = {
-        .applet_id = AppletId::QLaunch,
-        .application_id = 0x0100000000001000ull,
-    };
+    *out_identity_info = GetMainIdentity(*m_applet);
+    LOG_INFO(Service_AM, "called, applet_id={} program_id={:016X}",
+             static_cast<u32>(out_identity_info->applet_id), out_identity_info->application_id);
     R_SUCCEED();
 }
 
@@ -161,10 +177,9 @@ Result ILibraryAppletSelfAccessor::CanUseApplicationCore(Out<bool> out_can_use_a
 
 Result ILibraryAppletSelfAccessor::GetMainAppletApplicationControlProperty(
     OutLargeData<std::array<u8, 0x4000>, BufferAttr_HipcMapAlias> out_nacp) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    // TODO: this should be the main applet, not the caller applet
-    const auto application = GetCallerIdentity(*m_applet);
+    const auto application = GetMainIdentity(*m_applet);
     std::vector<u8> nacp;
     const auto result =
         system.GetARPManager().GetControlProperty(&nacp, application.application_id);
@@ -177,8 +192,20 @@ Result ILibraryAppletSelfAccessor::GetMainAppletApplicationControlProperty(
 }
 
 Result ILibraryAppletSelfAccessor::GetMainAppletStorageId(Out<FileSys::StorageId> out_storage_id) {
-    LOG_INFO(Service_AM, "(STUBBED) called");
-    *out_storage_id = FileSys::StorageId::NandUser;
+    // Where the main applet's program is installed. Titles from the host's game folders are
+    // answered as user NAND, as the Ryujinx Harbor answers applications (MIT-licensed Ryujinx base).
+    const auto main = GetMainIdentity(*m_applet);
+    const auto slot = system.GetContentProviderUnion().GetSlotForEntry(
+        main.application_id, FileSys::ContentRecordType::Program);
+    FileSys::StorageId storage_id = FileSys::StorageId::NandUser;
+    if (slot == FileSys::ContentProviderUnionSlot::SysNAND) {
+        storage_id = FileSys::StorageId::NandSystem;
+    } else if (slot == FileSys::ContentProviderUnionSlot::SDMC) {
+        storage_id = FileSys::StorageId::SdCard;
+    }
+    *out_storage_id = storage_id;
+    LOG_DEBUG(Service_AM, "called, program_id={:016X} storage_id={}", main.application_id,
+              static_cast<u32>(storage_id));
     R_SUCCEED();
 }
 
@@ -256,16 +283,19 @@ Result ILibraryAppletSelfAccessor::GetDesirableKeyboardLayout(Out<u32> out_desir
     R_SUCCEED();
 }
 
+// An applet showed the user an error. A console files it with erpt for the error history; this
+// system keeps no error history yet (erpt is a stub), so the code is logged. Behaviour follows the
+// Ryujinx Harbor (MIT-licensed Ryujinx base).
 Result ILibraryAppletSelfAccessor::ReportVisibleError(ErrorCode error_code) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, error {}-{}", error_code.category,
-                error_code.number);
+    LOG_WARNING(Service_AM, "am: applet {} reports visible error {:04}-{:04}",
+                static_cast<u32>(m_applet->applet_id), error_code.category, error_code.number);
     R_SUCCEED();
 }
 
 Result ILibraryAppletSelfAccessor::ReportVisibleErrorWithErrorContext(
     ErrorCode error_code, InLargeData<ErrorContext, BufferAttr_HipcMapAlias> error_context) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, error {}-{}", error_code.category,
-                error_code.number);
+    LOG_WARNING(Service_AM, "am: applet {} reports visible error {:04}-{:04} (with context)",
+                static_cast<u32>(m_applet->applet_id), error_code.category, error_code.number);
     R_SUCCEED();
 }
 
@@ -316,12 +346,11 @@ Result ILibraryAppletSelfAccessor::GetMainAppletApplicationDesiredLanguage(
 }
 
 Result ILibraryAppletSelfAccessor::GetCurrentApplicationId(Out<u64> out_application_id) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    // TODO: this should be the main applet, not the caller applet
-    const auto main_applet = GetCallerIdentity(*m_applet);
-    *out_application_id = main_applet.application_id;
-
+    // The running application's id, 0 when none runs (switchbrew; the Ryujinx Harbor answers
+    // the same).
+    const u64 program_id = system.GetApplicationProcessProgramID();
+    *out_application_id = program_id == 0 ? 0 : FileSys::GetBaseTitleID(program_id);
+    LOG_DEBUG(Service_AM, "called, application_id={:016X}", *out_application_id);
     R_SUCCEED();
 }
 

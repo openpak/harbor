@@ -3,6 +3,10 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstring>
+
+#include "core/harbor_calibration/calibration.h"
 #include "core/hle/service/ldn/lan_discovery.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
@@ -614,6 +618,15 @@ int LANDiscovery::GetStationCount() const {
 }
 
 MacAddress LANDiscovery::GetFakeMac() const {
+    // This NAND's Wi-Fi MAC (its calibration), unique per install; the address-derived one only
+    // when there is no calibration.
+    const auto wlan_mac = Harbor::Calibration::Get().WlanMacAddress();
+    if (std::any_of(wlan_mac.begin(), wlan_mac.end(), [](u8 b) { return b != 0; })) {
+        MacAddress own{};
+        std::memcpy(own.raw.data(), wlan_mac.data(), own.raw.size());
+        return own;
+    }
+
     MacAddress mac{};
     mac.raw[0] = 0x02;
     mac.raw[1] = 0x00;

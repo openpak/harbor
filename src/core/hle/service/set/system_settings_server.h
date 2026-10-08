@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -91,6 +92,10 @@ public:
     Result SetTvSettings(TvSettings tv_settings);
     Result GetAudioOutputMode(Out<AudioOutputMode> out_output_mode, AudioOutputModeTarget target);
     Result SetAudioOutputMode(AudioOutputModeTarget target, AudioOutputMode output_mode);
+    Result GetAudioVolume(Out<AudioVolume> out_volume, AudioVolumeTarget target);
+    Result SetAudioVolume(AudioVolume volume, AudioVolumeTarget target);
+    /// The stored volume of a target, or nothing when none was ever stored on this NAND.
+    std::optional<AudioVolume> GetStoredAudioVolume(AudioVolumeTarget target);
     Result GetSpeakerAutoMuteFlag(Out<bool> out_force_mute_on_headphone_removed);
     Result SetSpeakerAutoMuteFlag(bool force_mute_on_headphone_removed);
     Result GetQuestFlag(Out<QuestFlag> out_quest_flag);

@@ -20,6 +20,7 @@ add_library(yuzu-android SHARED
     native_post_processing.cpp
     harbor_setup_android.cpp
     harbor_setup_android.h
+    harbor_crash_android.cpp
 )
 
 set_property(TARGET yuzu-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})

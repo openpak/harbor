@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <fmt/ranges.h>
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -133,10 +134,9 @@ struct SaveDataAttribute {
 
     std::string DebugInfo() const {
         return fmt::format(
-            "[title_id={:016X}, user_id={:016X}{:016X}, save_id={:016X}, type={:02X}, "
-            "rank={}, index={}]",
-            program_id, user_id[1], user_id[0], system_save_data_id, static_cast<u8>(type),
-            static_cast<u8>(rank), index);
+            "[title_id={:016X}, user={}, save_id={:016X}, type={:02X}, rank={}, index={}]",
+            program_id, user_id == InvalidUserId ? "none" : "set", system_save_data_id,
+            static_cast<u8>(type), static_cast<u8>(rank), index);
     }
 };
 static_assert(sizeof(SaveDataAttribute) == 0x40);
@@ -162,13 +162,18 @@ struct SaveDataExtraData {
     u64 owner_id;
     s64 timestamp;
     u32 flags;
-    INSERT_PADDING_BYTES(4);
+    SaveDataFormatType format_type;
+    INSERT_PADDING_BYTES(3);
     s64 available_size;
     s64 journal_size;
     s64 commit_id;
     INSERT_PADDING_BYTES(0x190);
 };
 static_assert(sizeof(SaveDataExtraData) == 0x200, "SaveDataExtraData has invalid size.");
+static_assert(offsetof(SaveDataExtraData, owner_id) == 0x40);
+static_assert(offsetof(SaveDataExtraData, format_type) == 0x54);
+static_assert(offsetof(SaveDataExtraData, available_size) == 0x58);
+static_assert(offsetof(SaveDataExtraData, commit_id) == 0x68);
 static_assert(std::is_trivially_copyable_v<SaveDataExtraData>,
               "Data type must be trivially copyable.");
 
@@ -209,15 +214,23 @@ struct SaveDataCreationInfo2 {
     bool pseudo;
     u8 reserved1;
     bool is_hash_salt_enabled;
-    u8 reserved2;
+    std::array<u8, 3> reserved2;
     HashSalt hash_salt;
     SaveDataMetaType meta_type;
-    u8 reserved3;
+    std::array<u8, 3> reserved3;
     s32 meta_size;
-    u8 reserved4;
+    std::array<u8, 0x164> reserved4;
 };
 static_assert(std::is_trivially_copyable_v<SaveDataCreationInfo2>,
               "Data type must be trivially copyable.");
-static_assert(sizeof(SaveDataCreationInfo2) == 0xA0, "SaveDataCreationInfo has invalid size.");
+// fs sends it as a 0x200-byte buffer (LibHac's SaveDataCreationInfo2 has the same offsets).
+static_assert(sizeof(SaveDataCreationInfo2) == 0x200, "SaveDataCreationInfo2 has invalid size.");
+static_assert(offsetof(SaveDataCreationInfo2, attribute) == 0x8);
+static_assert(offsetof(SaveDataCreationInfo2, owner_id) == 0x60);
+static_assert(offsetof(SaveDataCreationInfo2, space_id) == 0x6C);
+static_assert(offsetof(SaveDataCreationInfo2, is_hash_salt_enabled) == 0x70);
+static_assert(offsetof(SaveDataCreationInfo2, hash_salt) == 0x74);
+static_assert(offsetof(SaveDataCreationInfo2, meta_type) == 0x94);
+static_assert(offsetof(SaveDataCreationInfo2, meta_size) == 0x98);
 
 } // namespace FileSys

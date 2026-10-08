@@ -32,7 +32,8 @@ void HotkeyRegistry::SaveHotkeys() {
 
 namespace {
 
-// Harbor's host keys (F4 capture, F6 docked, F7 Joy-Con, F8 HOME, F11 fullscreen, F12 thread dump)
+// Harbor's host keys (F4 capture, F5 power, F6 docked, F7 Joy-Con, F8 HOME, F10 force-terminate,
+// F11 fullscreen, F12 thread dump)
 // take Eden's default keys; Eden's actions on them move. Only keys still at Eden's default change.
 struct HarborKey {
     std::string_view name;

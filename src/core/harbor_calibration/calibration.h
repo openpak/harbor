@@ -59,4 +59,13 @@ private:
     Cal0::DeviceKey device_key{};
 };
 
+/// Keep OpenPak's secrets (credentials, tokens, registrations) under this NAND's own namespace in
+/// the host password store, so consoles on one host never share them. Call before any of them is
+/// read: the frontend's secret store installation and core's boot both do.
+void InstallSecretNamespace();
+
+/// Make OpenPak servers this install meets from now on see the console's own TLS certificate.
+/// Called before the services start, so no session can make a self-signed one first.
+void InstallClientIdentity();
+
 } // namespace Harbor

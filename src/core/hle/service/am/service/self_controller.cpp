@@ -297,14 +297,27 @@ Result ISelfController::SetMediaPlaybackState(bool state) {
     R_SUCCEED();
 }
 
-Result ISelfController::OverrideAutoSleepTimeAndDimmingTime(s32 a, s32 b, s32 c, s32 d) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, a={}, b={}, c={}, d={}", a, b, c, d);
+// Idle detection, auto-dimming and auto-sleep: a console's idle timer dims the screen and then
+// sleeps after the times in System Settings, which these commands override or extend while the
+// applet is in front. This system never dims or sleeps on idle (sleep is not emulated), so the
+// values are kept for the applet and answered back. Behaviour follows the Ryujinx Harbor
+// (MIT-licensed Ryujinx base).
+Result ISelfController::OverrideAutoSleepTimeAndDimmingTime(s32 auto_sleep_handheld,
+                                                            s32 auto_sleep_console,
+                                                            s32 dimming_handheld,
+                                                            s32 dimming_console) {
+    LOG_DEBUG(Service_AM, "called, sleep {}/{} s, dimming {}/{} s (handheld/console)",
+              auto_sleep_handheld, auto_sleep_console, dimming_handheld, dimming_console);
+
+    std::scoped_lock lk{m_applet->lock};
+    m_applet->auto_sleep_time_override = {auto_sleep_handheld, auto_sleep_console,
+                                          dimming_handheld, dimming_console};
     R_SUCCEED();
 }
 
 Result ISelfController::SetIdleTimeDetectionExtension(
     IdleTimeDetectionExtension idle_time_detection_extension) {
-    LOG_DEBUG(Service_AM, "(STUBBED) called extension={}", idle_time_detection_extension);
+    LOG_DEBUG(Service_AM, "called extension={}", idle_time_detection_extension);
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->idle_time_detection_extension = idle_time_detection_extension;
@@ -314,7 +327,7 @@ Result ISelfController::SetIdleTimeDetectionExtension(
 
 Result ISelfController::GetIdleTimeDetectionExtension(
     Out<IdleTimeDetectionExtension> out_idle_time_detection_extension) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     *out_idle_time_detection_extension = m_applet->idle_time_detection_extension;
@@ -323,7 +336,11 @@ Result ISelfController::GetIdleTimeDetectionExtension(
 }
 
 Result ISelfController::ReportUserIsActive() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Restarts the idle timer on a console; with no idle timer here it only marks the time.
+    LOG_DEBUG(Service_AM, "called");
+
+    std::scoped_lock lk{m_applet->lock};
+    m_applet->last_user_activity = std::chrono::steady_clock::now();
     R_SUCCEED();
 }
 

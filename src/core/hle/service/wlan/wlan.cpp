@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "common/logging.h"
 #include "core/core.h"
+#include "core/harbor_calibration/calibration.h"
 #include "core/hle/result.h"
 #include "core/hle/service/wlan/wlan.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -30,7 +32,7 @@ public:
             { 4, nullptr, "DestroyBss" },
             { 5, nullptr, "CloseSpectatorMode" },
             { 5, nullptr, "StartScan_2" },
-            { 6, nullptr, "GetMacAddress_2" },
+            { 6, C<&ILocalManager::GetMacAddress>, "GetMacAddress_2" },
             { 6, nullptr, "StopScan_2" },
             { 7, nullptr, "CreateBss" },
             { 7, nullptr, "Connect_2" },
@@ -118,6 +120,13 @@ public:
         };
         RegisterHandlers(functions);
     }
+
+private:
+    Result GetMacAddress(Out<std::array<u8, 6>> out_mac_address) {
+        LOG_DEBUG(Service, "called");
+        *out_mac_address = Harbor::Calibration::Get().WlanMacAddress();
+        R_SUCCEED();
+    }
 };
 
 class ILocalGetFrame final : public ServiceFramework<ILocalGetFrame> {
@@ -168,7 +177,7 @@ public:
             { 3, nullptr, "DeleteRxEntry_2" },
             { 4, nullptr, "AddEthertypeToRxEntry_2" },
             { 5, nullptr, "DeleteEthertypeFromRxEntry_2" },
-            { 6, nullptr, "GetMacAddress_3" },
+            { 6, C<&ISocketManager::GetMacAddress>, "GetMacAddress_3" },
             { 7, nullptr, "SwitchTsfTimerFunction" },
             { 8, nullptr, "GetDeltaTimeBetweenSystemAndTsf" },
             { 9, nullptr, "RegisterSharedMemory" },
@@ -177,6 +186,13 @@ public:
             { 12, nullptr, "SetMulticastFilter" },
         };
         RegisterHandlers(functions);
+    }
+
+private:
+    Result GetMacAddress(Out<std::array<u8, 6>> out_mac_address) {
+        LOG_DEBUG(Service, "called");
+        *out_mac_address = Harbor::Calibration::Get().WlanMacAddress();
+        R_SUCCEED();
     }
 };
 

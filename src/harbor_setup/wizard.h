@@ -93,6 +93,10 @@ public:
     bool CanGoBack() const {
         return current != Step::Welcome && !busy;
     }
+    /// The first page, idle: Android back there leaves the app.
+    bool OnWelcome() const {
+        return current == Step::Welcome && !busy;
+    }
     bool CanGoNext() const;
     std::string NextLabel() const;
     bool CanSkip() const {
@@ -198,6 +202,9 @@ public:
     void Back();
     void Skip();
     void Cancel();
+
+    /// A picker could not open (the host's own error); the earlier choice stays.
+    void PickerFailed(const std::string& message);
 
     /// The first page that still needs the user, judged from the files and the record.
     static Step FirstIncomplete(const Readiness& readiness, const Record& record, bool has_driver_page);

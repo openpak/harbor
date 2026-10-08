@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <string_view>
+
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -239,22 +242,106 @@ void AppletManager::CreateAndInsertByFrontendAppletParameters(
         m_pending_parameters = params;
         m_home_session = IsHomeSessionRoot(params);
         m_power_request = PowerRequest::None;
+        m_sleeping = false;
+    }
+    {
+        std::scoped_lock lk{m_ended_lock};
+        m_applets_ended = false;
     }
     m_cv.notify_all();
 }
 
 void AppletManager::RequestExit() {
-    std::scoped_lock lk{m_lock};
-    if (m_window_system) {
-        m_window_system->OnExitRequested();
+    if (!m_home_session) {
+        std::scoped_lock lk{m_lock};
+        if (m_window_system) {
+            m_window_system->OnExitRequested();
+        }
+        return;
+    }
+
+    {
+        std::scoped_lock lk{m_lock};
+        if (!m_window_system) {
+            return;
+        }
+        m_window_system->RequestShutdownSequence();
+    }
+
+    // The sequence terminates what has not exited after its own timeout; this one only bounds
+    // the host's wait if the window system stops updating.
+    std::unique_lock lk{m_ended_lock};
+    if (!m_ended_cv.wait_for(lk, WindowSystem::ShutdownExitTimeout + std::chrono::seconds{2},
+                             [this] { return m_applets_ended; })) {
+        LOG_WARNING(Service_AM, "am: shutdown: applets still running; the host stops them");
     }
 }
 
 void AppletManager::RequestPower(PowerRequest request) {
     m_power_request = request;
-    LOG_INFO(Service_AM, "HOME menu requested {}; stopping the emulated system",
+    LOG_INFO(Service_AM, "HOME menu requested {}; ending the applets first",
              request == PowerRequest::Reboot ? "reboot" : "shutdown");
+    {
+        std::scoped_lock lk{m_lock};
+        if (m_window_system) {
+            // The system exits once the last applet has ended (WindowSystem).
+            m_window_system->RequestShutdownSequence();
+            return;
+        }
+    }
     m_system.Exit();
+}
+
+void AppletManager::OnAppletsEnded() {
+    {
+        std::scoped_lock lk{m_ended_lock};
+        m_applets_ended = true;
+    }
+    m_ended_cv.notify_all();
+}
+
+void AppletManager::PowerButtonMiddlePress() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: power button held (power menu)");
+    if (m_window_system) {
+        m_window_system->OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
+    }
+}
+
+void AppletManager::PowerButtonShortPress() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: power button pressed");
+    if (m_window_system) {
+        m_window_system->OnSystemButtonPress(SystemButtonType::PowerButtonShortPressing);
+    }
+}
+
+void AppletManager::SetSleepHandler(std::function<void(bool)> handler) {
+    std::scoped_lock lk{m_sleep_lock};
+    m_sleep_handler = std::move(handler);
+}
+
+void AppletManager::ToggleSleep() {
+    const bool sleeping = !m_sleeping.load();
+    m_sleeping = sleeping;
+    LOG_INFO(Service_AM, "am: the console {}", sleeping ? "goes to sleep" : "wakes up");
+    // A console's sleep sequence (RequestToPrepareSleep to the applets, sleep locks, psc's
+    // PmModule states, FinishedSleepSequence and Resume on wake) is not established for 23.0.1:
+    // nothing is sent; the frontend only pauses the guest. IsSleepEnabled stays false.
+    LOG_WARNING(Service_AM, "unknown contract: am sleep sequence (no applet messages, no psc "
+                            "notification; the guest is paused)");
+    std::scoped_lock lk{m_sleep_lock};
+    if (m_sleep_handler) {
+        m_sleep_handler(sleeping);
+    }
+}
+
+void AppletManager::ForceTerminateApplication() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: force-terminate application");
+    if (m_window_system) {
+        m_window_system->RequestForceTerminateApplication();
+    }
 }
 
 void AppletManager::ReleaseForegroundHold(const Applet& child) {
@@ -288,6 +375,13 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
 
     const auto launch_overlay = [&] {
         if (m_window_system->GetOverlayDisplayApplet() != nullptr) {
+            return;
+        }
+        // For tests: a session without the overlay applet, as after the overlay exited.
+        if (const char* no_overlay = std::getenv("OPENPAK_NO_OVERLAY_APPLET");
+            no_overlay != nullptr && std::string_view{no_overlay} == "1") {
+            LOG_WARNING(Service_AM, "am: overlay applet not started (OPENPAK_NO_OVERLAY_APPLET=1); "
+                                    "system pop-ups will not show");
             return;
         }
         auto overlay_process =

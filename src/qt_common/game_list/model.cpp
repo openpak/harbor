@@ -163,8 +163,23 @@ void GameListModel::Repopulate() {
     PopulateAsync(UISettings::values.game_dirs);
 }
 
+// A folder changed while the emulated system runs: the content providers its services read from
+// stay as they are (rebuilding them freed the external provider under ns and crashed), and the
+// library is read again at the next boot, as a console picks up new content.
+static bool DeferWhileRunning(const char* what) {
+    if (QtCommon::system == nullptr || !QtCommon::system->IsPoweredOn()) {
+        return false;
+    }
+    LOG_INFO(Frontend, "{} changed while running; the library is read again at the next boot",
+             what);
+    return true;
+}
+
 void GameListModel::RefreshGameDirectory() {
     ResetExternalWatcher();
+    if (DeferWhileRunning("A games folder")) {
+        return;
+    }
     if (!UISettings::values.game_dirs.empty() && current_worker != nullptr) {
         LOG_INFO(Frontend, "Change detected in the games directory. Reloading game list.");
         Repopulate();
@@ -172,6 +187,9 @@ void GameListModel::RefreshGameDirectory() {
 }
 
 void GameListModel::RefreshExternalContent() {
+    if (DeferWhileRunning("An external content folder")) {
+        return;
+    }
     if (!UISettings::values.game_dirs.empty() && current_worker != nullptr) {
         LOG_INFO(Frontend, "External content directory changed. Clearing metadata cache.");
         QtCommon::Game::ResetMetadata(false);

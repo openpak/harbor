@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
 
 #include "core/openpak/boot_connection.h"
@@ -65,8 +67,20 @@ OpenPak::BootResult ConnectOpenPak();
 enum class PowerRequest { None, Shutdown, Reboot };
 PowerRequest ConsolePowerRequest(Core::System& system);
 
-/// Android back: Back on the wizard's current page. Safe from any thread.
+/// The console's saved colour set (System Settings > Themes): true for Basic Black, false for
+/// Basic White, nullopt before the console has booted once (the host then follows the phone or
+/// desktop). Read from the NAND's system settings file; needs no Core::System.
+std::optional<bool> SavedConsoleDarkTheme();
+/// The same, from a given set:sys settings.dat (the self-check's sample).
+std::optional<bool> ReadConsoleDarkTheme(const std::filesystem::path& path);
+
+/// Android back: Back on the wizard's current page; on Welcome it closes the setup (the app is
+/// left). Safe from any thread.
 void RequestBack();
+
+/// A file or folder picker that could not open: the wizard shows "The picker could not open: ..."
+/// and keeps the earlier choice. Safe from any thread.
+void ReportPickerFailure(const std::string& message);
 
 /// Desktop: before Qt starts. Runs the wizard when the data directory is not ready or `--harbor-setup`
 /// is given (the flag is removed from argv). Under the test harness (HARBOR_CONTROL) or with an

@@ -18,6 +18,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
 
+    <!-- Harbor reads only what the user picks (the Storage Access Framework): no storage permission. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.NFC" />
@@ -28,9 +29,6 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
     <application
         android:name="org.yuzu.yuzu_emu.YuzuApplication"
@@ -76,6 +74,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:configChanges="layoutDirection|locale|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation"
             android:preferMinimalPostProcessing="true" />
+
+        <!-- "Harbor stopped" (the console stopped on its own) and "Harbor cannot start". -->
+        <activity
+            android:name="org.yuzu.yuzu_emu.harbor.HarborStoppedActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
         <!-- Starts the setup again in a fresh process (Borealis and SDL run it once per process). -->
         <activity

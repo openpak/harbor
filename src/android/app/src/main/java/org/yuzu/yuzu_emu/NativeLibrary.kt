@@ -419,6 +419,19 @@ object NativeLibrary {
                 return
             }
         }
+        // Harbor: a console that could not boot shows why on the stopped screen, not Eden's dialog.
+        if (HarborConsole.active) {
+            Log.error("[Harbor] the console did not boot: result $resultCode")
+            emulationActivity.runOnUiThread {
+                HarborConsole.showStopped(
+                    emulationActivity,
+                    emulationActivity.getString(
+                        if (resultCode == ErrorVideoCore) R.string.harbor_stop_renderer else R.string.harbor_stop_home_failed
+                    )
+                )
+            }
+            return
+        }
 
         val builder = MaterialAlertDialogBuilder(emulationActivity)
             .setTitle(captionId)

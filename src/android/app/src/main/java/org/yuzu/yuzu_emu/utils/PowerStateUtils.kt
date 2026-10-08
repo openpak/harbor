@@ -36,7 +36,10 @@ object PowerStateUtils {
                 results[0] = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
             }
             val status = batteryStatusIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-            results[1] = if (status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL) 1 else 0
+            // A charger in the port counts, as the console's charger type does, also when the phone
+            // is not taking charge (full, or held back by a charge limit).
+            val plugged = batteryStatusIntent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+            results[1] = if (plugged || status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL) 1 else 0
         }
 
         return results

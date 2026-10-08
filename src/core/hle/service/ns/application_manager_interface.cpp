@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+
 #include "common/redact.h"
 #include "common/settings.h"
 #include "core/file_sys/control_metadata.h"
@@ -13,6 +15,7 @@
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/ns/application_manager_interface.h"
+#include "core/hle/kernel/k_transfer_memory.h"
 
 #include "core/file_sys/content_archive.h"
 #include "core/hle/service/ns/content_management_interface.h"
@@ -22,7 +25,9 @@
 #include "core/launch_timestamp_cache.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -50,7 +55,122 @@ void LogReportedVersion(u64 application_id, u32 version) {
     }
 }
 
+// Every live interface, so a record change reaches the event HOME waits on whichever instance
+// handed it out (the read-only record interface lists through temporary instances).
+std::mutex g_record_listeners_lock;
+std::vector<IApplicationManagerInterface*> g_record_listeners;
+
+// TouchApplication times of this boot (seconds); launches are kept across boots by
+// LaunchTimestampCache.
+std::mutex g_touched_lock;
+std::map<u64, s64> g_touched;
+
+s64 NowSeconds() {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+void LogSkippedProgram(u64 application_id) {
+    static std::mutex mutex;
+    static std::set<u64> logged;
+    std::scoped_lock lk{mutex};
+    if (logged.insert(application_id).second) {
+        LOG_WARNING(Service_NS,
+                    "HOME library: {:016X} has a program but no content meta or control data "
+                    "(a loose NCA?); no tile",
+                    application_id);
+    }
+}
+
+// HOME logs its tile order whenever it changes.
+void LogRecordOrder(const std::vector<ApplicationRecord>& records) {
+    static std::mutex mutex;
+    static std::vector<u64> logged;
+    std::vector<u64> ids;
+    ids.reserve(records.size());
+    for (const auto& record : records) {
+        ids.push_back(record.application_id);
+    }
+    std::scoped_lock lk{mutex};
+    if (ids == logged) {
+        return;
+    }
+    logged = ids;
+    std::string order;
+    for (const auto id : ids) {
+        order += fmt::format("{}{:016X}", order.empty() ? "" : " ", id);
+    }
+    LOG_INFO(Service_NS, "HOME library: {} application record(s), most recent first: {}",
+             ids.size(), order);
+}
+
 } // Anonymous namespace
+
+std::vector<ApplicationRecord> ListLibraryApplicationRecords(Core::System& system) {
+    const auto& cache = system.GetContentProviderUnion();
+    const auto installed_games = cache.ListEntriesFilterOrigin(
+        std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
+
+    std::map<u64, ApplicationRecord> by_id;
+    for (const auto& [slot, game] : installed_games) {
+        if (game.title_id == 0 || game.title_id < 0x0100000000001FFFull) {
+            continue;
+        }
+        if ((game.title_id & 0xFFF) != 0) {
+            continue; // skip sub-programs (e.g., 001)
+        }
+        // One record per application, wherever its program was found (NAND, SD card, folders).
+        if (by_id.contains(game.title_id)) {
+            continue;
+        }
+        // ns lists an application from its installed content meta, and HOME draws a tile from
+        // its control data: a loose program NCA in a game folder has neither, so it gets no
+        // tile (NRO and NSO files never reach the content providers).
+        if (!cache.HasEntry(game.title_id, FileSys::ContentRecordType::Meta) ||
+            !cache.HasEntry(game.title_id, FileSys::ContentRecordType::Control)) {
+            LogSkippedProgram(game.title_id);
+            continue;
+        }
+
+        ApplicationRecord record{};
+        record.application_id = game.title_id;
+        record.last_event = ApplicationEvent::Installed;
+        record.attributes = 0;
+        record.last_updated = Core::LaunchTimestampCache::GetLaunchTimestamp(game.title_id);
+        {
+            std::scoped_lock lk{g_touched_lock};
+            if (const auto it = g_touched.find(game.title_id); it != g_touched.end()) {
+                record.last_updated = (std::max)(record.last_updated, it->second);
+            }
+        }
+        by_id.emplace(game.title_id, record);
+    }
+
+    std::vector<ApplicationRecord> records;
+    records.reserve(by_id.size());
+    for (const auto& [id, record] : by_id) {
+        records.push_back(record);
+    }
+
+    // Most recently played first, as a console orders HOME.
+    std::stable_sort(records.begin(), records.end(),
+                     [](const ApplicationRecord& lhs, const ApplicationRecord& rhs) {
+                         return lhs.last_updated > rhs.last_updated;
+                     });
+    return records;
+}
+
+void NotifyApplicationRecordsChanged() {
+    std::scoped_lock lk{g_record_listeners_lock};
+    for (auto* const listener : g_record_listeners) {
+        listener->SignalRecordUpdate();
+    }
+}
+
+void IApplicationManagerInterface::SignalRecordUpdate() {
+    record_update_system_event.Signal(system.Kernel());
+}
 
 u32 FindInstalledApplicationVersion(Core::System& system, u64 application_id);
 
@@ -107,7 +227,8 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
       gamecard_waken_ready_event{service_context}, unknown_event{service_context},
       gamecard_attachment_event{service_context}, sd_card_removed_event{service_context},
       application_shell_event{service_context}, unknown518_event{service_context},
-      unknown1508_event{service_context}, async_completed_event{service_context} {
+      unknown1508_event{service_context}, async_completed_event{service_context},
+      unknown4008_event{service_context} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListApplicationRecord"},
@@ -560,9 +681,15 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
     // clang-format on
 
     RegisterHandlers(functions);
+
+    std::scoped_lock lk{g_record_listeners_lock};
+    g_record_listeners.push_back(this);
 }
 
-IApplicationManagerInterface::~IApplicationManagerInterface() = default;
+IApplicationManagerInterface::~IApplicationManagerInterface() {
+    std::scoped_lock lk{g_record_listeners_lock};
+    std::erase(g_record_listeners, this);
+}
 
 Result IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id) {
     LOG_DEBUG(Service_NS, "called, user_id={}", Common::Redact(user_id));
@@ -644,36 +771,8 @@ Result IApplicationManagerInterface::ListApplicationRecord(
     const auto limit = out_records.size();
 
     LOG_DEBUG(Service_NS, "called");
-    const auto& cache = system.GetContentProviderUnion();
-    const auto installed_games = cache.ListEntriesFilterOrigin(
-        std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
-
-    std::vector<ApplicationRecord> records;
-    records.reserve(installed_games.size());
-
-    for (const auto& [slot, game] : installed_games) {
-         if (game.title_id == 0 || game.title_id < 0x0100000000001FFFull) {
-             continue;
-         }
-         if ((game.title_id & 0xFFF) != 0) {
-             continue; // skip sub-programs (e.g., 001)
-         }
-
-         ApplicationRecord record{};
-         record.application_id = game.title_id;
-         record.last_event = ApplicationEvent::Installed;
-         record.attributes = 0;
-         record.last_updated = Core::LaunchTimestampCache::GetLaunchTimestamp(game.title_id);
-
-         records.push_back(record);
-     }
-
-     std::sort(records.begin(), records.end(), [](const ApplicationRecord& lhs, const ApplicationRecord& rhs) {
-         if (lhs.last_updated == rhs.last_updated) {
-             return lhs.application_id < rhs.application_id;
-         }
-         return lhs.last_updated > rhs.last_updated;
-     });
+    const auto records = ListLibraryApplicationRecords(system);
+    LogRecordOrder(records);
 
     size_t i = 0;
     const size_t start = static_cast<size_t>(std::max(0, offset));
@@ -718,9 +817,15 @@ Result IApplicationManagerInterface::IsGameCardApplicationRunning(Out<bool> out_
 Result IApplicationManagerInterface::Unknown936(Out<UnknownCountedRecord> out_record) {
     // Unnamed; the qlaunch proxy stub is "no input -> (s32, 0x80-byte record)". Nothing to report.
     // Shape follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
-    LOG_WARNING(Service_NS,
-                "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
-                "0x80-byte record");
+    // qlaunch polls this about once a second from boot, whatever HOME shows: warn once.
+    static std::atomic_bool warned{false};
+    if (!warned.exchange(true)) {
+        LOG_WARNING(Service_NS,
+                    "unknown contract: IApplicationManagerInterface 936; returning 0 and an empty "
+                    "0x80-byte record (logged once; qlaunch polls it every second)");
+    } else {
+        LOG_DEBUG(Service_NS, "called");
+    }
     *out_record = {};
     R_SUCCEED();
 }
@@ -733,16 +838,29 @@ Result IApplicationManagerInterface::IsAnyApplicationEntityInstalled(
 }
 
 Result IApplicationManagerInterface::DeleteApplicationEntity(u64 application_id) {
-    LOG_DEBUG(Service_NS, "called, application_id={:016X}", application_id);
+    LOG_INFO(Service_NS, "called, application_id={:016X}", application_id);
 
+    // Content installed on the emulated NAND or SD card is removed, as on a console. A title
+    // found in the user's library folders is never deleted from them: HOME shows its success
+    // notice and the tile stays, because the files are still in the folder (archive and delete
+    // have no Harbor equivalent for folder content).
     auto& fsc = system.GetFileSystemController();
+    bool installed = false;
     if (auto* const user_cache = fsc.GetUserNANDContents(); user_cache != nullptr) {
+        installed |= user_cache->HasEntry(application_id, FileSys::ContentRecordType::Program);
         user_cache->RemoveExistingEntry(application_id);
         user_cache->Refresh();
     }
     if (auto* const sdmc_cache = fsc.GetSDMCContents(); sdmc_cache != nullptr) {
+        installed |= sdmc_cache->HasEntry(application_id, FileSys::ContentRecordType::Program);
         sdmc_cache->RemoveExistingEntry(application_id);
         sdmc_cache->Refresh();
+    }
+    if (!installed) {
+        LOG_WARNING(Service_NS,
+                    "HOME library: {:016X} is not installed on the NAND or SD card; the files in "
+                    "the library folders stay and so does its tile",
+                    application_id);
     }
 
     record_update_system_event.Signal(system.Kernel());
@@ -900,7 +1018,14 @@ Result IApplicationManagerInterface::GetStorageSize(Out<s64> out_total_space_siz
 }
 
 Result IApplicationManagerInterface::TouchApplication(u64 application_id) {
-    LOG_WARNING(Service_NS, "(STUBBED) called. application_id={:016X}", application_id);
+    // HOME touches a title as it starts it: its record becomes the most recent, so the tile moves
+    // to the front of HOME, as on a console.
+    LOG_INFO(Service_NS, "called. application_id={:016X}", application_id);
+    {
+        std::scoped_lock lk{g_touched_lock};
+        g_touched[application_id] = NowSeconds();
+    }
+    NotifyApplicationRecordsChanged();
     R_SUCCEED();
 }
 
@@ -970,19 +1095,7 @@ Result IApplicationManagerInterface::Unknown4053() {
 
 Result IApplicationManagerInterface::GenerateApplicationRecordCount(Out<u64> out_count) {
     // The same library ListApplicationRecord reports.
-    const auto& cache = system.GetContentProviderUnion();
-    const auto installed_games = cache.ListEntriesFilterOrigin(
-        std::nullopt, FileSys::TitleType::Application, FileSys::ContentRecordType::Program);
-
-    u64 count = 0;
-    for (const auto& [slot, game] : installed_games) {
-        if (game.title_id == 0 || game.title_id < 0x0100000000001FFFull ||
-            (game.title_id & 0xFFF) != 0) {
-            continue;
-        }
-        ++count;
-    }
-
+    const u64 count = ListLibraryApplicationRecords(system).size();
     LOG_DEBUG(Service_NS, "called, count={}", count);
     *out_count = count;
     R_SUCCEED();
@@ -1047,13 +1160,22 @@ Result IApplicationManagerInterface::Unknown2366(OutInterface<IAsyncResult> out_
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4008(UserIdAndValue input) {
-    // A user id and a u32 (seen as 0x300000), no buffers or output; the first-time setup calls it
-    // right after a user is created from an account.
+Result IApplicationManagerInterface::Unknown4008(OutInterface<IAsyncResult> out_interface,
+                                                 OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                 Common::UUID user_id, u64 work_buffer_size,
+                                                 InCopyHandle<Kernel::KTransferMemory> work_buffer) {
+    // The 23.0.1 client proxy (playerSelect, right after a user is linked) sends a user id, a u64
+    // size (0x300000) and a transfer memory of that size as a work buffer, and reads back an async
+    // result and its event; the applet polls that event until it signals. What ns does with the
+    // buffer is unknown; the work completes at once and unchanged. The event is this command's own:
+    // the caller clears it after the wait, and 2366's async is in flight at the same time.
     LOG_WARNING(Service_NS,
-                "unknown contract: IApplicationManagerInterface 4008; answered as a no-op, "
-                "value={:#x}",
-                input.value);
+                "unknown contract: IApplicationManagerInterface 4008; completed unchanged, "
+                "work buffer {:#x} bytes{}",
+                work_buffer_size, work_buffer ? "" : " (no transfer memory)");
+    unknown4008_event.Signal(system.Kernel());
+    *out_event = unknown4008_event.GetHandle();
+    *out_interface = std::make_shared<IAsyncResult>(system, &unknown4008_event);
     R_SUCCEED();
 }
 
@@ -1082,7 +1204,7 @@ Result IApplicationManagerInterface::Unknown4089(Out<UnknownTryPopRecord> out_re
 }
 
 Result IApplicationManagerInterface::Unknown4105() {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
+    LOG_UNKNOWN_CONTRACT(Service_NS, "ns:am2 4105; returning success, no linked-account work queued");
     R_SUCCEED();
 }
 

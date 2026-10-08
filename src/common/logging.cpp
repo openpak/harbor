@@ -32,6 +32,7 @@
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 
+#include "common/harbor_crash.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
@@ -438,10 +439,16 @@ void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename, u
             .function = function,
             .line_num = line_num,
         };
+        // Harbor: the last lines go with a crash report (only once the user has agreed).
+        const auto keep_for_crash_report = [](const Entry& entry) {
+            if (Common::HarborCrash::Recording())
+                Common::HarborCrash::OnLogLine(FormatLogMessage(entry));
+        };
         if (result.size <= sizeof(buffer) - 1) {
             buffer[(std::min)(result.size, sizeof(buffer) - 1)] = '\0';
             e.message = buffer;
             e.message_len = (std::min)(result.size, sizeof(buffer) - 1);
+            keep_for_crash_report(e);
             logging_instance->ForEachBackend([=](Backend& backend) {
                 backend.Write(e);
                 if (flush) backend.Flush();
@@ -450,6 +457,7 @@ void FmtLogMessageImpl(Class log_class, Level log_level, const char* filename, u
             std::string s = fmt::vformat(format, args);
             e.message = s.c_str();
             e.message_len = s.size();
+            keep_for_crash_report(e);
             logging_instance->ForEachBackend([=](Backend& backend) {
                 backend.Write(e);
                 if (flush) backend.Flush();

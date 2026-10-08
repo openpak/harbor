@@ -51,10 +51,18 @@ WindowSystem::WindowSystem(Core::System& system) : m_system(system) {
             this->ReleaseExpiredForegroundHolds();
             return std::nullopt;
         });
+    m_shutdown_event = Core::Timing::CreateEvent(
+        "am:ShutdownTimeout",
+        [this](s64, std::chrono::nanoseconds) -> std::optional<std::chrono::nanoseconds> {
+            m_shutdown_timed_out = true;
+            this->RequestUpdate();
+            return std::nullopt;
+        });
 }
 
 WindowSystem::~WindowSystem() {
     m_system.CoreTiming().UnscheduleEvent(m_foreground_hold_event);
+    m_system.CoreTiming().UnscheduleEvent(m_shutdown_event);
     m_system.GetAppletManager().SetWindowSystem(nullptr);
 }
 
@@ -75,6 +83,12 @@ void WindowSystem::Update() {
 
         LOG_DEBUG(Service_AM, "called, home_menu={} application={} overlay={}",
                   m_home_menu != nullptr, m_application != nullptr, m_overlay_display != nullptr);
+
+        if (m_force_terminate_requested.exchange(false)) {
+            this->ForceTerminateApplicationLocked();
+        }
+
+        this->UpdateShutdownSequenceLocked();
 
         // Loop through all applets and remove terminated applets.
         this->PruneTerminatedAppletsLocked();
@@ -274,6 +288,68 @@ void WindowSystem::OnExitRequested() {
     }
 }
 
+void WindowSystem::RequestShutdownSequence() {
+    {
+        std::scoped_lock lk{m_lock};
+        if (m_shutdown_stage != ShutdownStage::None) {
+            return;
+        }
+        m_shutdown_stage = ShutdownStage::Requested;
+    }
+    // Runs on the event observer's thread: the caller may be an IPC handler of the HOME menu
+    // (StartShutdownSequence) or the host.
+    this->RequestUpdate();
+}
+
+// Before this sequence existed, the host stopped the services while qlaunch and the overlay were
+// still running, and both aborted with 2010-0212 (sf InvalidOutHeader) on the replies that
+// never came. Now no guest code is left by the time the services go.
+void WindowSystem::UpdateShutdownSequenceLocked() {
+    const auto now = std::chrono::steady_clock::now();
+
+    switch (m_shutdown_stage) {
+    case ShutdownStage::None:
+    case ShutdownStage::Terminating:
+    case ShutdownStage::Ended:
+        return;
+    case ShutdownStage::Requested: {
+        size_t count = 0;
+        for (const auto& [aruid, applet] : m_applets) {
+            std::scoped_lock lk{applet->lock};
+            if (applet->process_released || applet->process_exiting) {
+                continue;
+            }
+            applet->lifecycle_manager.RequestExit(m_system.Kernel());
+            ++count;
+        }
+        LOG_INFO(Service_AM, "am: shutdown: Exit sent to {} applet(s); waiting up to {} ms", count,
+                 ShutdownExitTimeout.count());
+        m_shutdown_stage = ShutdownStage::WaitingForExit;
+        m_shutdown_deadline = now + ShutdownExitTimeout;
+        m_system.CoreTiming().ScheduleEvent(ShutdownExitTimeout, m_shutdown_event);
+        return;
+    }
+    case ShutdownStage::WaitingForExit:
+        break;
+    }
+
+    if (!m_shutdown_timed_out && now < m_shutdown_deadline) {
+        return;
+    }
+
+    m_shutdown_stage = ShutdownStage::Terminating;
+    for (const auto& [aruid, applet] : m_applets) {
+        std::scoped_lock lk{applet->lock};
+        if (applet->process_released) {
+            continue;
+        }
+        LOG_INFO(Service_AM, "am: shutdown: pid {} (program {:016X}) did not exit; terminating",
+                 applet->aruid.pid, applet->program_id);
+        applet->process_exiting = true;
+        applet->process->Terminate();
+    }
+}
+
 void WindowSystem::SendButtonAppletMessageLocked(AppletMessage message) {
     const auto is_blocked = [message](const Applet& applet) {
         if (message == AppletMessage::DetectShortPressingHomeButton &&
@@ -398,6 +474,9 @@ void WindowSystem::RouteSystemButtonLocked(SystemButtonType type) {
                                       AppletMessage::DetectLongPressingHomeButton);
         return;
     case SystemButtonType::PowerButtonShortPressing:
+        // A short press puts the console to sleep, or wakes it (AppletManager::ToggleSleep).
+        m_system.GetAppletManager().ToggleSleep();
+        return;
     case SystemButtonType::PowerButtonLongPressing:
         if (m_overlay_display == nullptr) {
             LOG_INFO(Service_AM, "am: power button ignored: no overlay applet is running");
@@ -491,9 +570,10 @@ void WindowSystem::OnSystemButtonPress(SystemButtonType type) {
 }
 
 void WindowSystem::OnPowerButtonPressed(ButtonPressDuration type) {
-    // A console's power button: short is sleep (not emulated), the middle press opens the
-    // overlay's power menu.
-    if (type == ButtonPressDuration::MiddlePressing) {
+    // A console's power button: short is sleep, the middle press opens the overlay's power menu.
+    if (type == ButtonPressDuration::ShortPressing) {
+        OnSystemButtonPress(SystemButtonType::PowerButtonShortPressing);
+    } else if (type == ButtonPressDuration::MiddlePressing) {
         OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
     }
 }
@@ -509,6 +589,39 @@ void WindowSystem::OnHomeButtonPressed(ButtonPressDuration type) {
         OnSystemButtonPress(SystemButtonType::HomeButtonLongPressing);
         break;
     }
+}
+
+void WindowSystem::RequestForceTerminateApplication() {
+    m_force_terminate_requested = true;
+    this->RequestUpdate();
+}
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): the host's force-terminate
+// ends the application the HOME menu launched by killing its process, as the accessor's Terminate
+// does; HOME takes the foreground back with ApplicationExited and shows its own "The software was
+// closed" notice.
+void WindowSystem::ForceTerminateApplicationLocked() {
+    if (!m_system.GetAppletManager().IsHomeSession() || m_application == nullptr) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: no application launched by the home "
+                             "menu is running");
+        return;
+    }
+
+    std::scoped_lock lk{m_application->lock};
+    if (m_application->process_released || m_application->process_exiting) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: application pid {} is already ending",
+                 m_application->aruid.pid);
+        return;
+    }
+    if (!m_application->process->IsRunning()) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: application pid {} was not started",
+                 m_application->aruid.pid);
+        return;
+    }
+
+    LOG_INFO(Service_AM, "am: terminating pid {} (host force-terminate)", m_application->aruid.pid);
+    m_application->process_exiting = true;
+    m_application->process->Terminate();
 }
 
 void WindowSystem::PruneTerminatedAppletsLocked() {
@@ -535,7 +648,9 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
             applet->is_winding = false;
             applet->unwind_after_reserved = false;
 
-            if (unwind && this->RestartAppletProcessLocked(applet.get())) {
+            // Nothing starts again once the shutdown sequence runs.
+            if (unwind && m_shutdown_stage == ShutdownStage::None &&
+                this->RestartAppletProcessLocked(applet.get())) {
                 const u64 new_aruid = applet->aruid.pid;
                 const auto next = std::next(it);
 
@@ -608,6 +723,17 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
         }
 
         if (applet.get() == m_overlay_display) {
+            // A console aborts here (2128-0101); this session goes on without system pop-ups and
+            // the overlay's layer goes. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+            // base).
+            if (m_shutdown_stage == ShutdownStage::None) {
+                LOG_WARNING(Service_AM, "am: overlay applet pid {} exited; system pop-ups stop",
+                            applet->aruid.pid);
+            } else {
+                LOG_INFO(Service_AM, "am: shutdown: overlay applet pid {} exited",
+                         applet->aruid.pid);
+            }
+            applet->display_layer_manager.Finalize();
             m_overlay_display = nullptr;
         }
 
@@ -625,6 +751,12 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
 
     // If the last applet has exited, exit the system.
     if (m_applets.empty()) {
+        if (m_shutdown_stage != ShutdownStage::None && m_shutdown_stage != ShutdownStage::Ended) {
+            m_shutdown_stage = ShutdownStage::Ended;
+            LOG_INFO(Service_AM, "am: shutdown: every applet has ended");
+            m_system.CoreTiming().UnscheduleEvent(m_shutdown_event);
+            m_system.GetAppletManager().OnAppletsEnded();
+        }
         m_system.Exit();
     }
 }

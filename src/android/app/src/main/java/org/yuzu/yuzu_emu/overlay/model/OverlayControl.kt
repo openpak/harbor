@@ -150,6 +150,16 @@ enum class OverlayControl(
         Pair(R.integer.COMBINED_DPAD_X_PORTRAIT, R.integer.COMBINED_DPAD_Y_PORTRAIT),
         Pair(R.integer.COMBINED_DPAD_X_FOLDABLE, R.integer.COMBINED_DPAD_Y_FOLDABLE),
         1.0f
+    ),
+
+    // Harbor: the console's power button (a tap is sleep, a one-second hold the power menu).
+    BUTTON_POWER(
+        "button_power",
+        true,
+        Pair(R.integer.BUTTON_POWER_X, R.integer.BUTTON_POWER_Y),
+        Pair(R.integer.BUTTON_POWER_X_PORTRAIT, R.integer.BUTTON_POWER_Y_PORTRAIT),
+        Pair(R.integer.BUTTON_POWER_X_FOLDABLE, R.integer.BUTTON_POWER_Y_FOLDABLE),
+        1.0f
     );
 
     fun getDefaultPositionForLayout(layout: OverlayLayout): Pair<Double, Double> {

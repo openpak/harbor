@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
+#include "common/redact.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet.h"
@@ -137,25 +138,41 @@ Result ICommonStateGetter::GetCurrentFocusState(Out<FocusState> out_focus_state)
     R_SUCCEED();
 }
 
+// The sleep lock holds a pending system sleep back until the applet releases it. This system never
+// sleeps (sleep is not emulated), so a request is granted at once, a release lets it go, and a
+// transient release (let a pending sleep through, then hold again) is held again at once.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 Result ICommonStateGetter::RequestToAcquireSleepLock() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    // Sleep lock is acquired immediately.
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = true;
+    }
     m_applet->sleep_lock_event.Signal(system.Kernel());
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::ReleaseSleepLock() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = false;
+    }
     m_applet->sleep_lock_event.Clear(system.Kernel());
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::ReleaseSleepLockTransiently() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    m_applet->sleep_lock_event.Clear(system.Kernel());
+    // No sleep is pending: the lock is taken again straight away and stays acquired.
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = true;
+    }
+    m_applet->sleep_lock_event.Signal(system.Kernel());
     R_SUCCEED();
 }
 
@@ -411,13 +428,16 @@ Result ICommonStateGetter::GetCradleFwVersion(Out<u32> out_pdc_h, Out<u32> out_p
     R_SUCCEED();
 }
 
-Result ICommonStateGetter::Unknown610(u64 unk) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result ICommonStateGetter::Unknown610(u32 argument) {
+    // qlaunch sends 0, then 611 with 1; answered with no output, as the Ryujinx Harbor does.
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 610 argument={:#x}; returning success",
+                         argument);
     R_SUCCEED();
 }
 
-Result ICommonStateGetter::Unknown611(u8 unk) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result ICommonStateGetter::Unknown611(u32 argument) {
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 611 argument={:#x}; returning success",
+                         argument);
     R_SUCCEED();
 }
 

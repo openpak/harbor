@@ -17,10 +17,12 @@ call at all; every run log on this machine (am-*, acc-*, social-*, olsc-*, shop-
 no unimplemented `set:cal` line. The consumers are therefore Harbor's own HLE code, through the
 C++ API (`Harbor::Calibration::Get()`), and `set:cal` itself is answered for completeness.
 
-qlaunch's System Settings never calls `set:sys GetSerialNumber` in a 23.0.1 HOME session here: the
-System page shows no "Serial Information" entry and the Support page's diagnostic line ① is
-empty. Where qlaunch takes the serial from is an open item (strings `SceneSetSerial`,
-`SetCntHardware_BtnSerial`, `SetCntSupportErrInfo_LblSerialNum` in 0100000000001000).
+qlaunch's System Settings shows the serial under System → Serial Information (between Zoom and
+Important Information), with the battery lot: the scene calls `set:sys` GetSerialNumber (68) and
+GetBatteryLot (67) when it opens, and both answer from the calibration. In 23.0.1 qlaunch the
+`set:sys` proxy for command 68 is the vtable slot at +0x220 (thunk 0x31dbe0); the aborting wrapper
+`nn::settings::system::GetSerialNumber` (0x31b1b0) is called from the Serial Information scene
+(0x99c0e0) and from two other places (0x499368, 0x665288) not reached in a plain HOME session.
 
 ## The binary
 
@@ -123,10 +125,22 @@ OpenPak `saves` server (signing with the OpenPak modulus, §6.4) bridges console
 stays open is §7.3: matching nnSdk's exact derivation, which only matters for a console reading
 an archive *without* the server's package.
 
-## Not done here (other owners)
+## Consumers wired
 
-- fs `OpenBisStorage(CalibrationBinary)` returns the user's dumped real PRODINFO when one exists;
-  in console mode it should return this binary (identity and privacy).
-- spl `GetConfig(DeviceId)`, nsd `GetDeviceId`, ldn `GetFakeMac`, wlan/sockets `GetMacAddress`,
-  btm/bt address: read `Harbor::Calibration::Get()`.
+- fs `OpenBISPartitionStorage(CalibrationBinary)`: this binary in a HOME session, never a dumped
+  PRODINFO (fsp-srv `OpenBisStorage` itself is still unimplemented, so no guest reaches it yet).
+- spl `GetConfig(DeviceId)`, nsd `GetDeviceId` (unknown contract: 16 hex digits), ldn station MAC,
+  wlan:lcl / wlan:soc `GetMacAddress`: from `Harbor::Calibration::Get()`.
+- OpenPak TLS: `Harbor::InstallClientIdentity()` runs in core before the services start; a server
+  this install has no certificate for gets the calibration's TLS certificate and key.
+- Not wired: btm `GetHostDeviceProperty` / btdrv `GetAdapterProperties` (23.x layout not
+  established, no caller seen); ethc `GetMacAddress` (a wired adapter, not in CAL0); the starter's
+  Internet pages show "System MAC address: ---" and "LAN MAC address: ---", fed by a nifm call
+  not yet identified.
+- Password store: every OpenPak secret key (device accounts, Penne, pctl, website account) is
+  kept as `console-<8 bytes of SHA-256("harbor-console:" + device id)>-<key>`
+  (`Harbor::InstallSecretNamespace`, set before any secret is read); an older global entry moves
+  under the namespace on its first read. The device key itself stays host-wide. A NAND copied
+  together with `calibration/prodinfo.bin` is the same console and shares the namespace; remove
+  the binary from the copy to make it a console of its own.
 - set:sys `GetMiiAuthorId` already is a per-install random UUID in the system settings save.

@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <cstring>
 #include <fstream>
 
 #include "common/assert.h"
@@ -32,6 +34,8 @@ namespace Service::Set {
 
 namespace {
 constexpr u32 SETTINGS_VERSION{4u};
+// set:sys 0 with a code outside the language list (2105-0625).
+constexpr Result ResultLanguageOutOfRange{ErrorModule::Settings, 625};
 constexpr auto SETTINGS_MAGIC = Common::MakeMagic('y', 'u', 'z', 'u', '_', 's', 'e', 't');
 struct SettingsHeader {
     u64 magic;
@@ -138,8 +142,8 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {16, C<&ISystemSettingsServer::SetUserSystemClockContext>, "SetUserSystemClockContext"},
         {17, C<&ISystemSettingsServer::GetAccountSettings>, "GetAccountSettings"},
         {18, C<&ISystemSettingsServer::SetAccountSettings>, "SetAccountSettings"},
-        {19, nullptr, "GetAudioVolume"},
-        {20, nullptr, "SetAudioVolume"},
+        {19, C<&ISystemSettingsServer::GetAudioVolume>, "GetAudioVolume"},
+        {20, C<&ISystemSettingsServer::SetAudioVolume>, "SetAudioVolume"},
         {21, C<&ISystemSettingsServer::GetEulaVersions>, "GetEulaVersions"},
         {22, C<&ISystemSettingsServer::SetEulaVersions>, "SetEulaVersions"},
         {23, C<&ISystemSettingsServer::GetColorSetId>, "GetColorSetId"},
@@ -473,6 +477,17 @@ bool ISystemSettingsServer::StoreSettingsFile(std::filesystem::path& path, auto&
 
 Result ISystemSettingsServer::SetLanguageCode(LanguageCode language_code) {
     LOG_INFO(Service_SET, "called, language_code={}", language_code);
+
+    // A code outside the console's language list is refused and nothing is stored, as the Ryujinx
+    // Harbor answers (ISystemSettingsServer.cs SetLanguageCode).
+    if (std::find(available_language_codes.begin(), available_language_codes.end(),
+                  language_code) == available_language_codes.end()) {
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys SetLanguageCode(0x{:016X}) is not a known language code; not "
+                             "stored, answered LanguageOutOfRange",
+                             static_cast<u64>(language_code));
+        R_THROW(ResultLanguageOutOfRange);
+    }
 
     m_system_settings.language_code = language_code;
     SyncGlobalLanguageFromCode(language_code);
@@ -858,6 +873,60 @@ Result ISystemSettingsServer::SetAudioOutputMode(AudioOutputModeTarget target,
     R_SUCCEED();
 }
 
+// The console's volume per output (the audio sysmodule's store; audctl restores it at boot).
+// Eden's settings file had these records zeroed, so a record Harbor wrote carries a mark in its
+// last padding byte: an unmarked record is one never stored, which the guest reads as zeros.
+namespace {
+constexpr u8 AudioVolumeStoredMark = 0x48;
+
+std::array<u8, 0x8>* AudioVolumeRecord(SystemSettings& settings, AudioVolumeTarget target) {
+    switch (static_cast<u32>(target)) {
+    case 0:
+        return &settings.audio_volume_type0;
+    case 1:
+        return &settings.audio_volume_type1;
+    case 2:
+        return &settings.audio_volume_type2;
+    default:
+        return nullptr;
+    }
+}
+} // namespace
+
+Result ISystemSettingsServer::GetAudioVolume(Out<AudioVolume> out_volume,
+                                             AudioVolumeTarget target) {
+    const auto* record = AudioVolumeRecord(m_system_settings, target);
+    R_UNLESS(record != nullptr, ResultUnknown);
+    std::memcpy(out_volume.Get(), record->data(), sizeof(AudioVolume));
+    std::memset(reinterpret_cast<u8*>(out_volume.Get()) + 5, 0, 3);
+    LOG_DEBUG(Service_SET, "called, target={}, volume={}, flags={:#x}", static_cast<u32>(target),
+              out_volume->volume, out_volume->flags);
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::SetAudioVolume(AudioVolume volume, AudioVolumeTarget target) {
+    auto* record = AudioVolumeRecord(m_system_settings, target);
+    R_UNLESS(record != nullptr, ResultUnknown);
+    LOG_INFO(Service_SET, "called, target={}, volume={}, flags={:#x}", static_cast<u32>(target),
+             volume.volume, volume.flags);
+    std::memcpy(record->data(), &volume, 5);
+    (*record)[5] = 0;
+    (*record)[6] = 0;
+    (*record)[7] = AudioVolumeStoredMark;
+    SetSaveNeeded();
+    R_SUCCEED();
+}
+
+std::optional<AudioVolume> ISystemSettingsServer::GetStoredAudioVolume(AudioVolumeTarget target) {
+    const auto* record = AudioVolumeRecord(m_system_settings, target);
+    if (record == nullptr || (*record)[7] != AudioVolumeStoredMark) {
+        return std::nullopt;
+    }
+    AudioVolume volume{};
+    std::memcpy(&volume, record->data(), 5);
+    return volume;
+}
+
 Result ISystemSettingsServer::GetSpeakerAutoMuteFlag(
     Out<bool> out_force_mute_on_headphone_removed) {
     LOG_INFO(Service_SET, "called, force_mute_on_headphone_removed={}",
@@ -920,6 +989,16 @@ Result ISystemSettingsServer::SetDeviceTimeZoneLocationName(
 
 Result ISystemSettingsServer::SetRegionCode(SystemRegionCode region_code) {
     LOG_INFO(Service_SET, "called, region_code={}", region_code);
+
+    // A region outside Japan..Taiwan (0-6) is not stored and still answers success, as the Ryujinx
+    // Harbor answers (ISystemSettingsServer.cs SetRegionCode).
+    if (static_cast<u32>(region_code) > static_cast<u32>(::Settings::Region::Taiwan)) {
+        LOG_UNKNOWN_CONTRACT(Service_SET,
+                             "set:sys SetRegionCode({}) is outside the known region codes; not "
+                             "stored, answered Success",
+                             static_cast<s32>(region_code));
+        R_SUCCEED();
+    }
 
     m_system_settings.region_code = region_code;
     SyncGlobalRegionFromCode(region_code);

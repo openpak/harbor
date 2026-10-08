@@ -629,6 +629,11 @@ std::vector<std::string> ProfileManager::FindOrphanedProfiles()
         [&good_uuids, &orphaned_profiles](const std::filesystem::directory_entry& entry) -> bool {
             const std::string uuid = entry.path().stem().string();
 
+            // The all-zero user holds the device saves, not a profile: never clear it.
+            if (uuid == "00000000000000000000000000000000") {
+                return true;
+            }
+
             bool override = false;
 
             // first off, we should always clear empty profiles

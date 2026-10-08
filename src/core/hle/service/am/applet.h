@@ -6,7 +6,9 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -94,6 +96,10 @@ struct Applet {
 
     // Common state
     bool sleep_lock_enabled{};
+    // ISelfController 62/64/65: what the applet asked of the idle timer (sleep and dimming times
+    // handheld/console, in seconds) and when it last reported the user active.
+    std::array<s32, 4> auto_sleep_time_override{};
+    std::chrono::steady_clock::time_point last_user_activity{};
     bool vr_mode_enabled{};
     bool vr_mode_enabled_3d{};
     bool lcd_backlight_off_enabled{};

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -40,7 +41,7 @@ using VirtualButton = InputCommon::VirtualGamepad::VirtualButton;
 constexpr std::size_t PlayerPorts[] = {0, 8};
 
 constexpr int DefaultPressMs = 100;
-// am/button_poller.cpp: short press < 400 ms, long press >= 800 ms.
+// am/button_poller.cpp: short press < 400 ms, long press >= 800 ms (500 ms in a HOME session).
 constexpr int HomeShortMs = 100;
 constexpr int HomeLongMs = 1200;
 
@@ -72,12 +73,21 @@ std::optional<VirtualButton> ParseButton(std::string_view name) {
     return std::nullopt;
 }
 
-// Emulated USB keyboard timing: hid samples the keyboard every 8 ms (resource_manager.cpp).
-constexpr int KeyHoldMs = 40;
-constexpr int KeyGapMs = 40;
+// Emulated USB keyboard timing. hid samples the keyboard every 8 ms, but the firmware's keyboard
+// reader looks at the shared memory once per frame (30 fps in HOME at worst, and frames stretch
+// under load), so a key must be held, and released, for several frames to be seen: a shorter hold
+// drops the key, a shorter gap after a release merges two presses of the same key into one.
+// `key-timing <hold> <gap>` changes them at run time.
+std::atomic<int> KeyHoldMs{100};
+std::atomic<int> KeyGapMs{100};
 
-/// One key on a US keyboard: its USB usage (Settings::NativeKeyboard::Keys), whether it needs
-/// Shift, and the Qt key for Eden's Qt keyboard dialog.
+/// The guest's keyboard layout (set:sys GetKeyboardLayout): which character a key position makes.
+/// `layout <us|uk>` sets it; drive.sh sends the run's own setting before it types.
+enum class KeyLayout { Us, Uk };
+std::atomic<KeyLayout> CurrentLayout{KeyLayout::Us};
+
+/// One key: its USB usage (Settings::NativeKeyboard::Keys) in the current layout, whether it needs
+/// Shift, and the Qt key for Eden's Qt keyboard dialog (which takes characters, not positions).
 struct KeyStroke {
     int usage;
     bool shift;
@@ -102,6 +112,20 @@ std::optional<KeyStroke> StrokeFor(char c) {
         int usage;
         bool shift;
     };
+    // Where UK differs from US among printable ASCII: '"' and '@' swap places, '#' and '~' are on
+    // the extra key left of Return (usage 0x32), '\\' and '|' on the extra key right of left Shift
+    // (usage 0x64).
+    static constexpr Entry UkTable[] = {
+        {'"', K::N2, true},     {'@', K::Quote, true},        {'#', K::Tilde, false},
+        {'~', K::Tilde, true},  {'\\', K::Key102, false},     {'|', K::Key102, true},
+    };
+    if (CurrentLayout.load() == KeyLayout::Uk) {
+        for (const auto& entry : UkTable) {
+            if (entry.c == c) {
+                return KeyStroke{entry.usage, entry.shift, static_cast<int>(c), text};
+            }
+        }
+    }
     static constexpr Entry Table[] = {
         {'0', K::N0, false},           {' ', K::Space, false},       {'!', K::N1, true},
         {'@', K::N2, true},            {'#', K::N3, true},           {'$', K::N4, true},
@@ -293,18 +317,21 @@ void Strike(InputCommon::Keyboard& keyboard, QWidget* dialog, const KeyStroke& k
         return;
     }
     // The emulated USB keyboard: Shift down first, as a person types.
+    const auto hold = std::chrono::milliseconds(KeyHoldMs.load());
+    const auto gap = std::chrono::milliseconds(KeyGapMs.load());
     if (key.shift) {
         keyboard.SetKeyboardModifiers(1 << Settings::NativeKeyboard::LeftShift);
-        std::this_thread::sleep_for(std::chrono::milliseconds(KeyGapMs));
+        std::this_thread::sleep_for(gap);
     }
     keyboard.PressKeyboardKey(key.usage);
-    std::this_thread::sleep_for(std::chrono::milliseconds(KeyHoldMs));
+    std::this_thread::sleep_for(hold);
     keyboard.ReleaseKeyboardKey(key.usage);
     if (key.shift) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(KeyGapMs));
+        std::this_thread::sleep_for(gap);
         keyboard.SetKeyboardModifiers(0);
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(KeyGapMs));
+    // Released for a whole gap before anything else is pressed, so a repeated key is two presses.
+    std::this_thread::sleep_for(gap);
 }
 
 } // namespace
@@ -355,8 +382,8 @@ void HarborControl::Execute(const std::string& line) {
         }
         LOG_INFO(Frontend, "harbor-control: type-line ({} chars)", text->size());
         if (!TypeText(*text)) {
-            LOG_WARNING(Frontend, "harbor-control: type-line: a character has no US keyboard "
-                                  "key; nothing typed");
+            LOG_WARNING(Frontend, "harbor-control: type-line: a character has no key on the "
+                                  "keyboard layout; nothing typed");
         }
         return;
     }
@@ -411,8 +438,13 @@ void HarborControl::Execute(const std::string& line) {
     } else if (cmd == "capture") {
         PressFor(static_cast<int>(VirtualButton::ButtonCapture), HomeShortMs);
     } else if (cmd == "power") {
-        LOG_WARNING(Frontend, "harbor-control: power is unsupported: no power button path in this "
-                              "build (am/button_poller.cpp has none)");
+        if (hooks.power) {
+            hooks.power();
+        }
+    } else if (cmd == "terminate") {
+        if (hooks.terminate) {
+            hooks.terminate();
+        }
     } else if (cmd == "screenshot") {
         if (words.size() < 2 || !hooks.screenshot) {
             LOG_WARNING(Frontend, "harbor-control: usage: screenshot <png path>");
@@ -441,13 +473,38 @@ void HarborControl::Execute(const std::string& line) {
         const auto start = line.find_first_not_of(" \t", line.find("type") + 4);
         const std::string text = start == std::string::npos ? std::string{} : line.substr(start);
         if (!TypeText(text)) {
-            LOG_WARNING(Frontend, "harbor-control: type: a character has no US keyboard key; "
-                                  "nothing typed");
+            LOG_WARNING(Frontend, "harbor-control: type: a character has no key on the "
+                                  "keyboard layout; nothing typed");
+        }
+    } else if (cmd == "layout") {
+        // layout <us|uk>, or the set:sys KeyboardLayout number (1 = English US, 3 = English UK).
+        const std::string name = words.size() > 1 ? words[1] : std::string{};
+        if (name == "us" || name == "1") {
+            CurrentLayout = KeyLayout::Us;
+        } else if (name == "uk" || name == "3") {
+            CurrentLayout = KeyLayout::Uk;
+        } else {
+            LOG_WARNING(Frontend, "harbor-control: layout: supported layouts are us (1) and uk (3); "
+                                  "unchanged");
+        }
+    } else if (cmd == "key-timing") {
+        const int hold = words.size() > 1 ? std::atoi(words[1].c_str()) : 0;
+        const int gap = words.size() > 2 ? std::atoi(words[2].c_str()) : 0;
+        if (hold < 8 || gap < 8) {
+            LOG_WARNING(Frontend, "harbor-control: usage: key-timing <hold ms> <gap ms> (each >= 8)");
+        } else {
+            KeyHoldMs = hold;
+            KeyGapMs = gap;
         }
     } else if (cmd == "key") {
         if (words.size() < 2 || !TypeKey(words[1])) {
             LOG_WARNING(Frontend, "harbor-control: usage: key <Enter|Backspace|Tab|Escape|Space|"
                                   "Up|Down|Left|Right|Delete|Home|End>");
+        }
+    } else if (cmd == "dock") {
+        if (hooks.dock) {
+            QMetaObject::invokeMethod(gui_context, [this] { hooks.dock(); },
+                                      Qt::BlockingQueuedConnection);
         }
     } else if (cmd == "detach" || cmd == "attach") {
         if (hooks.joycons) {

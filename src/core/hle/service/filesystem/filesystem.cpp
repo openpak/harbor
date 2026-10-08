@@ -23,6 +23,9 @@
 #include "core/file_sys/sdmc_factory.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/file_sys/vfs/vfs_offset.h"
+#include "core/file_sys/vfs/vfs_vector.h"
+#include "core/harbor_calibration/calibration.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp/fsp_ldr.h"
 #include "core/hle/service/filesystem/fsp/fsp_pr.h"
@@ -430,6 +433,19 @@ Result FileSystemController::OpenBISPartitionStorage(
     FileSys::VirtualFile* out_bis_partition_storage, FileSys::BisPartitionId id) const {
     LOG_TRACE(Service_FS, "Opening BIS Partition Storage with id={:08X}", id);
 
+    // A HOME session is a console of its own: its calibration partition is this NAND's
+    // calibration, never a dumped PRODINFO of the user's real console.
+    if (id == FileSys::BisPartitionId::CalibrationBinary &&
+        system.GetAppletManager().IsHomeSession()) {
+        const auto binary = Harbor::Calibration::Get().Binary();
+        if (binary.empty()) {
+            return FileSys::ResultTargetNotFound;
+        }
+        *out_bis_partition_storage = std::make_shared<FileSys::VectorVfsFile>(
+            std::vector<u8>(binary.begin(), binary.end()), "PRODINFO");
+        return ResultSuccess;
+    }
+
     if (bis_factory == nullptr) {
         return FileSys::ResultTargetNotFound;
     }
@@ -764,6 +780,15 @@ void FileSystemController::CreateFactories(FileSys::VfsFilesystem& vfs, bool ove
 
         for (const auto& dir_path : Settings::values.external_content_dirs) {
             if (!dir_path.empty()) {
+#ifndef __ANDROID__
+                // A folder that has gone is logged and left out; the others still load. (Android
+                // folders can be content URIs, which only the VFS resolves.)
+                if (!Common::FS::IsDir(dir_path)) {
+                    LOG_WARNING(Service_FS, "External content: folder not found or not readable: {}",
+                                dir_path);
+                    continue;
+                }
+#endif
                 LOG_DEBUG(Service_FS, "Attempting to open directory: {}", dir_path);
                 auto dir = vfs.OpenDirectory(dir_path, FileSys::OpenMode::Read);
                 if (dir != nullptr) {

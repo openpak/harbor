@@ -70,6 +70,8 @@ import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborPanelInput
+import org.yuzu.yuzu_emu.harbor.HarborTheme
 import org.yuzu.yuzu_emu.databinding.DialogOverlayAdjustBinding
 import org.yuzu.yuzu_emu.databinding.FragmentEmulationBinding
 import org.yuzu.yuzu_emu.dialogs.QuickSettings
@@ -703,7 +705,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             // The console's touch controls are on (a controller hides them while it is connected,
             // a touch brings them back), and the stats text shows only with the menu's Show FPS:
             // whatever an earlier session or Eden's defaults saved.
-            BooleanSetting.SHOW_INPUT_OVERLAY.setBoolean(true)
+            BooleanSetting.SHOW_INPUT_OVERLAY.setBoolean(!HarborConsole.padHidden)
             BooleanSetting.SHOW_PERFORMANCE_OVERLAY.setBoolean(HarborConsole.showFps)
         }
         updateQuickOverlayMenuEntry(BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean())
@@ -1566,6 +1568,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
     @SuppressLint("DefaultLocale")
     private fun updateShowStatsOverlay() {
+        if (HarborConsole.active) {
+            harborUpdateFpsReadout()
+            return
+        }
         val showPerfOverlay = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
         binding.showStatsOverlayText.apply {
             setTextColor(
@@ -1694,8 +1700,45 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }
     }
 
+    /**
+     * Harbor console mode: the menu's Show FPS is one small top-left line, "N FPS · speed N%",
+     * refreshed twice a second and absent while no console runs. Behaviour follows the Ryujinx
+     * Harbor (MIT-licensed Ryujinx base), AndroidHarborPlatform.cs; Eden has no FIFO busy figure, so
+     * the emulation speed stands in for it.
+     */
+    private fun harborUpdateFpsReadout() {
+        perfStatsRunnable?.let { perfStatsUpdateHandler.removeCallbacks(it) }
+        val readout = binding.showStatsOverlayText
+        if (!BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()) {
+            readout.setVisible(false)
+            return
+        }
+        readout.setTextColor(android.graphics.Color.WHITE)
+        readout.setShadowLayer(4f, 0f, 0f, android.graphics.Color.BLACK)
+        readout.setBackgroundResource(0)
+        readout.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+        perfStatsUpdater = {
+            val b = _binding
+            if (b != null) {
+                val running = emulationViewModel.emulationStarted.value &&
+                    !emulationViewModel.isEmulationStopping.value && NativeLibrary.isRunning()
+                if (running) {
+                    val stats = NativeLibrary.getPerfStats()
+                    b.showStatsOverlayText.text = String.format(
+                        java.util.Locale.ROOT, "%.0f FPS · speed %.0f%%", stats[1], stats[3] * 100.0
+                    )
+                }
+                b.showStatsOverlayText.setVisible(running)
+                perfStatsUpdateHandler.postDelayed(perfStatsRunnable!!, HARBOR_FPS_REFRESH_MS)
+            }
+        }
+        perfStatsRunnable = Runnable { perfStatsUpdater?.invoke() }
+        perfStatsUpdateHandler.post(perfStatsRunnable!!)
+    }
+
     private fun updateStatsPosition(position: Int) {
-        updateOverlayPosition(binding.showStatsOverlayText, position)
+        // Harbor console mode: the readout sits top-left.
+        updateOverlayPosition(binding.showStatsOverlayText, if (HarborConsole.active) 0 else position)
     }
 
     private fun updateSocPosition(position: Int) {
@@ -1753,9 +1796,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     private fun updateSocOverlay() {
-        // Harbor console mode: the device/driver line belongs to Show FPS too.
-        val showSOCOverlay = BooleanSetting.SHOW_SOC_OVERLAY.getBoolean() &&
-            (!HarborConsole.active || BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean())
+        // Harbor console mode: Show FPS is one line (harborUpdateFpsReadout); no device/driver line.
+        val showSOCOverlay = BooleanSetting.SHOW_SOC_OVERLAY.getBoolean() && !HarborConsole.active
         binding.showSocOverlayText.apply {
             setTextColor(
                 MaterialColors.getColor(
@@ -2253,7 +2295,16 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             inputOpacityValue.text = "${inputOpacitySlider.value.toInt()}%"
         }
 
-        MaterialAlertDialogBuilder(requireContext())
+        if (HarborConsole.active) {
+            // Harbor: the controls never fade below 20 % opacity by choice.
+            adjustBinding.inputOpacitySlider.valueFrom = HARBOR_MIN_OPACITY
+            adjustBinding.inputOpacitySlider.value =
+                adjustBinding.inputOpacitySlider.value.coerceAtLeast(HARBOR_MIN_OPACITY)
+            adjustBinding.inputOpacityValue.text = "${adjustBinding.inputOpacitySlider.value.toInt()}%"
+        }
+        val adjustDialog = MaterialAlertDialogBuilder(
+            if (HarborConsole.active) HarborTheme.dialogContext(requireActivity()) else requireContext()
+        )
             .setTitle(R.string.emulation_control_adjust)
             .setView(adjustBinding.root)
             .setPositiveButton(android.R.string.ok) { _: DialogInterface?, _: Int ->
@@ -2265,6 +2316,40 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 binding.surfaceInputOverlay.resetIndividualControlScale()
             }
             .show()
+        if (HarborConsole.active) {
+            HarborPanelInput.attach(adjustDialog)
+        }
+    }
+
+    /**
+     * Harbor menu, Touch controls: hidden by choice (kept across boots) or shown, the layout edited
+     * (drag a control; tap one to size it alone), size and opacity of all, and reset. Behaviour
+     * follows the Ryujinx Harbor (MIT-licensed Ryujinx base), PadOverlay.cs edit tools.
+     */
+    fun harborSetControlsHidden(hidden: Boolean) {
+        if (!isAdded || _binding == null) return
+        HarborConsole.padHidden = hidden
+        overlayHiddenByPhysicalController = false
+        toggleOverlay(!hidden && !hasPhysicalControllerConnected)
+    }
+
+    fun harborEditControls() {
+        if (!isAdded || _binding == null) return
+        toggleOverlay(true)
+        binding.surfaceInputOverlay.requestFocus()
+        startConfiguringControls()
+    }
+
+    fun harborAdjustControls() {
+        if (!isAdded || _binding == null) return
+        toggleOverlay(true)
+        adjustOverlay()
+    }
+
+    fun harborResetControls() {
+        if (!isAdded || _binding == null) return
+        resetInputOverlay()
+        NativeConfig.saveGlobalConfig()
     }
 
     private fun setControlScale(scale: Int) {
@@ -2525,6 +2610,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     companion object {
+        private const val HARBOR_FPS_REFRESH_MS = 500L
+        private const val HARBOR_MIN_OPACITY = 20f
         private val AMIIBO_MIME_TYPES =
             arrayOf("application/octet-stream", "application/x-binary", "*/*")
         private val perfStatsUpdateHandler = Handler(Looper.myLooper()!!)
@@ -2551,14 +2638,16 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         if (binding.surfaceInputOverlay.isGamelessMode()) return
         // Harbor: a touch brings back the touch controls a controller hid (on connecting or on its
         // input); the controller's next input hides them again.
-        if (HarborConsole.active && !isLongTap && !BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean() &&
+        if (HarborConsole.active && !isLongTap && !HarborConsole.padHidden &&
+            !BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean() &&
             (overlayHiddenByPhysicalController || wasInputOverlayAutoHidden)
         ) {
             overlayHiddenByPhysicalController = false
             toggleOverlay(true)
             controllerInputReceived = false
         }
-        if (!BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
+        // Harbor: the controls fade (InputOverlay) instead of Eden's auto-hide.
+        if (HarborConsole.active || !BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
         // failsafe
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         if (autoHideSeconds == 0) {
@@ -2579,7 +2668,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         val autoHideEnabled = BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()
         val showInputOverlay = BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()
-        if (autoHideEnabled && showInputOverlay) {
+        if (autoHideEnabled && showInputOverlay && !HarborConsole.active) {
             toggleOverlay(true)
             startOverlayAutoHideTimer(autoHideSeconds)
         }
@@ -2655,7 +2744,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             // Hidden while a controller is connected, back when the last one goes.
             overlayHiddenByPhysicalController = hasConnectedControllers
             wasInputOverlayAutoHidden = false
-            toggleOverlay(!hasConnectedControllers)
+            toggleOverlay(!hasConnectedControllers && !HarborConsole.padHidden)
             return
         }
 

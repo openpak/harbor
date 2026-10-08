@@ -65,10 +65,20 @@ public:
 public:
     void OnOperationModeChanged();
     void OnExitRequested();
+
+    // HOME session shutdown sequence (Turn Off, Restart, the host stopping the console), as am
+    // ends applets on a console's power off: every applet gets Exit, the ones still running after
+    // ShutdownExitTimeout are terminated, and once none is left the system exits.
+    static constexpr std::chrono::milliseconds ShutdownExitTimeout{2000};
+    void RequestShutdownSequence();
     void OnHomeButtonPressed(ButtonPressDuration type);
     void OnSystemButtonPress(SystemButtonType type);
     void OnCaptureButtonPressed(ButtonPressDuration type) {}
     void OnPowerButtonPressed(ButtonPressDuration type);
+
+    // HOME session: terminate the running application on the window system's thread (the host's
+    // force-terminate key). Ignored when no application is running.
+    void RequestForceTerminateApplication();
 
     // HOME session: the lock behind every reader and writer accessor of one button.
     std::shared_ptr<LockState> GetLockState(u32 button_type);
@@ -92,6 +102,8 @@ private:
     void UpdateCurrentApplicationLocked();
     void NotifyApplicationChangedIfNeeded();
     void PruneTerminatedAppletsLocked();
+    void UpdateShutdownSequenceLocked();
+    void ForceTerminateApplicationLocked();
     bool RestartAppletProcessLocked(Applet* applet);
     bool LockHomeMenuIntoForegroundLocked();
     void TerminateChildAppletsLocked(Applet* applet);
@@ -133,7 +145,16 @@ private:
     std::map<u64, std::shared_ptr<Applet>> m_applets{};
     std::optional<u64> m_pending_application_notification{};
     u64 m_logged_foreground_pid{};
-    std::atomic<s64> m_home_button_long_press_ms{800};
+    // HOME session default until the HOME menu sets its own (IGlobalStateController 12).
+    std::atomic<s64> m_home_button_long_press_ms{500};
+    std::atomic<bool> m_force_terminate_requested{};
+
+    // Shutdown sequence state (under m_lock).
+    enum class ShutdownStage { None, Requested, WaitingForExit, Terminating, Ended };
+    ShutdownStage m_shutdown_stage{ShutdownStage::None};
+    std::chrono::steady_clock::time_point m_shutdown_deadline{};
+    std::atomic<bool> m_shutdown_timed_out{};
+    std::shared_ptr<Core::Timing::EventType> m_shutdown_event{};
     std::map<u32, std::shared_ptr<LockState>> m_lock_states{};
 
     // Callers whose ChangeIntoForeground waits for a completed library applet's accessor to close.

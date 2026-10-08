@@ -1,0 +1,45 @@
+// SPDX-FileCopyrightText: 2026 tobagin
+// SPDX-License-Identifier: AGPL-3.0-only
+
+// The desktop console's host pieces: its own preferences, the letterbox colour, the automatic
+// resolution scale and the crash-report dialogs.
+
+#pragma once
+
+#include <array>
+
+#include "common/common_types.h"
+#include "common/settings_enums.h"
+
+class QWidget;
+
+namespace Core {
+class System;
+}
+
+namespace HarborDesktop {
+
+/// The desktop console's preferences, kept in <config>/harbor-desktop.ini (not Eden's config).
+/// Automatic resolution is on unless turned off here (the Harbor menu's toggle, when it has one).
+bool AutoResolution();
+void SetAutoResolution(bool enabled);
+
+/// The render scale for a picture shown in a window of `pixel_width` x `pixel_height` device
+/// pixels: the picture's height over what the guest draws (1080 docked, 720 handheld), in steps
+/// of 0.5 from 1 to 4, rounded up to a scale Eden has. Behaviour follows the Ryujinx Harbor
+/// (MIT-licensed Ryujinx base).
+Settings::ResolutionSetup AutoResolutionFor(int pixel_width, int pixel_height, bool docked);
+
+/// The bars around the picture in a window that is not 16:9: HOME's background (Basic White
+/// 0xEBEBEB or Basic Black 0x2D2D2D) while HOME or an applet is in front, black behind a title.
+/// Empty outside a HOME session or before set:sys runs. Behaviour follows the Ryujinx Harbor
+/// (MIT-licensed Ryujinx base).
+std::array<u8, 3> LetterboxColour(Core::System& system, bool* known);
+
+/// First console start: whether to keep crash reports on this computer (off until accepted).
+void AskCrashConsent(QWidget* parent);
+
+/// The newest crash report not offered yet, if any: view, save a copy, or delete it.
+void OfferLastCrashReport(QWidget* parent);
+
+} // namespace HarborDesktop

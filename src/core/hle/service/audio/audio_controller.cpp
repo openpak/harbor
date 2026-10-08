@@ -8,9 +8,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "audio_core/audio_core.h"
+#include "audio_core/sink/sink_stream.h"
 #include "core/hle/service/audio/audio_controller.h"
 #include "core/hle/service/audio/audio_out_manager.h"
 #include "core/core.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/set/system_settings_server.h"
@@ -88,6 +90,9 @@ IAudioController::IAudioController(Core::System& system_)
     // clang-format on
 
     RegisterHandlers(functions);
+
+    // A new session starts at the console's full volume; audctl lowers it in a HOME session.
+    AudioCore::Sink::SetConsoleOutputGain(1.0f);
 
     m_set_sys =
         system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", true);
@@ -219,12 +224,16 @@ Result IAudioController::IsSpeakerAutoMuteEnabled(Out<bool> out_is_speaker_auto_
 Result IAudioController::AcquireTargetNotification(
     OutCopyHandle<Kernel::KReadableEvent> out_notification_event) {
     LOG_WARNING(Service_AM, "(STUBBED) called");
+    // qlaunch's first audctl calls at boot: the console's stored volume applies from here, as the
+    // audio sysmodule applies it at its own start.
+    UseConsoleGain();
 
     *out_notification_event = &notification_event->GetReadableEvent();
     R_SUCCEED();
 }
 Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_audio_controller) {
     LOG_DEBUG(Audio, "Creating duplicate audio controller interface");
+    UseConsoleGain();
 
     // Return a new reference to this controller instance
     *out_audio_controller = std::static_pointer_cast<IAudioController>(shared_from_this());
@@ -232,8 +241,90 @@ Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_au
     R_SUCCEED();
 }
 
+// In a HOME session HOME's volume slider sets the active target's volume (0-15) and mute, and that
+// is what the console hears: a gain after the mix, linear in the step and 0 when muted, apart from
+// the host's own volume. Outside a HOME session Eden's stock path (the host volume mapped onto the
+// sink and audout volumes) applies unchanged.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), AudioController.cs.
+bool IAudioController::UseConsoleGain() {
+    if (!m_console_gain) {
+        m_console_gain = system.GetAppletManager().IsHomeSession();
+        if (*m_console_gain) {
+            // The constructor seeded the targets and the sink from the host's volume: a console
+            // starts at the volume its audio sysmodule stored in set:sys (full and unmuted on a
+            // NAND that never stored one), and the host's volume applies on its own.
+            m_target_volumes.fill(15);
+            m_target_muted.fill(false);
+            RestoreStoredVolume(Set::AudioOutputModeTarget::Speaker);
+            RestoreStoredVolume(Set::AudioOutputModeTarget::Headphone);
+            try {
+                auto& sink = system.AudioCore().GetOutputSink();
+                sink.SetSystemVolume(1.0f);
+                sink.SetDeviceVolume(1.0f);
+            } catch (...) {
+                LOG_WARNING(Audio, "Failed to reset the sink volume for the console volume");
+            }
+            ApplyConsoleGain();
+        }
+    }
+    return *m_console_gain;
+}
+
+// The set:sys record of an output's volume (AudioVolumeTarget), for the targets that have one.
+static std::optional<Set::AudioVolumeTarget> VolumeRecordFor(Set::AudioOutputModeTarget target) {
+    switch (target) {
+    case Set::AudioOutputModeTarget::Speaker:
+        return Set::AudioVolumeTarget::Speaker;
+    case Set::AudioOutputModeTarget::Headphone:
+        return Set::AudioVolumeTarget::Headphone;
+    default:
+        return std::nullopt;
+    }
+}
+
+void IAudioController::RestoreStoredVolume(Set::AudioOutputModeTarget target) {
+    const auto record = VolumeRecordFor(target);
+    if (!record || !m_set_sys) {
+        return;
+    }
+    const auto stored = m_set_sys->GetStoredAudioVolume(*record);
+    if (!stored) {
+        return;
+    }
+    const auto idx = static_cast<size_t>(target);
+    m_target_volumes[idx] = std::clamp<s32>(stored->volume, 0, 15);
+    m_target_muted[idx] = (stored->flags & 1) != 0;
+    LOG_INFO(Audio, "audctl: target {} restored to volume {}/15{}", static_cast<u32>(target),
+             m_target_volumes[idx], m_target_muted[idx] ? ", muted" : "");
+}
+
+void IAudioController::StoreVolume(Set::AudioOutputModeTarget target) {
+    const auto record = VolumeRecordFor(target);
+    if (!record || !m_set_sys) {
+        return;
+    }
+    const auto idx = static_cast<size_t>(target);
+    Set::AudioVolume volume{};
+    if (const auto stored = m_set_sys->GetStoredAudioVolume(*record)) {
+        volume.flags = stored->flags;
+    }
+    volume.flags = (volume.flags & ~1u) | (m_target_muted[idx] ? 1u : 0u);
+    volume.volume = static_cast<u8>(m_target_volumes[idx]);
+    (void)m_set_sys->SetAudioVolume(volume, *record);
+}
+
+void IAudioController::ApplyConsoleGain() {
+    const auto idx = static_cast<size_t>(m_active_target);
+    const bool muted = m_target_muted[idx];
+    const f32 gain = muted ? 0.0f : static_cast<f32>(m_target_volumes[idx]) / 15.0f;
+    AudioCore::Sink::SetConsoleOutputGain(gain);
+    LOG_INFO(Audio, "audctl: console output gain {:.3f} (volume {}/15{})", gain,
+             m_target_volumes[idx], muted ? ", muted" : "");
+}
+
 Result IAudioController::GetTargetVolume(Out<s32> out_target_volume, Set::AudioOutputModeTarget target) {
     LOG_DEBUG(Audio, "GetTargetVolume called, target={}", target);
+    UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_volumes.size()) {
@@ -247,6 +338,7 @@ Result IAudioController::GetTargetVolume(Out<s32> out_target_volume, Set::AudioO
 
 Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 target_volume) {
     LOG_INFO(Audio, "SetTargetVolume called, target={}, volume={}", target, target_volume);
+    const bool console_gain = UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_volumes.size()) {
@@ -261,6 +353,14 @@ Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 
     }
 
     m_target_volumes[idx] = target_volume;
+
+    if (console_gain) {
+        StoreVolume(target);
+        if (m_active_target == target) {
+            ApplyConsoleGain();
+        }
+        R_SUCCEED();
+    }
 
     if (m_active_target == target && !m_target_muted[idx]) {
         const float vol = static_cast<float>(target_volume) / 15.0f;
@@ -289,6 +389,7 @@ Result IAudioController::SetTargetVolume(Set::AudioOutputModeTarget target, s32 
 
 Result IAudioController::IsTargetMute(Out<bool> out_is_target_muted, Set::AudioOutputModeTarget target) {
     LOG_DEBUG(Audio, "called, target={}", target);
+    UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_muted.size()) {
@@ -302,6 +403,7 @@ Result IAudioController::IsTargetMute(Out<bool> out_is_target_muted, Set::AudioO
 
 Result IAudioController::SetTargetMute(bool is_muted, Set::AudioOutputModeTarget target) {
     LOG_INFO(Audio, "called, target={}, muted={}", target, is_muted);
+    const bool console_gain = UseConsoleGain();
 
     const auto idx = static_cast<size_t>(target);
     if (idx >= m_target_muted.size()) {
@@ -310,6 +412,14 @@ Result IAudioController::SetTargetMute(bool is_muted, Set::AudioOutputModeTarget
     }
 
     m_target_muted[idx] = is_muted;
+
+    if (console_gain) {
+        StoreVolume(target);
+        if (m_active_target == target) {
+            ApplyConsoleGain();
+        }
+        R_SUCCEED();
+    }
 
     if (m_active_target == target) {
         try {

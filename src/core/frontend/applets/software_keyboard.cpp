@@ -39,11 +39,11 @@ void DefaultSoftwareKeyboardApplet::InitializeKeyboard(
 
     LOG_INFO(Service_AM,
              "\nKeyboardInitializeParameters:"
-             "\nok_text={}"
-             "\nheader_text={}"
-             "\nsub_text={}"
-             "\nguide_text={}"
-             "\ninitial_text={}"
+             "\nok_text={} characters"
+             "\nheader_text={} characters"
+             "\nsub_text={} characters"
+             "\nguide_text={} characters"
+             "\ninitial_text={} characters"
              "\nmax_text_length={}"
              "\nmin_text_length={}"
              "\ninitial_cursor_position={}"
@@ -55,9 +55,10 @@ void DefaultSoftwareKeyboardApplet::InitializeKeyboard(
              "\nenable_backspace_button={}"
              "\nenable_return_button={}"
              "\ndisable_cancel_button={}",
-             Common::UTF16ToUTF8(parameters.ok_text), Common::UTF16ToUTF8(parameters.header_text),
-             Common::UTF16ToUTF8(parameters.sub_text), Common::UTF16ToUTF8(parameters.guide_text),
-             Common::UTF16ToUTF8(parameters.initial_text), parameters.max_text_length,
+             // The texts can hold names and what was typed before: their lengths only.
+             parameters.ok_text.size(), parameters.header_text.size(),
+             parameters.sub_text.size(), parameters.guide_text.size(),
+             parameters.initial_text.size(), parameters.max_text_length,
              parameters.min_text_length, parameters.initial_cursor_position, parameters.type,
              parameters.password_mode, parameters.text_draw_type, parameters.key_disable_flags.raw,
              parameters.use_blur_background, parameters.enable_backspace_button,
@@ -117,9 +118,9 @@ void DefaultSoftwareKeyboardApplet::InlineTextChanged(InlineTextParameters text_
 
     LOG_INFO(Service_AM,
              "\nInlineTextParameters:"
-             "\ninput_text={}"
+             "\ninput_text={} characters"
              "\ncursor_position={}",
-             Common::UTF16ToUTF8(text_parameters.input_text), text_parameters.cursor_position);
+             text_parameters.input_text.size(), text_parameters.cursor_position);
 
     submit_inline_callback(Service::AM::Frontend::SwkbdReplyType::ChangedString,
                            text_parameters.input_text, text_parameters.cursor_position);

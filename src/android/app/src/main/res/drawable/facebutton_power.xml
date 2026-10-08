@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 tobagin
+SPDX-License-Identifier: AGPL-3.0-only
+-->
+<!-- Harbor's power button for the touch controls: the HOME button's disc with a power glyph. -->
+<vector android:alpha="0.6" android:height="70.55dp"
+    android:viewportHeight="70.55" android:viewportWidth="70.55"
+    android:width="70.55dp" xmlns:aapt="http://schemas.android.com/aapt" xmlns:android="http://schemas.android.com/apk/res/android">
+    <path android:fillAlpha="0.75"
+        android:pathData="M35.27,35.27m-35.27,0a35.27,35.27 0,1 1,70.54 0a35.27,35.27 0,1 1,-70.54 0" android:strokeAlpha="0.75">
+        <aapt:attr name="android:fillColor">
+            <gradient android:centerX="35.27" android:centerY="35.27"
+                android:gradientRadius="35.27" android:type="radial">
+                <item android:color="#FFC3C4C5" android:offset="0.58"/>
+                <item android:color="#FFC6C6C6" android:offset="0.84"/>
+                <item android:color="#FFC7C7C7" android:offset="0.88"/>
+                <item android:color="#FFC2C2C2" android:offset="0.91"/>
+                <item android:color="#FFB5B5B5" android:offset="0.94"/>
+                <item android:color="#FF9E9E9E" android:offset="0.98"/>
+                <item android:color="#FF8F8F8F" android:offset="1"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:strokeAlpha="0.75" android:strokeColor="#FF000000" android:strokeWidth="4"
+        android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M42.77,22.28 A15,15 0,1 1,27.77 22.28" />
+    <path android:strokeAlpha="0.75" android:strokeColor="#FF000000" android:strokeWidth="4"
+        android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M35.27,17.5 L35.27,34" />
+</vector>

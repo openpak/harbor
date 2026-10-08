@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -344,19 +345,29 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
 
         if (!is_dir &&
             (HasSupportedFileExtension(physical_name) || IsExtractedNCAMain(physical_name))) {
+            // A broken or unreadable file is logged once (by the first pass) and left out; the
+            // library goes on with the rest.
+            const auto skip = [&](std::string_view why) {
+                if (target == ScanTarget::FillManualContentProvider) {
+                    LOG_WARNING(Frontend, "Game list: skipped {}: {}",
+                                Common::FS::PathToUTF8String(path.filename()), why);
+                }
+                return true;
+            };
+
             const auto file = vfs->OpenFile(physical_name, FileSys::OpenMode::Read);
             if (!file) {
-                return true;
+                return skip("not readable");
             }
 
             auto loader = Loader::GetLoader(system, file);
             if (!loader) {
-                return true;
+                return skip("not a known game format");
             }
 
             const auto file_type = loader->GetFileType();
             if (file_type == Loader::FileType::Unknown || file_type == Loader::FileType::Error) {
-                return true;
+                return skip("not a readable game file");
             }
 
             if (target == ScanTarget::PopulateGameList &&
@@ -461,6 +472,9 @@ void GameListWorker::run() {
             const QString qpath = QString::fromStdString(game_dir.path);
             if (QDir(qpath).exists()) {
                 watch_list.append(qpath);
+            } else {
+                LOG_WARNING(Frontend, "Game list: folder not found or not readable: {}",
+                            game_dir.path);
             }
 
             game_list_dir = new GameListDir(game_dir);
