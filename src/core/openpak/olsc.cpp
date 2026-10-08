@@ -4,6 +4,7 @@
 #include "core/openpak/olsc.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstring>
@@ -68,12 +69,22 @@ std::optional<std::uint64_t> Hex(const nlohmann::json& object, const char* key) 
     return std::stoull(text, nullptr, 16);
 }
 
+/// encoded_digest as the record check takes it: base64url without padding of exactly 32 bytes
+/// (43 characters; 0x1de410 marks the key present only then).
+bool IsDigest(const std::string& text) {
+    return text.size() == 43 && std::all_of(text.begin(), text.end(), [](char c) {
+               return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '-' || c == '_';
+           });
+}
+
 template <typename T>
 void Put(DataInfo& out, std::size_t offset, T value) {
     std::memcpy(out.data() + offset, &value, sizeof(value));
 }
 
 } // namespace
+
+static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item);
 
 std::optional<std::vector<ArchiveInfo>> ParseArchiveList(std::string_view body) {
     const auto json = nlohmann::json::parse(body, nullptr, false);
@@ -87,42 +98,76 @@ std::optional<std::vector<ArchiveInfo>> ParseArchiveList(std::string_view body) 
 
     std::vector<ArchiveInfo> archives;
     for (const auto& item : *list) {
-        if (!item.is_object()) {
-            continue;
+        auto archive = ParseArchive(item);
+        if (!archive) {
+            LOG_WARNING(Service_OLSC,
+                        "save data cloud: archive record {} is incomplete; the list is refused "
+                        "(2179-3201 on a console)",
+                        archives.size());
+            return std::nullopt;
         }
-        const auto id = Number(item, "id");
-        const auto application_id = Hex(item, "application_id");
-        const auto status = item.find("status");
-        if (!id || !application_id || status == item.end() || !status->is_string()) {
-            continue;
-        }
-        ArchiveInfo archive;
-        if (*status == "fixed") {
-            archive.status = StatusFixed;
-        } else if (*status == "uploading") {
-            archive.status = StatusUploading;
-        } else {
-            continue;
-        }
-        archive.id = *id;
-        archive.application_id = *application_id;
-        archive.nsa_id = Hex(item, "nsa_id").value_or(0);
-        archive.data_size = Number(item, "data_size").value_or(0);
-        archive.datatype = static_cast<std::uint8_t>(Number(item, "datatype").value_or(0));
-        archive.num_of_partitions =
-            static_cast<std::uint32_t>(Number(item, "num_of_partitions").value_or(0));
-        archive.launch_required_version =
-            static_cast<std::uint32_t>(Number(item, "launch_required_version").value_or(0));
-        archive.previous_id = Number(item, "previous_save_data_archive_id").value_or(0);
-        archive.series_id = Number(item, "series_id").value_or(0);
-        archive.saved_at = Number(item, "saved_at_as_unixtime").value_or(0);
-        archive.finished_at = Number(item, "finished_at_as_unixtime").value_or(0);
-        archive.platform_key_generation =
-            static_cast<std::uint8_t>(Number(item, "platform_key_generation").value_or(0));
-        archive.acd_index = static_cast<std::uint8_t>(Number(item, "acd_index").value_or(0));
-        archives.push_back(archive);
+        archives.push_back(*archive);
     }
     return archives;
+}
+
+static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item) {
+    if (!item.is_object()) {
+        return std::nullopt;
+    }
+    // Keys the record check (0x1dd580) requires; a JSON null counts only for the three the null
+    // handler (0x1dd760) accepts.
+    static constexpr std::array required{
+        "id",          "nsa_id",           "application_id",          "device_id",
+        "datatype",    "data_size",        "status",                  "device_serial",
+        "num_of_partitions", "launch_required_version", "series_id", "encoded_digest",
+        "saved_at_as_unixtime"};
+    static constexpr std::array nullable{"desc", "previous_save_data_archive_id",
+                                         "finished_at_as_unixtime"};
+    for (const char* key : required) {
+        const auto it = item.find(key);
+        if (it == item.end() || it->is_null()) {
+            return std::nullopt;
+        }
+    }
+    for (const char* key : nullable) {
+        if (!item.contains(key)) {
+            return std::nullopt;
+        }
+    }
+    const auto id = Number(item, "id");
+    const auto application_id = Hex(item, "application_id");
+    const auto status = item.find("status");
+    const auto digest = item.find("encoded_digest");
+    if (!id || !application_id || !status->is_string() || !digest->is_string() ||
+        !IsDigest(digest->get<std::string>())) {
+        return std::nullopt;
+    }
+    ArchiveInfo archive;
+    if (*status == "fixed") {
+        archive.status = StatusFixed;
+    } else if (*status == "uploading") {
+        archive.status = StatusUploading;
+    } else {
+        return std::nullopt;
+    }
+    archive.id = *id;
+    archive.application_id = *application_id;
+    archive.nsa_id = Hex(item, "nsa_id").value_or(0);
+    archive.data_size = Number(item, "data_size").value_or(0);
+    archive.datatype = static_cast<std::uint8_t>(Number(item, "datatype").value_or(0));
+    archive.num_of_partitions =
+        static_cast<std::uint32_t>(Number(item, "num_of_partitions").value_or(0));
+    archive.launch_required_version =
+        static_cast<std::uint32_t>(Number(item, "launch_required_version").value_or(0));
+    archive.previous_id = Number(item, "previous_save_data_archive_id").value_or(0);
+    archive.series_id = Number(item, "series_id").value_or(0);
+    archive.saved_at = Number(item, "saved_at_as_unixtime").value_or(0);
+    archive.finished_at = Number(item, "finished_at_as_unixtime").value_or(0);
+    archive.platform_key_generation =
+        static_cast<std::uint8_t>(Number(item, "platform_key_generation").value_or(0));
+    archive.acd_index = static_cast<std::uint8_t>(Number(item, "acd_index").value_or(0));
+    return archive;
 }
 
 DataInfo PackDataInfo(const ArchiveInfo& archive) {
@@ -363,7 +408,7 @@ std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid) {
     }
     auto archives = ParseArchiveList(response.body);
     if (!archives) {
-        LOG_WARNING(Service_OLSC, "save data cloud: the archive list reply is not a list");
+        LOG_WARNING(Service_OLSC, "save data cloud: archive list refused; the cached list stays");
         return std::nullopt;
     }
     LOG_INFO(Service_OLSC, "save data cloud: {} archive(s) listed", archives->size());

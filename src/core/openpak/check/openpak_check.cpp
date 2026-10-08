@@ -248,24 +248,51 @@ void FetchChecks() {
 void OlscChecks(const std::filesystem::path& dir) {
     namespace olsc = OpenPak::Olsc;
     std::puts("save data cloud");
-    // The saves service's list reply (internal/switchscsi archive JSON), trimmed.
-    const std::string body = R"({"save_data_archives":[
-        {"id":7,"nsa_id":"00000000000000aa","application_id":"0100A00000BB0000","data_size":4096,
-         "datatype":0,"status":"fixed","num_of_partitions":2,"launch_required_version":65536,
-         "previous_save_data_archive_id":null,"series_id":9,"saved_at_as_unixtime":1000,
-         "finished_at_as_unixtime":1010,"acd_index":3,"platform_key_generation":1},
-        {"id":8,"application_id":"0100A00000BB0000","data_size":8192,"status":"fixed",
-         "saved_at_as_unixtime":2000,"finished_at_as_unixtime":null},
-        {"id":9,"application_id":"0100A00000BB0000","status":"uploading","saved_at_as_unixtime":3000},
-        {"id":10,"application_id":"0100A00000BB0000","status":"hand_over"},
-        {"application_id":"0100A00000BB0000","status":"fixed"}]})";
+    // The saves service's list reply (internal/switchscsi archive JSON): complete records.
+    const auto record = [](int id, const char* status, int saved_at, const char* finished,
+                           const char* extra) {
+        return fmt::format(
+            R"({{"id":{},"nsa_id":"00000000000000aa","application_id":"0100A00000BB0000",)"
+            R"("device_id":"0000000000000001","device_serial":"XAW0","data_size":4096,)"
+            R"("datatype":0,"status":"{}","num_of_partitions":2,"launch_required_version":65536,)"
+            R"("previous_save_data_archive_id":null,"series_id":9,"desc":null,)"
+            R"("encoded_digest":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",)"
+            R"("saved_at_as_unixtime":{},"finished_at_as_unixtime":{}{}}})",
+            id, status, saved_at, finished, extra);
+    };
+    const auto wrap = [](const std::string& records) {
+        return R"({"save_data_archives":[)" + records + "]}";
+    };
+    const std::string body =
+        wrap(record(7, "fixed", 1000, "1010", R"(,"acd_index":3,"platform_key_generation":1)") +
+             "," + record(8, "fixed", 2000, "null", "") + "," +
+             record(9, "uploading", 3000, "null", ""));
     const auto list = olsc::ParseArchiveList(body);
-    Check(list && list->size() == 3, "an archive list keeps fixed and uploading, drops the rest");
+    Check(list && list->size() == 3, "a complete archive list is read");
     Check(list && (*list)[0].nsa_id == 0xaa && (*list)[0].application_id == 0x0100A00000BB0000 &&
-              (*list)[0].launch_required_version == 65536 && (*list)[0].acd_index == 3,
+              (*list)[0].launch_required_version == 65536 && (*list)[0].acd_index == 3 &&
+              (*list)[1].acd_index == 0 && (*list)[2].status == olsc::StatusUploading,
           "archive fields parse as the sysmodule reads them");
     Check(!olsc::ParseArchiveList("{}") && !olsc::ParseArchiveList("not json"),
           "a reply that is not a list is refused");
+    Check(olsc::ParseArchiveList(wrap("")) && olsc::ParseArchiveList(wrap(""))->empty(),
+          "an empty cloud reads as an empty list");
+    // A record the sysmodule's record check refuses fails the whole list (2179-3201), so a
+    // console keeps the cache it had: an empty cloud stays empty.
+    const std::string good = record(8, "fixed", 2000, "null", "");
+    std::string no_digest = good;
+    no_digest.replace(no_digest.find("AAAAAAAA"), 43, "");
+    std::string no_serial = good;
+    no_serial.replace(no_serial.find(R"("device_serial":"XAW0",)"), 23, "");
+    std::string null_size = good;
+    null_size.replace(null_size.find(R"("data_size":4096)"), 16, R"("data_size":null)");
+    Check(!olsc::ParseArchiveList(wrap(good + "," + no_digest)),
+          "an archive without a 32-byte digest refuses the whole list");
+    Check(!olsc::ParseArchiveList(wrap(no_serial + "," + good)),
+          "an archive missing a required key refuses the whole list");
+    Check(!olsc::ParseArchiveList(wrap(null_size)), "a null data_size is not accepted");
+    Check(!olsc::ParseArchiveList(wrap(record(10, "hand_over", 1, "null", ""))),
+          "an unknown status refuses the list");
     const auto latest = list ? olsc::LatestFor(*list, 0x0100A00000BB0000) : std::nullopt;
     Check(latest && latest->id == 8, "GetDataInfo answers the newest fixed archive");
     Check(list && !olsc::LatestFor(*list, 0x0100000000000001), "another title has no cloud data");

@@ -49,8 +49,13 @@ struct ArchiveInfo {
 inline constexpr std::uint8_t StatusFixed = 0;
 inline constexpr std::uint8_t StatusUploading = 2;
 
-/// A `{"save_data_archives": [...]}` reply. Entries the sysmodule's parser would refuse (no id,
-/// no application id, an unknown status) are left out. nullopt when the body is not that shape.
+/// A `{"save_data_archives": [...]}` reply, read as the 23.0.1 sysmodule reads it (parser
+/// 0x1dd360, record check 0x1dd580, list 0x1eaf30): every record needs every key but
+/// platform_key_generation and acd_index; only desc, previous_save_data_archive_id and
+/// finished_at_as_unixtime may be null (0x1dd760); status is "fixed" or "uploading";
+/// encoded_digest is base64url of exactly 32 bytes. One record that fails refuses the whole
+/// list (the record's parser stays open and the list ends in 2179-3201), so nullopt: the
+/// cached list stays as it was. nullopt too when the body is not that shape.
 std::optional<std::vector<ArchiveInfo>> ParseArchiveList(std::string_view body);
 
 /// IRemoteStorageController 27 GetDataInfo's 0x38 bytes for an archive:
