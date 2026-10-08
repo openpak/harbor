@@ -59,4 +59,25 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_driver_use_phone">Use the phone\'s own driver</string>
     <string name="harbor_driver_phone_warning">The phone\'s own driver may crash the HOME menu on this GPU. Harbor restarts with it; choose another driver from the Harbor menu if it does.</string>
     <string name="harbor_driver_downloading">Downloading the recommended driver…</string>
+    <string name="harbor_menu_backup">Back up console</string>
+    <string name="harbor_menu_restore">Restore console</string>
+    <string name="harbor_menu_new_console">Make this a new console</string>
+    <string name="harbor_backup_passphrase">The backup carries this console\'s device key, locked with a passphrase. Restoring it on any phone or computer needs this passphrase; Harbor never keeps it. At least 8 characters.</string>
+    <string name="harbor_backup_passphrase_again">The passphrase again</string>
+    <string name="harbor_backup_passphrase_short">The passphrase needs at least 8 characters.</string>
+    <string name="harbor_backup_passphrase_differs">The passphrases differ.</string>
+    <string name="harbor_backup_working">Backing up the console…</string>
+    <string name="harbor_backup_done">The console is backed up.</string>
+    <string name="harbor_backup_failed">The backup could not be written.</string>
+    <string name="harbor_restore_confirm">The backup replaces this console\'s system memory: its users, saves and settings. Continue?</string>
+    <string name="harbor_restore_working">Restoring the console…</string>
+    <string name="harbor_restore_not_backup">This is not a Harbor console backup.</string>
+    <string name="harbor_restore_failed">The console\'s system memory could not be replaced.</string>
+    <string name="harbor_restore_passphrase">The backup\'s passphrase</string>
+    <string name="harbor_restore_wrong">That passphrase does not open this backup.</string>
+    <string name="harbor_restore_locked">The console is restored, but its device key is still locked: restore the backup again with its passphrase, or make this a new console.</string>
+    <string name="harbor_restore_done">The console is restored.</string>
+    <string name="harbor_new_console_confirm">This console gets a new identity: a new serial number, device id, network addresses and keys. Its OpenPak sign-ins are dropped, so every user links their Nintendo Account again. Users, games and saves stay.\n\nMake this a new console?</string>
+    <string name="harbor_new_console_done">This is a new console. Link each user\'s Nintendo Account again in System Settings › Users.</string>
+    <string name="harbor_new_console_failed">No new identity could be made.</string>
 </resources>

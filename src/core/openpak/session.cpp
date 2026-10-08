@@ -1661,6 +1661,20 @@ void ForgetProfile(const std::string& uid) {
     Push::ForgetProfile(uid);
 }
 
+void ForgetAllProfiles() {
+    std::vector<std::string> uids;
+    {
+        State& state = Get();
+        std::lock_guard lock{state.mutex};
+        for (const auto& [uid, identity] : state.identities) {
+            uids.push_back(uid);
+        }
+    }
+    for (const auto& uid : uids) {
+        ForgetProfile(uid);
+    }
+}
+
 void GoOffline() {
     State& state = Get();
 

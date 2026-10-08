@@ -1,0 +1,218 @@
+// SPDX-FileCopyrightText: 2026 tobagin
+// SPDX-License-Identifier: AGPL-3.0-only
+
+#include <cstdlib>
+#include <filesystem>
+
+#include <QApplication>
+#include <QDateTime>
+#include <QFileDialog>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QMessageBox>
+#include <QProgressDialog>
+
+#include "common/fs/path_util.h"
+#include "common/logging.h"
+#include "core/harbor_calibration/calibration.h"
+#include "qt_common/util/compress.h"
+#include "yuzu/harbor_console_menu.h"
+
+namespace HarborConsoleMenu {
+
+namespace {
+
+constexpr int MinimumPassphrase = 8;
+
+// Test hook: HARBOR_CONSOLE_BACKUP_FILE=<path> answers the backup and restore file pickers.
+QString PickedFile() {
+    const char* env = std::getenv("HARBOR_CONSOLE_BACKUP_FILE");
+    return env != nullptr ? QString::fromUtf8(env) : QString{};
+}
+
+std::filesystem::path NandDir() {
+    return Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir);
+}
+
+QString Ask(QWidget* parent, const QString& title, const QString& label, bool* ok) {
+    return QInputDialog::getText(parent, title, label, QLineEdit::Password, QString{}, ok);
+}
+
+/// A progress dialog for a zip of the NAND, kept responsive from the copy's own callback.
+QtCommon::QtProgressCallback Progress(QProgressDialog& dialog) {
+    return [&dialog](std::size_t total, std::size_t done) {
+        dialog.setValue(total == 0 ? 0 : static_cast<int>(done * 100 / total));
+        QApplication::processEvents();
+        return !dialog.wasCanceled();
+    };
+}
+
+} // namespace
+
+void BackUp(QWidget* parent, const WhileStopped& while_stopped) {
+    const QString title = QObject::tr("Back up console");
+    bool ok = false;
+    const QString passphrase =
+        Ask(parent, title,
+            QObject::tr("The backup carries this console's device key, locked with a passphrase. "
+                        "Restoring it on any computer needs this passphrase; Harbor never "
+                        "keeps it.\n\nPassphrase (at least %1 characters):")
+                .arg(MinimumPassphrase),
+            &ok);
+    if (!ok) {
+        return;
+    }
+    if (passphrase.size() < MinimumPassphrase) {
+        QMessageBox::warning(parent, title,
+                             QObject::tr("The passphrase needs at least %1 characters.")
+                                 .arg(MinimumPassphrase));
+        return;
+    }
+    if (Ask(parent, title, QObject::tr("The passphrase again:"), &ok) != passphrase || !ok) {
+        if (ok) {
+            QMessageBox::warning(parent, title, QObject::tr("The passphrases differ."));
+        }
+        return;
+    }
+    QString target = PickedFile();
+    if (target.isEmpty()) {
+        target = QFileDialog::getSaveFileName(
+            parent, title,
+            QStringLiteral("harbor-console-%1.zip")
+                .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmm"))),
+            QObject::tr("Harbor console backup (*.zip)"));
+    }
+    if (target.isEmpty()) {
+        return;
+    }
+
+    bool done = false;
+    while_stopped([&] {
+        if (!Harbor::WriteDeviceKeyBackup(passphrase.toStdString())) {
+            return;
+        }
+        QProgressDialog progress(QObject::tr("Backing up the console..."), QObject::tr("Cancel"),
+                                 0, 100, parent);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.show();
+        done = QtCommon::Compress::compressDir(
+            target, QString::fromStdString(NandDir().string()),
+            QtCommon::Compress::Options(QtCommon::Compress::Options::Storage), Progress(progress));
+        Harbor::RemoveDeviceKeyBackup();
+    });
+    LOG_INFO(Frontend, "harbor: console backup {}", done ? "written" : "failed");
+    if (done) {
+        QMessageBox::information(parent, title, QObject::tr("The console is backed up."));
+    } else {
+        QMessageBox::critical(parent, title, QObject::tr("The backup could not be written."));
+    }
+}
+
+void Restore(QWidget* parent, const WhileStopped& while_stopped) {
+    const QString title = QObject::tr("Restore console");
+    QString source = PickedFile();
+    if (source.isEmpty()) {
+        source = QFileDialog::getOpenFileName(parent, title, QString{},
+                                              QObject::tr("Harbor console backup (*.zip)"));
+    }
+    if (source.isEmpty()) {
+        return;
+    }
+    if (QMessageBox::warning(parent, title,
+                             QObject::tr("The backup replaces this console's system memory: its "
+                                         "users, saves and settings. Continue?"),
+                             QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    QString outcome;
+    while_stopped([&] {
+        namespace fs = std::filesystem;
+        const fs::path nand = NandDir();
+        const fs::path incoming = fs::path{nand.string() + ".restore"};
+        const fs::path previous = fs::path{nand.string() + ".previous"};
+        std::error_code ec;
+        fs::remove_all(incoming, ec);
+        fs::create_directories(incoming, ec);
+        {
+            QProgressDialog progress(QObject::tr("Restoring the console..."),
+                                     QObject::tr("Cancel"), 0, 100, parent);
+            progress.setWindowModality(Qt::WindowModal);
+            progress.show();
+            const auto files = QtCommon::Compress::extractDir(
+                source, QString::fromStdString(incoming.string()), Progress(progress));
+            if (files.isEmpty() || !fs::exists(incoming / "calibration" / "prodinfo.bin")) {
+                fs::remove_all(incoming, ec);
+                outcome = QObject::tr("This is not a Harbor console backup.");
+                return;
+            }
+        }
+        fs::remove_all(previous, ec);
+        fs::rename(nand, previous, ec);
+        if (ec) {
+            fs::remove_all(incoming, ec);
+            outcome = QObject::tr("The console's system memory could not be replaced.");
+            return;
+        }
+        fs::rename(incoming, nand, ec);
+        if (ec) {
+            fs::rename(previous, nand, ec);
+            outcome = QObject::tr("The console's system memory could not be replaced.");
+            return;
+        }
+        fs::remove_all(previous, ec);
+        Harbor::Calibration::Reload();
+
+        // Its device key: back in this host's password store, or the console cannot prove
+        // itself.
+        while (Harbor::DeviceKeyRestorePending()) {
+            bool ok = false;
+            const QString passphrase = Ask(
+                parent, title, QObject::tr("The backup's passphrase:"), &ok);
+            if (!ok) {
+                outcome = QObject::tr("The console is restored, but its device key is still "
+                                      "locked: restore the backup again with its passphrase, or "
+                                      "make this a new console.");
+                return;
+            }
+            const auto result = Harbor::RestoreDeviceKey(passphrase.toStdString());
+            if (result == Harbor::RestoreResult::WrongPassphrase) {
+                QMessageBox::warning(parent, title, QObject::tr("That passphrase does not open "
+                                                                "this backup."));
+            } else if (result != Harbor::RestoreResult::Restored) {
+                outcome = QObject::tr("The device key could not be kept on this computer.");
+                return;
+            }
+        }
+        // A backup restored on the computer it came from: the key never left; the sealed copy
+        // goes either way.
+        Harbor::RemoveDeviceKeyBackup();
+        outcome = QObject::tr("The console is restored.");
+    });
+    LOG_INFO(Frontend, "harbor: console restore: {}", outcome.toStdString());
+    QMessageBox::information(parent, title, outcome);
+}
+
+void MakeNew(QWidget* parent, const WhileStopped& while_stopped) {
+    const QString title = QObject::tr("Make this a new console");
+    if (QMessageBox::warning(
+            parent, title,
+            QObject::tr("This console gets a new identity: a new serial number, device id, "
+                        "network addresses and keys. Its OpenPak sign-ins are dropped, so every "
+                        "user links their Nintendo Account again. Users, games and saves stay.\n\n"
+                        "Make this a new console?"),
+            QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+    bool made = false;
+    while_stopped([&] { made = Harbor::MakeNewConsole(); });
+    if (made) {
+        QMessageBox::information(parent, title,
+                                 QObject::tr("This is a new console. Link each user's Nintendo "
+                                             "Account again in System Settings > Users."));
+    } else {
+        QMessageBox::critical(parent, title, QObject::tr("No new identity could be made."));
+    }
+}
+
+} // namespace HarborConsoleMenu

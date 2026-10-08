@@ -52,6 +52,12 @@ void EraseSecret(std::string_view key);
 /// read (read the old key, write the new one, erase the old one), so nobody is signed out.
 void SetSecretNamespace(std::function<std::string()> resolve);
 
+/// The namespace secrets are kept under right now ("" when none).
+std::string CurrentSecretNamespace();
+
+/// Every entry kept under `ns` erased: a console that is retired drops its credentials.
+void EraseSecretNamespace(const std::string& ns);
+
 /// Host-wide entries outside any console's namespace: the console's own device key, which names
 /// the namespace and so cannot live inside it.
 std::optional<std::string> LoadHostSecret(std::string_view key);

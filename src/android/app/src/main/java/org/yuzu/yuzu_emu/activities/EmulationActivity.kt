@@ -462,6 +462,18 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             }
         }
 
+    /** Where a console backup goes, and the backup a restore reads (Harbor menu). */
+    val harborBackupTarget =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+            HarborConsole.backUpTo(this, uri)
+        }
+    val harborRestoreSource =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                HarborConsole.restoreFrom(this, uri)
+            }
+        }
+
     // Plus and Minus together open the Harbor menu, as Android back does, and never reach the guest:
     // a Plus or Minus press waits briefly for its partner before it is passed on.
     private var harborPendingPress: KeyEvent? = null

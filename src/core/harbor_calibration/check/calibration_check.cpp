@@ -199,6 +199,19 @@ int main() {
               !cal0::EccDevicePrivateKey(moved, key_a),
           "new key pairs: same serial, id and MAC; only the new device key opens them");
 
+    // A console backup's sealed device key: the right passphrase on the right console opens it.
+    const auto sealed = cal0::SealDeviceKey(key_a, cal0::DeviceId(a), "correct horse battery");
+    Check(!sealed.empty() &&
+              cal0::OpenDeviceKey(sealed, cal0::DeviceId(a), "correct horse battery") == key_a,
+          "sealed device key: opens with its passphrase on its console");
+    Check(!cal0::OpenDeviceKey(sealed, cal0::DeviceId(a), "wrong horse battery") &&
+              !cal0::OpenDeviceKey(sealed, cal0::DeviceId(b), "correct horse battery"),
+          "sealed device key: a wrong passphrase or another console opens nothing");
+    auto tampered = sealed;
+    tampered[40] ^= 0x01;
+    Check(!cal0::OpenDeviceKey(tampered, cal0::DeviceId(a), "correct horse battery"),
+          "sealed device key: a flipped byte opens nothing");
+
     // Every check notices a flipped byte.
     bool all_caught = true;
     for (const cal0::Block& block : cal0::AllBlocks()) {
