@@ -72,6 +72,7 @@ private:
         OutArray<ApplicationPlayStatistics, BufferAttr_HipcMapAlias> out_play_statistics,
         Common::UUID user_id, InArray<u64, BufferAttr_HipcMapAlias> application_ids);
     Result ExecuteProgram(ProgramSpecifyKind kind, u64 value);
+    Result ExecuteProgramInHomeSession(ProgramSpecifyKind kind, u64 value);
     Result ClearUserChannel();
     Result UnpopToUserChannel(SharedPointer<IStorage> storage);
     Result GetPreviousProgramIndex(Out<s32> out_previous_program_index);

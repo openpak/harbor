@@ -4,7 +4,15 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <array>
+#include <map>
+
 #include <openssl/evp.h>
+
+#include "common/fs/file.h"
+#include "common/fs/fs.h"
+#include "common/fs/path_util.h"
 
 #include "common/hex_util.h"
 #include "common/redact.h"
@@ -17,8 +25,10 @@
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/kernel/k_transfer_memory.h"
 #include "core/hle/result.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/service/application_functions.h"
 #include "core/hle/service/am/service/storage.h"
 #include "core/hle/service/cmif_serialization.h"
@@ -28,10 +38,97 @@
 #include "core/hle/service/ns/application_manager_interface.h"
 #include "core/hle/service/ns/service_getter_interface.h"
 #include "core/hle/service/sm/sm.h"
+#include "core/launch_timestamp_cache.h"
 
 namespace Service::AM {
 
 namespace {
+
+// pdm: a user that is not on the console (2178-0101).
+constexpr Result ResultPdmUserNotFound{ErrorModule::PDM, 101};
+// am: an id outside the caller's play log white list (2128-0500).
+constexpr Result ResultObjectInvalid{ErrorModule::AM, 500};
+
+// Seconds played per program, from the play time file the frontend keeps (u64 program id, u64
+// seconds per entry). Read only: the frontend is its one writer.
+std::map<u64, u64> ReadPlayTimes() {
+    std::map<u64, u64> play_times;
+    const auto path = Common::FS::GetEdenPath(Common::FS::EdenPath::PlayTimeDir) / "playtime.bin";
+    if (!Common::FS::Exists(path)) {
+        return play_times;
+    }
+    Common::FS::IOFile file{path, Common::FS::FileAccessMode::Read,
+                            Common::FS::FileType::BinaryFile};
+    if (!file.IsOpen()) {
+        return play_times;
+    }
+    std::vector<std::array<u64, 2>> entries(file.GetSize() / sizeof(std::array<u64, 2>));
+    if (file.ReadSpan<std::array<u64, 2>>(entries) != entries.size()) {
+        return play_times;
+    }
+    for (const auto& [program_id, seconds] : entries) {
+        if (program_id != 0) {
+            play_times[program_id] = seconds;
+        }
+    }
+    return play_times;
+}
+
+std::unique_ptr<FileSys::RawNACP> ReadControlProperty(Core::System& system, u64 program_id) {
+    std::vector<u8> nacp;
+    if (R_FAILED(system.GetARPManager().GetControlProperty(&nacp, program_id))) {
+        return nullptr;
+    }
+    auto raw = std::make_unique<FileSys::RawNACP>();
+    std::memcpy(raw.get(), nacp.data(), (std::min)(sizeof(*raw), nacp.size()));
+    return raw;
+}
+
+// What pdm:qry answers for the system (QueryApplicationPlayStatisticsForSystem), filtered by the
+// caller's play log capability as am does before it asks pdm: None answers the caller's own
+// title only, WhiteList refuses an id outside the list, All answers every id. Behaviour follows
+// the Ryujinx Harbor (MIT-licensed Ryujinx base), QueryPlayStatisticsManager.cs.
+Result QueryPlayStatistics(Core::System& system, u64 caller_program_id, s32& out_entries,
+                           std::span<ApplicationPlayStatistics> out_stats,
+                           std::span<const u64> application_ids) {
+    const auto nacp = ReadControlProperty(system, caller_program_id);
+    const auto capability =
+        nacp ? nacp->play_log_query_capability : FileSys::PlayLogQueryCapability::None;
+    const u64 own_id = FileSys::GetBaseTitleID(caller_program_id);
+
+    if (capability == FileSys::PlayLogQueryCapability::WhiteList) {
+        std::array<u64, 16> allowed{};
+        std::memcpy(allowed.data(), nacp->play_log_queryable_application_id.data(),
+                    sizeof(allowed));
+        for (const u64 id : application_ids) {
+            if (std::find(allowed.begin(), allowed.end(), id) == allowed.end()) {
+                LOG_INFO(Service_AM, "play statistics of {:016X} refused: not in the white list",
+                         id);
+                R_THROW(ResultObjectInvalid);
+            }
+        }
+    }
+
+    const auto play_times = ReadPlayTimes();
+    s32 written = 0;
+    for (const u64 id : application_ids) {
+        if (static_cast<size_t>(written) >= out_stats.size()) {
+            break;
+        }
+        if (capability == FileSys::PlayLogQueryCapability::None && id != own_id) {
+            continue;
+        }
+        out_stats[written++] = {
+            .application_id = id,
+            .play_time_ns = (play_times.contains(id) ? play_times.at(id) : 0) * 1'000'000'000ULL,
+            .launch_count = Core::LaunchTimestampCache::GetLaunchCount(id),
+        };
+    }
+    out_entries = written;
+    LOG_DEBUG(Service_AM, "play statistics: {} of {} ids answered (capability {})", written,
+              application_ids.size(), static_cast<u32>(capability));
+    R_SUCCEED();
+}
 
 FileSys::PatchManager::Metadata GetApplicationMetadata(Core::System& system, u64 program_id) {
     auto metadata = FileSys::PatchManager::GetMetadataFromBaseOrUpdate(system, program_id);
@@ -277,22 +374,53 @@ Result IApplicationFunctions::GetSaveDataSize(Out<u64> out_normal_size, Out<u64>
 Result IApplicationFunctions::CreateCacheStorage(Out<u32> out_target_media,
                                                  Out<u64> out_required_size, u16 index,
                                                  u64 normal_size, u64 journal_size) {
-    LOG_WARNING(Service_AM, "(STUBBED) called with index={} size={:#x} journal_size={:#x}", index,
-                normal_size, journal_size);
+    LOG_DEBUG(Service_AM, "called with index={} size={:#x} journal_size={:#x}", index,
+              normal_size, journal_size);
 
-    *out_target_media = 1; // Nand
+    // Within the title's cache storage limits (its control property), as am checks before it
+    // asks fs; the storage is made on the console's user storage.
+    const auto nacp = ReadControlProperty(system, m_applet->program_id);
+    if (nacp && (index > nacp->cache_storage_max_index ||
+                 normal_size + journal_size > nacp->cache_storage_data_and_journal_max_size)) {
+        LOG_UNKNOWN_CONTRACT(Service_AM,
+                             "IApplicationFunctions 27 index {} size {:#x}+{:#x} beyond the "
+                             "control property's limits (index {}, {:#x}); answered "
+                             "InvalidParameters",
+                             index, normal_size, journal_size, nacp->cache_storage_max_index,
+                             nacp->cache_storage_data_and_journal_max_size);
+        R_THROW(ResultInvalidParameters);
+    }
+
+    const auto attribute = FileSys::SaveDataAttribute::Make(
+        FileSys::GetBaseTitleID(m_applet->program_id), FileSys::SaveDataType::Cache, {}, 0, index,
+        FileSys::SaveDataRank::Primary);
+    auto controller = system.GetFileSystemController().OpenSaveDataController();
+    if (!controller->SaveDataExists(FileSys::SaveDataSpaceId::User, attribute)) {
+        FileSys::VirtualDir dir;
+        R_TRY(controller->CreateSaveData(&dir, FileSys::SaveDataSpaceId::User, attribute));
+    }
+
+    *out_target_media = 1; // CacheStorageTargetMedia::Nand
     *out_required_size = 0;
-
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::GetSaveDataSizeMax(Out<u64> out_max_normal_size,
                                                  Out<u64> out_max_journal_size) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-
-    *out_max_normal_size = 0xFFFFFFF;
-    *out_max_journal_size = 0xFFFFFFF;
-
+    // The account save data's maximum from the control property, never below its initial size.
+    const auto nacp = ReadControlProperty(system, m_applet->program_id);
+    if (nacp == nullptr) {
+        *out_max_normal_size = 0;
+        *out_max_journal_size = 0;
+        LOG_WARNING(Service_AM, "no control property for {:016X}", m_applet->program_id);
+        R_SUCCEED();
+    }
+    *out_max_normal_size = (std::max)(nacp->user_account_save_data_max_size,
+                                      nacp->user_account_save_data_size);
+    *out_max_journal_size = (std::max)(nacp->user_account_save_data_max_journal_size,
+                                       nacp->user_account_save_data_journal_size);
+    LOG_DEBUG(Service_AM, "called, max={:#x} journal={:#x}", *out_max_normal_size,
+              *out_max_journal_size);
     R_SUCCEED();
 }
 
@@ -313,7 +441,8 @@ Result IApplicationFunctions::GetCacheStorageMax(Out<u32> out_cache_storage_inde
 }
 
 Result IApplicationFunctions::BeginBlockingHomeButtonShortAndLongPressed(s64 unused) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // The window system holds HOME's short and long presses back from this application.
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->home_button_long_pressed_blocked = true;
@@ -323,7 +452,7 @@ Result IApplicationFunctions::BeginBlockingHomeButtonShortAndLongPressed(s64 unu
 }
 
 Result IApplicationFunctions::EndBlockingHomeButtonShortAndLongPressed() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->home_button_long_pressed_blocked = false;
@@ -333,23 +462,25 @@ Result IApplicationFunctions::EndBlockingHomeButtonShortAndLongPressed() {
 }
 
 Result IApplicationFunctions::BeginBlockingHomeButton(s64 timeout_ns) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, timeout_ns={}", timeout_ns);
+    // Short presses only, as am does (it sets the short flag and keeps the time); the block lasts
+    // until EndBlockingHomeButton. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+    // base). What the time changes on a console is not established.
+    LOG_UNKNOWN_CONTRACT(Service_AM,
+                         "IApplicationFunctions 32 BeginBlockingHomeButton time {} ns recorded, "
+                         "the block lasts until 33",
+                         timeout_ns);
 
     std::scoped_lock lk{m_applet->lock};
-    m_applet->home_button_long_pressed_blocked = true;
     m_applet->home_button_short_pressed_blocked = true;
-    m_applet->home_button_double_click_enabled = true;
 
     R_SUCCEED();
 }
 
 Result IApplicationFunctions::EndBlockingHomeButton() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
-    m_applet->home_button_long_pressed_blocked = false;
     m_applet->home_button_short_pressed_blocked = false;
-    m_applet->home_button_double_click_enabled = false;
 
     R_SUCCEED();
 }
@@ -443,28 +574,70 @@ Result IApplicationFunctions::QueryApplicationPlayStatistics(
     Out<s32> out_entries,
     OutArray<ApplicationPlayStatistics, BufferAttr_HipcMapAlias> out_play_statistics,
     InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
     *out_entries = 0;
-    R_SUCCEED();
+    R_RETURN(QueryPlayStatistics(system, m_applet->program_id, *out_entries,
+                                 {out_play_statistics.data(), out_play_statistics.size()},
+                                 {application_ids.data(), application_ids.size()}));
 }
 
 Result IApplicationFunctions::QueryApplicationPlayStatisticsByUid(
     Out<s32> out_entries,
     OutArray<ApplicationPlayStatistics, BufferAttr_HipcMapAlias> out_play_statistics,
     Common::UUID user_id, InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
     *out_entries = 0;
-    R_SUCCEED();
+    R_UNLESS(system.GetProfileManager().UserExists(user_id), ResultPdmUserNotFound);
+    // Play time is kept per console here, not per user: every user sees the same totals.
+    R_RETURN(QueryPlayStatistics(system, m_applet->program_id, *out_entries,
+                                 {out_play_statistics.data(), out_play_statistics.size()},
+                                 {application_ids.data(), application_ids.size()}));
 }
 
 Result IApplicationFunctions::ExecuteProgram(ProgramSpecifyKind kind, u64 value) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, kind={}, value={}", kind, value);
-    ASSERT(kind == ProgramSpecifyKind::ExecuteProgram ||
-           kind == ProgramSpecifyKind::RestartProgram);
+    LOG_INFO(Service_AM, "called, kind={}, value={}", kind, value);
+    R_UNLESS(kind == ProgramSpecifyKind::ExecuteProgram ||
+                 kind == ProgramSpecifyKind::RestartProgram,
+             ResultInvalidParameters);
+
+    if (system.GetAppletManager().IsHomeSession()) {
+        R_RETURN(ExecuteProgramInHomeSession(kind, value));
+    }
 
     // Copy user channel ownership into the system so that it will be preserved
     system.GetUserChannel() = m_applet->user_channel_launch_parameter;
     system.ExecuteProgram(value);
+    R_SUCCEED();
+}
+
+// In a HOME session the application's slot stays and HOME is not told the application ended: its
+// process ends and the window system loads the other program of the same application in its place
+// (the winding slot's relaunch), with the user channel kept and GetPreviousProgramIndex answering
+// the index it came from.
+Result IApplicationFunctions::ExecuteProgramInHomeSession(ProgramSpecifyKind kind, u64 value) {
+    std::unique_lock lk{m_applet->lock};
+    const u64 current_id = m_applet->program_id;
+    const u64 base_id = FileSys::GetBaseTitleID(current_id);
+    const u64 current_index = current_id - base_id;
+    const u64 next_index = kind == ProgramSpecifyKind::RestartProgram ? current_index : value;
+    const u64 next_id = FileSys::GetBaseTitleIDWithProgramIndex(current_id, next_index);
+
+    R_UNLESS(next_index < 0x10, ResultInvalidParameters);
+    R_UNLESS(system.GetContentProviderUnion().GetEntryRaw(next_id,
+                                                          FileSys::ContentRecordType::Program) !=
+                 nullptr,
+             ResultApplicationRecordNotFound);
+
+    LOG_INFO(Service_AM, "am: application pid {} executes program {} ({:016x})",
+             m_applet->aruid.pid, next_index, next_id);
+
+    m_applet->previous_program_index = static_cast<s32>(current_index);
+    m_applet->program_id = next_id;
+    m_applet->is_winding = true;
+    m_applet->unwind_after_reserved = true;
+    m_applet->process_exiting = true;
+    m_applet->display_layer_manager.SetWindowVisibility(false);
+    lk.unlock();
+
+    m_applet->process->Terminate();
     R_SUCCEED();
 }
 
@@ -500,8 +673,9 @@ Result IApplicationFunctions::UnpopToUserChannel(SharedPointer<IStorage> storage
 }
 
 Result IApplicationFunctions::GetPreviousProgramIndex(Out<s32> out_previous_program_index) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    std::scoped_lock lk{m_applet->lock};
     *out_previous_program_index = m_applet->previous_program_index;
+    LOG_DEBUG(Service_AM, "called, previous_program_index={}", *out_previous_program_index);
     R_SUCCEED();
 }
 

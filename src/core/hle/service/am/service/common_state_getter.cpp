@@ -138,25 +138,41 @@ Result ICommonStateGetter::GetCurrentFocusState(Out<FocusState> out_focus_state)
     R_SUCCEED();
 }
 
+// The sleep lock holds a pending system sleep back until the applet releases it. This system never
+// sleeps (sleep is not emulated), so a request is granted at once, a release lets it go, and a
+// transient release (let a pending sleep through, then hold again) is held again at once.
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 Result ICommonStateGetter::RequestToAcquireSleepLock() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    // Sleep lock is acquired immediately.
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = true;
+    }
     m_applet->sleep_lock_event.Signal(system.Kernel());
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::ReleaseSleepLock() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = false;
+    }
     m_applet->sleep_lock_event.Clear(system.Kernel());
     R_SUCCEED();
 }
 
 Result ICommonStateGetter::ReleaseSleepLockTransiently() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    m_applet->sleep_lock_event.Clear(system.Kernel());
+    // No sleep is pending: the lock is taken again straight away and stays acquired.
+    {
+        std::scoped_lock lk{m_applet->lock};
+        m_applet->sleep_lock_enabled = true;
+    }
+    m_applet->sleep_lock_event.Signal(system.Kernel());
     R_SUCCEED();
 }
 
