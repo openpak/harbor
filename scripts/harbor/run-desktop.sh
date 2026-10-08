@@ -89,7 +89,7 @@ if [ ! -f "$CONFIG" ]; then
     cat > "$CONFIG" <<'EOF'
 [Controls]
 player_0_connected\default=false
-player_0_connected=true
+player_0_connected=false
 player_8_connected\default=false
 player_8_connected=true
 player_8_type\default=false
