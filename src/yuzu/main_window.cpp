@@ -41,7 +41,9 @@
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
 #include "frontend_common/secret_store.h"
+#include "common/harbor_crash.h"
 #include "harbor_control.h"
+#include "harbor_desktop.h"
 #ifdef HAS_LSFG
 #include "harbor_frame_gen.h"
 #endif
@@ -646,7 +648,66 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         connect(
             game_list, &GameList::PopulatingCompleted, this,
             [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
+        // Crash reports: asked once (off until accepted); a report from last time is offered.
+        QTimer::singleShot(0, this, [this] {
+            if (Common::HarborCrash::GetConsent() == Common::HarborCrash::Consent::Unasked) {
+                HarborDesktop::AskCrashConsent(this);
+            } else {
+                HarborDesktop::OfferLastCrashReport(this);
+            }
+        });
     }
+
+    // HOME session: the bars around the picture follow the console theme.
+    harbor_letterbox_timer.setInterval(250);
+    connect(&harbor_letterbox_timer, &QTimer::timeout, this, &MainWindow::HarborUpdateLetterbox);
+    harbor_letterbox_timer.start();
+}
+
+void MainWindow::HarborUpdateLetterbox() {
+    if (!emulation_running || !QtCommon::system) {
+        return;
+    }
+    bool known = false;
+    const auto colour = HarborDesktop::LetterboxColour(*QtCommon::system, &known);
+    if (!known) {
+        return;
+    }
+    // A per-session value: Eden's saved background colour is untouched, and the end of the
+    // session (RestoreGlobalState) puts it back.
+    auto apply = [](auto& setting, u8 value) {
+        if (setting.UsingGlobal() || setting.GetValue() != value) {
+            setting.SetGlobal(false);
+            setting.SetValue(value);
+        }
+    };
+    if (Settings::values.bg_red.UsingGlobal() || Settings::values.bg_red.GetValue() != colour[0] ||
+        Settings::values.bg_green.GetValue() != colour[1] ||
+        Settings::values.bg_blue.GetValue() != colour[2]) {
+        LOG_INFO(Frontend, "harbor: letterbox #{:02x}{:02x}{:02x}", colour[0], colour[1], colour[2]);
+    }
+    apply(Settings::values.bg_red, colour[0]);
+    apply(Settings::values.bg_green, colour[1]);
+    apply(Settings::values.bg_blue, colour[2]);
+}
+
+void MainWindow::HarborApplyAutoResolution() {
+    // The picture's space in device pixels: the screen when the console starts full screen, else
+    // the window's central area.
+    QSize size = ui->centralwidget->size();
+    qreal ratio = devicePixelRatioF();
+    if (ui->action_Fullscreen->isChecked() && screen() != nullptr) {
+        size = screen()->size();
+        ratio = screen()->devicePixelRatio();
+    }
+    const int width = static_cast<int>(size.width() * ratio);
+    const int height = static_cast<int>(size.height() * ratio);
+    const auto setup =
+        HarborDesktop::AutoResolutionFor(width, height, Settings::IsDockedMode());
+    Settings::values.resolution_setup.SetGlobal(false);
+    Settings::values.resolution_setup.SetValue(setup);
+    LOG_INFO(Frontend, "harbor: window {}x{}, resolution scale {} (automatic)", width, height,
+             Settings::CanonicalizeEnum(setup));
 }
 
 void MainWindow::HarborConsoleStep(int done) {
@@ -2100,6 +2161,11 @@ void MainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletPa
         QtConfig per_game_config(config_file_name, Config::ConfigType::PerGameConfig);
         QtCommon::system->HIDCore().ReloadInputDevices();
         QtCommon::system->ApplySettings();
+    }
+
+    // Harbor console mode: the render scale follows the window (at each console start).
+    if (harbor_console && HarborDesktop::AutoResolution()) {
+        HarborApplyAutoResolution();
     }
 
     Settings::LogSettings();

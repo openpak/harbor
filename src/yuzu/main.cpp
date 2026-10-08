@@ -23,6 +23,7 @@
 #include <cstring>
 #endif
 
+#include "common/harbor_crash.h"
 #include "common/logging.h"
 #include "harbor_setup/harbor_setup.h"
 #include "main_window.h"
@@ -185,6 +186,10 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     QApplication::setStyle(QStringLiteral("windowsvista"));
 #endif
+
+    // Harbor's crash reports (off until the user agrees): before anything can crash and before
+    // the JIT installs its fault handler, which chains to this one.
+    Common::HarborCrash::Install();
 
     // Harbor's first-run setup, in its own SDL window before Qt starts: when this data directory
     // cannot boot the console yet, or with --harbor-setup. Closing it before "Start Harbor" quits.
