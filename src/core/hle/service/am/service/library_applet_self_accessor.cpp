@@ -45,6 +45,23 @@ AppletIdentityInfo GetCallerIdentity(Applet& applet) {
     }
 }
 
+// The root of the caller chain: the application (or system applet) that started the first library
+// applet. myPage builds an invitation's application id from it. Behaviour follows the Ryujinx
+// Harbor (MIT-licensed Ryujinx base).
+AppletIdentityInfo GetMainIdentity(Applet& applet) {
+    std::shared_ptr<Applet> main = applet.caller_applet.lock();
+    if (!main) {
+        return GetCallerIdentity(applet);
+    }
+    while (const auto caller = main->caller_applet.lock()) {
+        main = caller;
+    }
+    return {
+        .applet_id = main->applet_id,
+        .application_id = main->program_id,
+    };
+}
+
 } // namespace
 
 ILibraryAppletSelfAccessor::ILibraryAppletSelfAccessor(Core::System& system_,
@@ -144,11 +161,9 @@ Result ILibraryAppletSelfAccessor::GetLibraryAppletInfo(
 
 Result ILibraryAppletSelfAccessor::GetMainAppletIdentityInfo(
     Out<AppletIdentityInfo> out_identity_info) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_identity_info = {
-        .applet_id = AppletId::QLaunch,
-        .application_id = 0x0100000000001000ull,
-    };
+    *out_identity_info = GetMainIdentity(*m_applet);
+    LOG_INFO(Service_AM, "called, applet_id={} program_id={:016X}",
+             static_cast<u32>(out_identity_info->applet_id), out_identity_info->application_id);
     R_SUCCEED();
 }
 
@@ -161,10 +176,9 @@ Result ILibraryAppletSelfAccessor::CanUseApplicationCore(Out<bool> out_can_use_a
 
 Result ILibraryAppletSelfAccessor::GetMainAppletApplicationControlProperty(
     OutLargeData<std::array<u8, 0x4000>, BufferAttr_HipcMapAlias> out_nacp) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
-    // TODO: this should be the main applet, not the caller applet
-    const auto application = GetCallerIdentity(*m_applet);
+    const auto application = GetMainIdentity(*m_applet);
     std::vector<u8> nacp;
     const auto result =
         system.GetARPManager().GetControlProperty(&nacp, application.application_id);
