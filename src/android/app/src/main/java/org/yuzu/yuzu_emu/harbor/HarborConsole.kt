@@ -183,7 +183,7 @@ object HarborConsole {
         if (from.isFinishing) {
             return
         }
-        val dialog = AlertDialog.Builder(from, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        val dialog = AlertDialog.Builder(from, HarborTheme.alertTheme(from))
             .setTitle(R.string.harbor_driver_failed_title)
             .setMessage(problem + "\n\n" + from.getString(R.string.harbor_driver_failed_hint))
             .setCancelable(false)
@@ -269,15 +269,15 @@ object HarborConsole {
         val fragment = activity.harborEmulationFragment() ?: return
         val container = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         QuickSettings(fragment).addFrameGen(container)
-        val dialog = MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.frame_gen)
+        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
+            .setTitle(R.string.harbor_menu_frame_gen)
             .setView(ScrollView(activity).apply { addView(container) })
             .setPositiveButton(R.string.harbor_close, null)
             .setNeutralButton(R.string.lossless_scaling_replace) { _, _ ->
                 activity.harborLosslessPicker.launch(arrayOf("*/*"))
             }
             .setNegativeButton(R.string.lossless_scaling_remove) { _, _ ->
-                val confirm = MaterialAlertDialogBuilder(activity)
+                val confirm = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
                     .setTitle(R.string.lossless_scaling_remove)
                     .setMessage(
                         activity.getString(R.string.lossless_scaling_remove_confirmation) + "\n\n" +
@@ -310,7 +310,7 @@ object HarborConsole {
     /** Lossless.dll cannot change while the renderer uses it: stop, change it off the UI thread, restart. */
     private fun changeLosslessDll(activity: EmulationActivity, change: () -> String?) {
         activity.harborStop {
-            val progress = MaterialAlertDialogBuilder(activity)
+            val progress = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
                 .setMessage(R.string.lossless_scaling_installing)
                 .setCancelable(false)
                 .show()
@@ -372,6 +372,7 @@ object HarborConsole {
                     activity.harborEmulationFragment()?.harborShowStats(!fps)
                 }
             )
+            add(R.string.harbor_menu_touch_controls to { showTouchControls(activity) })
             add(R.string.harbor_menu_log_threads to { HarborNative.logGuestThreads() })
             if (LosslessScalingHelper.isSupportedByGpu()) {
                 add(R.string.harbor_menu_frame_gen to { showFrameGeneration(activity) })
@@ -393,7 +394,7 @@ object HarborConsole {
                 }
             )
         }
-        val dialog = MaterialAlertDialogBuilder(activity)
+        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
             .setTitle(R.string.harbor_menu_title)
             .setItems(items.map { activity.getString(it.first) as CharSequence }.toTypedArray()) { _, which ->
                 items[which].second()
@@ -423,7 +424,7 @@ object HarborConsole {
             )
         }
         val current = ids.indexOf(HarborSetupBridge.currentDriver()).coerceAtLeast(0)
-        val dialog = MaterialAlertDialogBuilder(activity)
+        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
             .setTitle(R.string.harbor_menu_driver)
             .setSingleChoiceItems(names.toTypedArray(), current) { picker, which ->
                 picker.dismiss()
@@ -495,6 +496,35 @@ object HarborConsole {
 
     private const val PREF_SHOW_FPS = "show_fps"
 
+    /** The touch controls hidden by the user's choice in the Harbor menu (not by a controller). */
+    var padHidden: Boolean
+        get() = preferences().getBoolean(PREF_PAD_HIDDEN, false)
+        set(value) = preferences().edit().putBoolean(PREF_PAD_HIDDEN, value).apply()
+
+    private const val PREF_PAD_HIDDEN = "pad_hidden"
+
+    /** The Harbor menu's Touch controls page: show or hide, edit the layout, size and opacity, reset. */
+    private fun showTouchControls(activity: EmulationActivity) {
+        val fragment = activity.harborEmulationFragment() ?: return
+        val hidden = padHidden
+        val items = listOf<Pair<Int, () -> Unit>>(
+            (if (hidden) R.string.harbor_pad_show else R.string.harbor_pad_hide) to {
+                fragment.harborSetControlsHidden(!hidden)
+            },
+            R.string.harbor_pad_edit to { fragment.harborEditControls() },
+            R.string.harbor_pad_adjust to { fragment.harborAdjustControls() },
+            R.string.harbor_pad_reset to { fragment.harborResetControls() }
+        )
+        val dialog = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
+            .setTitle(R.string.harbor_menu_touch_controls)
+            .setItems(items.map { activity.getString(it.first) as CharSequence }.toTypedArray()) { _, which ->
+                items[which].second()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+        HarborPanelInput.attach(dialog)
+    }
+
     /**
      * The HOME button from the Harbor menu, held for `holdMs` on the controller the touch overlay
      * drives (Handheld while the Joy-Cons are attached, Player 1 when detached). am times it like a
@@ -524,7 +554,7 @@ object HarborConsole {
 
     /** "Stopping the console…" while the session stops, then `next` (Restart, Set up again). */
     private fun stopThen(activity: EmulationActivity, next: () -> Unit) {
-        val notice = MaterialAlertDialogBuilder(activity)
+        val notice = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
             .setMessage(R.string.harbor_stopping)
             .setCancelable(false)
             .show()
