@@ -4,8 +4,11 @@
 #include <QCoreApplication>
 #include <QKeyEvent>
 
+#include "core/core.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/main.h"
+#include "qt_common/qt_common.h"
 #include "yuzu/harbor_system_keys.h"
 
 namespace {
@@ -27,6 +30,19 @@ bool HarborSystemKeys::eventFilter(QObject* watched, QEvent* event) {
         return QObject::eventFilter(watched, event);
     }
     const auto* key = static_cast<QKeyEvent*>(event);
+    // F5 power held and F10 force-terminate, on the press. Shift+F5 is Eden's stop.
+    if ((key->key() == Qt::Key_F5 || key->key() == Qt::Key_F10) &&
+        key->modifiers() == Qt::NoModifier) {
+        if (event->type() == QEvent::KeyPress && !key->isAutoRepeat() && QtCommon::system) {
+            auto& applet_manager = QtCommon::system->GetAppletManager();
+            if (key->key() == Qt::Key_F5) {
+                applet_manager.PowerButtonMiddlePress();
+            } else {
+                applet_manager.ForceTerminateApplication();
+            }
+        }
+        return true;
+    }
     VirtualButton button;
     switch (key->key()) {
     case Qt::Key_F8:

@@ -25,7 +25,7 @@ private:
     Result SetCpuBoostRequestPriority(s32 priority);
     Result GetCurrentApplicationId(Out<u64> out_application_id);
     Result SetGpuTimeSliceBoost(s64 time_span);
-    Result Unknown350(Out<u16> out_unknown);
+    Result Unknown350(Out<u16> out_unknown, u64 argument);
     Result IsHomeButtonShortPressedBlocked(Out<bool> out_is_blocked);
     Result IsVrModeCurtainRequired(Out<bool> out_is_required);
     Result IsSleepRequiredByHighTemperature(Out<bool> out_is_required);

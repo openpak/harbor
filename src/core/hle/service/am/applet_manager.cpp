@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <string_view>
+
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -257,6 +260,22 @@ void AppletManager::RequestPower(PowerRequest request) {
     m_system.Exit();
 }
 
+void AppletManager::PowerButtonMiddlePress() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: power button held (power menu)");
+    if (m_window_system) {
+        m_window_system->OnSystemButtonPress(SystemButtonType::PowerButtonLongPressing);
+    }
+}
+
+void AppletManager::ForceTerminateApplication() {
+    std::scoped_lock lk{m_lock};
+    LOG_INFO(Service_AM, "host: force-terminate application");
+    if (m_window_system) {
+        m_window_system->RequestForceTerminateApplication();
+    }
+}
+
 void AppletManager::ReleaseForegroundHold(const Applet& child) {
     std::scoped_lock lk{m_lock};
     if (m_window_system) {
@@ -288,6 +307,13 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
 
     const auto launch_overlay = [&] {
         if (m_window_system->GetOverlayDisplayApplet() != nullptr) {
+            return;
+        }
+        // For tests: a session without the overlay applet, as after the overlay exited.
+        if (const char* no_overlay = std::getenv("OPENPAK_NO_OVERLAY_APPLET");
+            no_overlay != nullptr && std::string_view{no_overlay} == "1") {
+            LOG_WARNING(Service_AM, "am: overlay applet not started (OPENPAK_NO_OVERLAY_APPLET=1); "
+                                    "system pop-ups will not show");
             return;
         }
         auto overlay_process =

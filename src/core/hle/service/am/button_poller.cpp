@@ -103,8 +103,8 @@ void ButtonPoller::OnButtonStateChanged(WindowSystem& window_system) {
     // }
 
     // While HOME is held, the long press goes out once it passes the long-press time (800 ms,
-    // or the HOME menu's own in a HOME session), as a console does. A release before that is
-    // short under 400 ms and long otherwise.
+    // or in a HOME session 500 ms until the HOME menu sets its own), as a console does. A release
+    // before that is short; outside a HOME session it is short under 400 ms and long otherwise.
     if (home_button && m_home_button_press_start && !m_home_button_long_sent) {
         if (std::chrono::steady_clock::now() - *m_home_button_press_start >=
             HomeLongPressTime(window_system)) {
@@ -124,8 +124,17 @@ void ButtonPoller::OnButtonStateChanged(WindowSystem& window_system) {
     // Buttons released which were previously held
     if (!home_button && m_home_button_press_start) {
         if(!m_home_button_long_sent) {
-            const auto duration = ClassifyPressDuration(*m_home_button_press_start);
-            window_system.OnSystemButtonPress(duration == ButtonPressDuration::ShortPressing
+            bool is_short;
+            if (m_system.GetAppletManager().IsHomeSession()) {
+                // A release seen only after the long-press time is still a long press. Behaviour
+                // follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+                is_short = std::chrono::steady_clock::now() - *m_home_button_press_start <
+                           HomeLongPressTime(window_system);
+            } else {
+                is_short = ClassifyPressDuration(*m_home_button_press_start) ==
+                           ButtonPressDuration::ShortPressing;
+            }
+            window_system.OnSystemButtonPress(is_short
                 ? SystemButtonType::HomeButtonShortPressing : SystemButtonType::HomeButtonLongPressing);
         }
         m_home_button_press_start = std::nullopt;

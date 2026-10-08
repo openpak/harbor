@@ -1082,7 +1082,7 @@ Result IApplicationManagerInterface::Unknown4089(Out<UnknownTryPopRecord> out_re
 }
 
 Result IApplicationManagerInterface::Unknown4105() {
-    LOG_WARNING(Service_NS, "(STUBBED) called.");
+    LOG_UNKNOWN_CONTRACT(Service_NS, "ns:am2 4105; returning success, no linked-account work queued");
     R_SUCCEED();
 }
 

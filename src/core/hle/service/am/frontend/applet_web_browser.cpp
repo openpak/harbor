@@ -9,6 +9,7 @@
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/redact.h"
 #include "common/logging.h"
 #include "common/settings.h"
 #include "common/string_util.h"
@@ -359,7 +360,7 @@ void WebBrowser::Execute() {
 
 void WebBrowser::ExtractOfflineRomFS() {
     LOG_DEBUG(Service_AM, "Extracting RomFS to {}",
-              Common::FS::PathToUTF8String(offline_cache_dir));
+              Common::RedactPath(Common::FS::PathToUTF8String(offline_cache_dir)));
 
     const auto extracted_romfs_dir = FileSys::ExtractRomFS(offline_romfs);
 
@@ -377,7 +378,7 @@ void WebBrowser::WebBrowserExit(WebExitReason exit_reason, std::string last_url)
 
     // https://switchbrew.org/wiki/Internet_Browser#TLVs
     if (use_tlv_output) {
-        LOG_DEBUG(Service_AM, "Using TLV output: exit_reason={}, last_url={}, last_url_size={}", exit_reason, last_url, last_url.size());
+        LOG_DEBUG(Service_AM, "Using TLV output: exit_reason={}, last_url={}, last_url_size={}", exit_reason, Common::RedactUrl(last_url), last_url.size());
 
         // storage size for TLVs is 0x2000 bytes (as per switchbrew documentation)
         constexpr size_t TLV_STORAGE_SIZE = 0x2000;
@@ -462,8 +463,9 @@ void WebBrowser::WebBrowserExit(WebExitReason exit_reason, std::string last_url)
                 (std::min)(last_url.size(), web_common_return_value.last_url.size()));
     web_common_return_value.last_url_size = last_url.size();
 
+    // The last URL can be the sign-in callback with its code and state: the host only.
     LOG_DEBUG(Service_AM, "WebCommonReturnValue: exit_reason={}, last_url={}, last_url_size={}",
-              exit_reason, last_url, last_url.size());
+              exit_reason, Common::RedactUrl(last_url), last_url.size());
 
     complete = true;
     std::vector<u8> out_data(sizeof(WebCommonReturnValue));
@@ -582,7 +584,7 @@ void WebBrowser::ExecuteOffline() {
     }
 
     LOG_INFO(Service_AM, "Opening offline document at {}",
-             Common::FS::PathToUTF8String(offline_document));
+             Common::RedactPath(Common::FS::PathToUTF8String(offline_document)));
 
     frontend.OpenLocalWebPage(
         Common::FS::PathToUTF8String(offline_document), [this] { ExtractOfflineRomFS(); },
@@ -597,7 +599,7 @@ void WebBrowser::ExecuteShare() {
 }
 
 void WebBrowser::ExecuteWeb() {
-    LOG_INFO(Service_AM, "Opening external URL at {}", external_url);
+    LOG_INFO(Service_AM, "Opening external URL at {}", Common::RedactUrl(external_url));
     frontend.OpenExternalWebPage(external_url, [this](WebExitReason exit_reason, std::string last_url) {
         // Offline and web applets must be explicitly exited from because they respect exit state
         // Unlike the other web stuffs

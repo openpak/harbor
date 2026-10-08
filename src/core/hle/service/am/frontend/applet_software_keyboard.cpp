@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "common/string_util.h"
 #include "core/core.h"
 #include "core/frontend/applets/software_keyboard.h"
@@ -241,7 +242,7 @@ void SoftwareKeyboard::InitializeForeground() {
     initial_text = Common::UTF16StringFromFixedZeroTerminatedBuffer(initial_string.data(),
                                                                     initial_string.size());
 
-    LOG_DEBUG(Service_AM, "\nInitial Text: {}", Common::UTF16ToUTF8(initial_text));
+    LOG_DEBUG(Service_AM, "initial text: {} characters", initial_text.size());
 
     InitializeFrontendNormalKeyboard();
 }
@@ -294,9 +295,10 @@ void SoftwareKeyboard::ProcessTextCheck() {
         }
     }();
 
-    LOG_INFO(Service_AM, "\nTextCheckResult: {}\nTextCheckMessage: {}",
+    // The message can quote what was typed: its length only.
+    LOG_INFO(Service_AM, "text check result: {}, message: {} characters",
              GetTextCheckResultName(swkbd_text_check.text_check_result),
-             Common::UTF16ToUTF8(text_check_message));
+             text_check_message.size());
 
     switch (swkbd_text_check.text_check_result) {
     case SwkbdTextCheckResult::Success:
@@ -363,15 +365,15 @@ void SoftwareKeyboard::SubmitNormalOutputAndExit(SwkbdResult result,
     if (swkbd_config_common.use_utf8) {
         std::string utf8_submitted_text = Common::UTF16ToUTF8(submitted_text);
 
-        LOG_DEBUG(Service_AM, "\nSwkbdResult: {}\nUTF-8 Submitted Text: {}", result,
-                  utf8_submitted_text);
+        LOG_DEBUG(Service_AM, "result {}, UTF-8 text submitted: {}", result,
+                  Common::RedactLength(utf8_submitted_text));
 
         std::memcpy(out_data.data(), &result, sizeof(SwkbdResult));
         std::memcpy(out_data.data() + sizeof(SwkbdResult), utf8_submitted_text.data(),
                     utf8_submitted_text.size());
     } else {
-        LOG_DEBUG(Service_AM, "\nSwkbdResult: {}\nUTF-16 Submitted Text: {}", result,
-                  Common::UTF16ToUTF8(submitted_text));
+        LOG_DEBUG(Service_AM, "result {}, UTF-16 text submitted: {} characters", result,
+                  submitted_text.size());
 
         std::memcpy(out_data.data(), &result, sizeof(SwkbdResult));
         std::memcpy(out_data.data() + sizeof(SwkbdResult), submitted_text.data(),
@@ -393,8 +395,7 @@ void SoftwareKeyboard::SubmitForTextCheck(std::u16string submitted_text) {
         // Include the null terminator in the buffer size.
         const u64 buffer_size = utf8_submitted_text.size() + 1;
 
-        LOG_DEBUG(Service_AM, "\nBuffer Size: {}\nUTF-8 Submitted Text: {}", buffer_size,
-                  utf8_submitted_text);
+        LOG_DEBUG(Service_AM, "text check requested, UTF-8 buffer size {}", buffer_size);
 
         std::memcpy(out_data.data(), &buffer_size, sizeof(u64));
         std::memcpy(out_data.data() + sizeof(u64), utf8_submitted_text.data(),
@@ -403,8 +404,7 @@ void SoftwareKeyboard::SubmitForTextCheck(std::u16string submitted_text) {
         // Include the null terminator in the buffer size.
         const u64 buffer_size = (current_text.size() + 1) * sizeof(char16_t);
 
-        LOG_DEBUG(Service_AM, "\nBuffer Size: {}\nUTF-16 Submitted Text: {}", buffer_size,
-                  Common::UTF16ToUTF8(current_text));
+        LOG_DEBUG(Service_AM, "text check requested, UTF-16 buffer size {}", buffer_size);
 
         std::memcpy(out_data.data(), &buffer_size, sizeof(u64));
         std::memcpy(out_data.data() + sizeof(u64), current_text.data(),

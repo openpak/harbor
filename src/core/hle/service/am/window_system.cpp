@@ -76,6 +76,10 @@ void WindowSystem::Update() {
         LOG_DEBUG(Service_AM, "called, home_menu={} application={} overlay={}",
                   m_home_menu != nullptr, m_application != nullptr, m_overlay_display != nullptr);
 
+        if (m_force_terminate_requested.exchange(false)) {
+            this->ForceTerminateApplicationLocked();
+        }
+
         // Loop through all applets and remove terminated applets.
         this->PruneTerminatedAppletsLocked();
 
@@ -511,6 +515,39 @@ void WindowSystem::OnHomeButtonPressed(ButtonPressDuration type) {
     }
 }
 
+void WindowSystem::RequestForceTerminateApplication() {
+    m_force_terminate_requested = true;
+    this->RequestUpdate();
+}
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): the host's force-terminate
+// ends the application the HOME menu launched by killing its process, as the accessor's Terminate
+// does; HOME takes the foreground back with ApplicationExited and shows its own "The software was
+// closed" notice.
+void WindowSystem::ForceTerminateApplicationLocked() {
+    if (!m_system.GetAppletManager().IsHomeSession() || m_application == nullptr) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: no application launched by the home "
+                             "menu is running");
+        return;
+    }
+
+    std::scoped_lock lk{m_application->lock};
+    if (m_application->process_released || m_application->process_exiting) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: application pid {} is already ending",
+                 m_application->aruid.pid);
+        return;
+    }
+    if (!m_application->process->IsRunning()) {
+        LOG_INFO(Service_AM, "am: force-terminate ignored: application pid {} was not started",
+                 m_application->aruid.pid);
+        return;
+    }
+
+    LOG_INFO(Service_AM, "am: terminating pid {} (host force-terminate)", m_application->aruid.pid);
+    m_application->process_exiting = true;
+    m_application->process->Terminate();
+}
+
 void WindowSystem::PruneTerminatedAppletsLocked() {
     for (auto it = m_applets.begin(); it != m_applets.end(); /* ... */) {
         const auto& [aruid, applet] = *it;
@@ -608,6 +645,12 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
         }
 
         if (applet.get() == m_overlay_display) {
+            // A console aborts here (2128-0101); this session goes on without system pop-ups and
+            // the overlay's layer goes. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx
+            // base).
+            LOG_WARNING(Service_AM, "am: overlay applet pid {} exited; system pop-ups stop",
+                        applet->aruid.pid);
+            applet->display_layer_manager.Finalize();
             m_overlay_display = nullptr;
         }
 
