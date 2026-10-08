@@ -364,6 +364,15 @@ void TestConsoleTheme(const std::filesystem::path& dir) {
     Check(ReadConsoleDarkTheme(path) == std::optional<bool>{true}, "theme: Basic Black is dark");
     write(0);
     Check(ReadConsoleDarkTheme(path) == std::optional<bool>{false}, "theme: Basic White is light");
+    Check(ReadInitialSetupDone(path) == std::optional<bool>{false}, "dock: first-time setup not done yet");
+    {
+        std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+        file.seekp(16 + offsetof(Service::Set::SystemSettings, initial_launch_settings_packed));
+        const char done = 1;
+        file.write(&done, 1);
+    }
+    Check(ReadInitialSetupDone(path) == std::optional<bool>{true}, "dock: first-time setup done");
+    Check(!ReadInitialSetupDone(dir / "missing.dat"), "dock: no settings file, no answer");
 }
 
 void TestChime() {

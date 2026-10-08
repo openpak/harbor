@@ -564,6 +564,11 @@ FileSys::SaveDataAttribute FSP_SRV::ResolveExtraDataAttribute(
     if (attribute.program_id == AutoResolveCallerProgramId) {
         attribute.program_id = program_id;
     }
+    // A title's own save named without a program id is the caller's, as when it is opened.
+    if (attribute.program_id == 0 && (attribute.type == FileSys::SaveDataType::Account ||
+                                      attribute.type == FileSys::SaveDataType::Device)) {
+        attribute.program_id = program_id;
+    }
     return attribute;
 }
 

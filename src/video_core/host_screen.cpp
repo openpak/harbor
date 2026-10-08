@@ -12,6 +12,7 @@ namespace VideoCore::HostScreen {
 namespace {
 std::mutex mutex;
 std::shared_ptr<const Frame> current;
+std::shared_ptr<const Frame> overlay;
 std::atomic_bool active{false};
 std::atomic_bool changed{false};
 std::atomic_bool blackout{false};
@@ -68,6 +69,49 @@ Tegra::FramebufferConfig MakeLayer(const Frame& frame) {
     return layer;
 }
 
+void PublishOverlay(std::shared_ptr<const Frame> frame) {
+    {
+        std::scoped_lock lk{mutex};
+        overlay = std::move(frame);
+    }
+    changed = true;
+}
+
+std::shared_ptr<const Frame> CurrentOverlay() {
+    std::scoped_lock lk{mutex};
+    return overlay;
+}
+
+Tegra::FramebufferConfig MakeOverlayLayer(const Frame& frame) {
+    auto layer = MakeLayer(frame);
+    layer.address = HostOverlayAddress;
+    layer.blending = Tegra::BlendMode::Premultiplied;
+    return layer;
+}
+
+std::shared_ptr<const Frame> FrameAt(u64 address) {
+    if (address == HostAddress) {
+        return Current();
+    }
+    if (address == HostOverlayAddress) {
+        return CurrentOverlay();
+    }
+    if (address == ShadeAddress) {
+        auto frame = std::make_shared<Frame>();
+        frame->width = 1;
+        frame->height = 1;
+        // Premultiplied black: only the alpha says how much of the picture is covered.
+        const float level = blackout ? 1.0f : dim_level.load();
+        frame->rgba = {0, 0, 0, static_cast<u8>(level * 255.0f + 0.5f)};
+        return frame;
+    }
+    return nullptr;
+}
+
+bool IsHostAddress(u64 address) {
+    return address == HostAddress || address == HostOverlayAddress || address == ShadeAddress;
+}
+
 void SetBlackout(bool value) {
     if (blackout.exchange(value) != value) {
         changed = true;
@@ -88,26 +132,8 @@ float DimLevel() {
     return dim_level.load();
 }
 
-bool IsHostAddress(u64 address) {
-    return address == HostAddress || address == ShadeAddress;
-}
-
-std::shared_ptr<const Frame> FrameFor(u64 address) {
-    if (address != ShadeAddress) {
-        return Current();
-    }
-    auto frame = std::make_shared<Frame>();
-    frame->width = 1;
-    frame->height = 1;
-    // Premultiplied black: only the alpha says how much of the picture is covered.
-    const float level = blackout ? 1.0f : dim_level.load();
-    frame->rgba = {0, 0, 0, static_cast<u8>(level * 255.0f + 0.5f)};
-    return frame;
-}
-
 Tegra::FramebufferConfig MakeShadeLayer() {
-    Frame pixel{.width = 1, .height = 1, .rgba = {}};
-    Tegra::FramebufferConfig layer = MakeLayer(pixel);
+    Tegra::FramebufferConfig layer = MakeLayer(Frame{.width = 1, .height = 1, .rgba = {}});
     layer.address = ShadeAddress;
     layer.blending = blackout ? Tegra::BlendMode::Opaque : Tegra::BlendMode::Premultiplied;
     return layer;

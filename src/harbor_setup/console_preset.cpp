@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 
 #include "common/fs/path_util.h"
@@ -29,7 +31,31 @@ void ApplyConsolePreset() {
                        &v.login_share_applet_mode, &v.wifi_web_auth_applet_mode, &v.my_page_applet_mode}) {
         mode->SetValue(AppletMode::LLE);
     }
+#ifdef __ANDROID__
+    // A phone is the console in handheld mode.
     v.use_docked_mode.SetValue(Settings::ConsoleMode::Handheld);
+#else
+    // A PC is a console on its TV dock: the first console start is docked (1080p, Joy-Cons off the
+    // rails as one controller); after that the dock toggle's choice is kept. The test harness
+    // chooses for its own runs (run-desktop.sh).
+    const auto marker = Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor-docked-default";
+    // Not before the firmware's first-time setup is done: on a dock it stops at "remove the
+    // console from the dock", as a real console's does.
+    if (!std::getenv("HARBOR_CONTROL") && !std::filesystem::exists(marker) &&
+        ReadInitialSetupDone(Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) /
+                             "system/save/8000000000000050/settings.dat")
+            .value_or(false)) {
+        v.use_docked_mode.SetValue(Settings::ConsoleMode::Docked);
+        auto& players = v.players.GetValue(true);
+        players[0].connected = true;
+        players[0].controller_type = Settings::ControllerType::ProController;
+        players[8].connected = false;
+        std::error_code ec;
+        std::filesystem::create_directories(marker.parent_path(), ec);
+        std::ofstream{marker} << "docked by default on the first console start\n";
+        LOG_INFO(Frontend, "harbor: the console starts docked (a PC on its TV dock)");
+    }
+#endif
     // Every log line reaches the file at once, so a console that crashes leaves its last lines.
     v.log_flush_line.SetValue(true);
 }
@@ -89,6 +115,29 @@ std::optional<bool> LiveConsoleDarkTheme(Core::System& system) {
         return std::nullopt;
     }
     return color == Service::Set::ColorSet::BasicBlack;
+}
+
+std::optional<bool> ReadInitialSetupDone(const std::filesystem::path& path) {
+    constexpr std::size_t HeaderSize = 16;
+    constexpr u64 Magic = Common::MakeMagic('y', 'u', 'z', 'u', '_', 's', 'e', 't');
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return std::nullopt;
+    }
+    u64 magic = 0;
+    u32 version = 0;
+    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (!file || magic != Magic || version < 4) {
+        return std::nullopt;
+    }
+    u32 flags = 0;
+    file.seekg(HeaderSize + offsetof(Service::Set::SystemSettings, initial_launch_settings_packed));
+    file.read(reinterpret_cast<char*>(&flags), sizeof(flags));
+    if (!file) {
+        return std::nullopt;
+    }
+    return (flags & 1) != 0; // InitialLaunchCompletionFlag
 }
 
 std::optional<bool> ReadConsoleDarkTheme(const std::filesystem::path& path) {

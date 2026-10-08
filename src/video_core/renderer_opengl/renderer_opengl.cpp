@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include <glad/glad.h>
 
@@ -147,7 +148,7 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // Harbor: the host screen (the Harbor menu) is presented in place of the console's picture.
     const auto host_frame = VideoCore::HostScreen::Current();
     std::array<Tegra::FramebufferConfig, 1> host_layer{};
-    std::vector<Tegra::FramebufferConfig> shaded;
+    std::vector<Tegra::FramebufferConfig> composed;
     if (VideoCore::HostScreen::Blackout()) {
         // Harbor's sleep: black, the console's picture not shown.
         host_layer[0] = VideoCore::HostScreen::MakeShadeLayer();
@@ -155,11 +156,21 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
     } else if (host_frame) {
         host_layer[0] = VideoCore::HostScreen::MakeLayer(*host_frame);
         framebuffers = host_layer;
-    } else if (VideoCore::HostScreen::DimLevel() > 0.0f) {
-        // idle's dimming: a black layer over the console's picture.
-        shaded.assign(framebuffers.begin(), framebuffers.end());
-        shaded.push_back(VideoCore::HostScreen::MakeShadeLayer());
-        framebuffers = shaded;
+    } else {
+        // On top of the console's own layers: the host overlay (the FPS line), then idle's
+        // dimming over everything.
+        const auto overlay = VideoCore::HostScreen::CurrentOverlay();
+        const bool dimmed = VideoCore::HostScreen::DimLevel() > 0.0f;
+        if (!framebuffers.empty() && (overlay || dimmed)) {
+            composed.assign(framebuffers.begin(), framebuffers.end());
+            if (overlay) {
+                composed.push_back(VideoCore::HostScreen::MakeOverlayLayer(*overlay));
+            }
+            if (dimmed) {
+                composed.push_back(VideoCore::HostScreen::MakeShadeLayer());
+            }
+            framebuffers = composed;
+        }
     }
     RenderScreenshot(framebuffers);
 

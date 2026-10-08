@@ -107,29 +107,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:theme="@style/Theme.Yuzu.Main"
             android:label="@string/preferences_settings"/>
 
+        <!-- The console's screen. Harbor opens it only for the console (HarborConsole.boot): no
+             game file, NFC tag or shortcut from outside starts Eden's own emulation. -->
         <activity
             android:name="org.yuzu.yuzu_emu.activities.EmulationActivity"
             android:theme="@style/Theme.Yuzu.Main"
             android:launchMode="singleTop"
             android:supportsPictureInPicture="true"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.nfc.action.TECH_DISCOVERED" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" android:scheme="content"/>
-            </intent-filter>
-            <intent-filter>
-                <action android:name="org.openpak.harbor.LAUNCH_WITH_CUSTOM_CONFIG" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-            <meta-data android:name="android.nfc.action.TECH_DISCOVERED" android:resource="@xml/nfc_tech_filter" />
-        </activity>
+            android:exported="false" />
 
         <service android:name="org.yuzu.yuzu_emu.utils.ForegroundService" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Keep emulation running in background"/>
