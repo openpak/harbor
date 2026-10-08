@@ -31,19 +31,17 @@ protected:
 
 private:
     // F5: a tap is the power button's short press (sleep, or wake), held for a second its hold
-    // (the power menu). While the console sleeps the guest is paused behind a black screen, and
-    // any key or controller button wakes it.
+    // (the power menu). While the console sleeps the presenter shows black, the guest is paused,
+    // and any key or controller button wakes it.
     void ApplySleep(bool sleeping);
     void PollWake();
-    // idle:sys dims the screen after the dimming time and brings it back on input: a translucent
-    // black layer over the picture.
+    // idle:sys dims the screen after the dimming time and brings it back on input.
     void ApplyDim(bool dimmed);
 
     InputCommon::InputSubsystem& input_subsystem;
     QTimer* power_hold{};
     bool power_down{};
-    QWidget* sleep_screen{};
-    QWidget* dim_screen{};
+    bool asleep{};
     QTimer* wake_poll{};
     bool wake_armed{};
     bool paused_for_sleep{};
