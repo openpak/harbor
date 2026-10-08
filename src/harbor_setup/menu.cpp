@@ -583,6 +583,7 @@ void Run() {
 void MenuSetHost(MenuHost& host) {
     menu_host = &host;
     StartPowerKey(host.System());
+    StartControllerWatcher(host);
 }
 
 void MenuOpen(MenuPage page) {
@@ -621,6 +622,7 @@ void MenuBack() {
 }
 
 void MenuShutdown() {
+    StopControllerWatcher();
     {
         std::scoped_lock lk{mutex};
         stopping = true;
