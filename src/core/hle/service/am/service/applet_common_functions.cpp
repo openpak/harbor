@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/file_sys/common_funcs.h"
 #include "core/hle/service/am/applet.h"
@@ -91,8 +92,10 @@ Result IAppletCommonFunctions::SetGpuTimeSliceBoost(s64 time_span) {
     R_SUCCEED();
 }
 
-Result IAppletCommonFunctions::Unknown350(Out<u16> out_unknown) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result IAppletCommonFunctions::Unknown350(Out<u16> out_unknown, u64 argument) {
+    // qlaunch sends 0xF; the Ryujinx Harbor answers 0.
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IAppletCommonFunctions 350 argument={:#x}; returning 0",
+                         argument);
     *out_unknown = 0;
     R_SUCCEED();
 }

@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
+#include "common/redact.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet.h"
@@ -411,13 +412,16 @@ Result ICommonStateGetter::GetCradleFwVersion(Out<u32> out_pdc_h, Out<u32> out_p
     R_SUCCEED();
 }
 
-Result ICommonStateGetter::Unknown610(u64 unk) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result ICommonStateGetter::Unknown610(u32 argument) {
+    // qlaunch sends 0, then 611 with 1; answered with no output, as the Ryujinx Harbor does.
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 610 argument={:#x}; returning success",
+                         argument);
     R_SUCCEED();
 }
 
-Result ICommonStateGetter::Unknown611(u8 unk) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+Result ICommonStateGetter::Unknown611(u32 argument) {
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ICommonStateGetter 611 argument={:#x}; returning success",
+                         argument);
     R_SUCCEED();
 }
 
