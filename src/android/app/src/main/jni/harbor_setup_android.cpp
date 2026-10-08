@@ -27,6 +27,8 @@
 #include "core/hle/service/sm/sm.h"
 #include "core/openpak/boot_connection.h"
 #include "frontend_common/joycon_rails.h"
+#include "harbor_setup/driver_catalog.h"
+#include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -282,6 +284,13 @@ public:
         return {.path = result[1], .sha256 = result[2], .size = std::stoull(result[3])};
     }
 };
+
+/// This phone, probed once (the system's Vulkan driver names the GPU).
+const DeviceInfo& HarborDevice() {
+    static const DeviceInfo device =
+        ProbeDevice(Common::FS::GetEdenPathString(Common::FS::EdenPath::EdenDir), true);
+    return device;
+}
 
 } // namespace
 
@@ -611,6 +620,33 @@ JNIEXPORT jintArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pictureR
     jintArray out = env->NewIntArray(4);
     env->SetIntArrayRegion(out, 0, 4, rect);
     return out;
+}
+
+/// After the chosen driver failed to load: whether a recommended driver exists for this GPU.
+JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hasRecommendedDriver(JNIEnv*, jobject) {
+    return HarborSetup::HasRecommendedDriver(HarborDevice()) ? JNI_TRUE : JNI_FALSE;
+}
+
+/// Why an installed driver does not fit this GPU (its library's Adreno generation, its Android
+/// version), or "".
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_driverProblem(JNIEnv* env, jobject,
+                                                                                   jstring name,
+                                                                                   jstring library,
+                                                                                   jint min_api) {
+    return Common::Android::ToJString(
+        env, HarborSetup::DriverPackageProblem(Common::Android::GetJString(env, name),
+                                               Common::Android::GetJString(env, library), min_api,
+                                               HarborDevice()));
+}
+
+/// Downloads, installs and selects the recommended driver: [id, name, error]. Blocking; on a Java
+/// thread that called HarborNative.initialize in this process.
+JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_installRecommendedDriver(JNIEnv* env,
+                                                                                                   jobject) {
+    AndroidHost host;
+    const std::atomic_bool cancel{false};
+    const auto result = HarborSetup::InstallRecommendedDriver(host, HarborDevice(), cancel);
+    return Common::Android::ToJStringArray(env, {result.id, result.name, result.error});
 }
 
 } // extern "C"

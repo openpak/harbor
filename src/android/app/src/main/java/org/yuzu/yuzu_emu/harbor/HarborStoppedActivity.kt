@@ -25,6 +25,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import java.io.File
 import kotlin.concurrent.thread
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.utils.GpuDriverHelper
@@ -111,7 +112,11 @@ class HarborStoppedActivity : ComponentActivity() {
         })
 
         val reason = intent.getStringExtra(EXTRA_REASON).orEmpty()
-        if (intent.getBooleanExtra(EXTRA_CANNOT_START, false)) {
+        if (intent.getBooleanExtra(EXTRA_DRIVER_FAILED, false)) {
+            HarborNative.initialize()
+            Log.info("[Harbor] driver choice shown after a driver failure")
+            showDriverFailed(reason, null)
+        } else if (intent.getBooleanExtra(EXTRA_CANNOT_START, false)) {
             Log.info("[Harbor] cannot start screen shown")
             show(getString(R.string.harbor_cannot_start), reason, emptyList())
         } else {
@@ -165,6 +170,83 @@ class HarborStoppedActivity : ComponentActivity() {
         list.add(getString(R.string.harbor_back) to { showStopped(intent.getStringExtra(EXTRA_REASON).orEmpty()) })
         show(getString(R.string.harbor_menu_driver), status ?: getString(R.string.harbor_driver_lead), list)
         onBack = { showStopped(intent.getStringExtra(EXTRA_REASON).orEmpty()) }
+    }
+
+    /**
+     * The chosen driver did not load: never the phone's driver silently. The installed drivers that
+     * fit this GPU, the recommended one downloaded (T30 on an Adreno 6xx), or the phone's own after
+     * a warning; the choice restarts Harbor into it.
+     */
+    private fun showDriverFailed(problem: String, status: String?) {
+        val current = HarborSetupBridge.currentDriver()
+        val list = mutableListOf<Pair<String, () -> Unit>>()
+        for ((path, meta) in GpuDriverHelper.getDrivers()) {
+            val id = File(path).name
+            val library = meta.libraryName ?: continue
+            if (id == current || HarborNative.driverProblem(meta.name ?: "", library, meta.minApi).isNotEmpty()) {
+                continue
+            }
+            val label = listOfNotNull(meta.name ?: File(path).nameWithoutExtension, meta.version)
+                .filter { it.isNotBlank() }.joinToString(" ")
+            list.add(label to { restartWithDriver(id, problem) })
+        }
+        if (HarborNative.hasRecommendedDriver()) {
+            list.add(getString(R.string.harbor_driver_download_recommended) to { downloadRecommended(problem) })
+        }
+        list.add(getString(R.string.harbor_driver_use_phone) to { confirmPhoneDriver(problem) })
+        list.add(getString(R.string.harbor_menu_setup_again) to {
+            HarborNative.stopOpenPak()
+            HarborConsole.restartIntoSetup(this)
+        })
+        list.add(getString(R.string.harbor_menu_exit) to {
+            HarborNative.stopOpenPak()
+            finishAndRemoveTask()
+        })
+        val text = (status?.let { it + "\n\n" } ?: "") + problem + "\n\n" + getString(R.string.harbor_driver_failed_choose)
+        show(getString(R.string.harbor_driver_load_failed), text, list)
+        onBack = { finishAndRemoveTask() }
+    }
+
+    private fun confirmPhoneDriver(problem: String) {
+        show(
+            getString(R.string.harbor_driver_use_phone),
+            getString(R.string.harbor_driver_phone_warning),
+            listOf(
+                getString(R.string.harbor_driver_use_phone) to { restartWithDriver("", problem) },
+                getString(R.string.harbor_back) to { showDriverFailed(problem, null) }
+            )
+        )
+        onBack = { showDriverFailed(problem, null) }
+    }
+
+    private fun restartWithDriver(id: String, problem: String) {
+        if (!HarborSetupBridge.selectDriver(id)) {
+            showDriverFailed(problem, getString(R.string.harbor_driver_not_saved))
+            return
+        }
+        Log.info("[Harbor] driver failure: restarting with ${if (id.isEmpty()) "the phone's driver" else id}")
+        HarborConsole.restartProcess(this)
+    }
+
+    private fun downloadRecommended(problem: String) {
+        show(getString(R.string.harbor_driver_load_failed), getString(R.string.harbor_driver_downloading), emptyList())
+        onBack = {}
+        thread(name = "HarborRecommendedDriver") {
+            val result = try {
+                HarborNative.installRecommendedDriver()
+            } catch (e: Exception) {
+                arrayOf("", "", e.message ?: e.javaClass.simpleName)
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (result.size >= 3 && result[2].isEmpty() && result[0].isNotEmpty()) {
+                    Log.info("[Harbor] driver failure: restarting with the recommended ${result[0]}")
+                    HarborConsole.restartProcess(this)
+                } else {
+                    showDriverFailed(problem, result.getOrNull(2) ?: getString(R.string.harbor_driver_not_saved))
+                }
+            }
+        }
     }
 
     private fun choose(id: String, saved: String? = null) {
@@ -251,12 +333,20 @@ class HarborStoppedActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_REASON = "harborStopReason"
         private const val EXTRA_CANNOT_START = "harborCannotStart"
+        private const val EXTRA_DRIVER_FAILED = "harborDriverFailed"
         private const val MAX_WIDTH_DP = 560
 
         /** "Harbor stopped" with `reason`; the caller finishes its own screen. */
         fun stopped(context: Context, reason: String): Intent =
             Intent(context, HarborStoppedActivity::class.java)
                 .putExtra(EXTRA_REASON, reason)
+                .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+
+        /** The chosen graphics driver did not load: the driver choice, with why. */
+        fun driverFailed(context: Context, problem: String): Intent =
+            Intent(context, HarborStoppedActivity::class.java)
+                .putExtra(EXTRA_REASON, problem)
+                .putExtra(EXTRA_DRIVER_FAILED, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
 
         /** "Harbor cannot start" with the readiness check's message. */

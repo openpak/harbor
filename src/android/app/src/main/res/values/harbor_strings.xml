@@ -22,8 +22,6 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_menu_log_threads">Log threads</string>
     <string name="harbor_frame_gen_restart">Harbor restarts the console to change Lossless.dll.</string>
     <string name="harbor_close">Close</string>
-    <string name="harbor_driver_failed_title">Graphics driver not loaded</string>
-    <string name="harbor_driver_failed_hint">The console did not start. Choose the driver again in the setup.</string>
     <string name="harbor_menu_controller_home">Controller HOME key</string>
     <string name="harbor_key_service_label">Harbor controller HOME key</string>
     <string name="harbor_key_service_description">Sends a controller\'s HOME key to the console while Harbor is on screen, instead of leaving Harbor. Harbor reads no other keys and nothing on screen.</string>
@@ -55,4 +53,10 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_pad_adjust">Size and opacity</string>
     <string name="harbor_pad_reset">Reset layout</string>
     <string name="harbor_pad_power">Power</string>
+    <string name="harbor_driver_load_failed">The graphics driver couldn\'t be loaded</string>
+    <string name="harbor_driver_failed_choose">Choose the driver Harbor restarts with.</string>
+    <string name="harbor_driver_download_recommended">Download the recommended driver</string>
+    <string name="harbor_driver_use_phone">Use the phone\'s own driver</string>
+    <string name="harbor_driver_phone_warning">The phone\'s own driver may crash the HOME menu on this GPU. Harbor restarts with it; choose another driver from the Harbor menu if it does.</string>
+    <string name="harbor_driver_downloading">Downloading the recommended driver…</string>
 </resources>

@@ -71,6 +71,15 @@ object HarborNative {
     /** The console's power button held: HOME's overlay opens its power menu. */
     external fun pressPower()
 
+    /** Whether a recommended driver exists for this GPU (T30 on an Adreno 6xx). */
+    external fun hasRecommendedDriver(): Boolean
+
+    /** Why an installed driver does not fit this GPU, or "". */
+    external fun driverProblem(name: String, library: String, minApi: Int): String
+
+    /** Downloads, installs and selects the recommended driver: [id, name, error]. Not on the UI thread. */
+    external fun installRecommendedDriver(): Array<String>
+
     /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
     external fun powerShortPress()
 
