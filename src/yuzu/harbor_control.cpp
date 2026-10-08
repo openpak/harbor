@@ -461,6 +461,14 @@ void HarborControl::Execute(const std::string& line) {
         if (hooks.threads) {
             hooks.threads();
         }
+    } else if (cmd == "menu") {
+        // A Harbor menu entry by name (its dialogs then take `key` and `type`).
+        if (words.size() < 2 || !hooks.menu) {
+            LOG_WARNING(Frontend, "harbor-control: usage: menu <name>");
+            return;
+        }
+        QMetaObject::invokeMethod(
+            gui_context, [this, name = words[1]] { hooks.menu(name); }, Qt::QueuedConnection);
     } else if (cmd == "quit") {
         if (hooks.quit) {
             QMetaObject::invokeMethod(gui_context, [this] { hooks.quit(); }, Qt::QueuedConnection);

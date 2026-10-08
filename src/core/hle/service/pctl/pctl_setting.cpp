@@ -7,6 +7,7 @@
 #include <array>
 #include <limits>
 
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
 #include "core/hle/service/pctl/pctl_setting.h"
@@ -349,6 +350,88 @@ std::optional<int> TodaysLimit(const PlayTimerBlock& timer, int day_of_week) {
 }
 
 } // namespace Rules
+
+std::string SerializeState(const Setting& setting) {
+    json out;
+    out["safetyLevel"] = setting.safety_level;
+    out["ageRestricted"] = setting.age_restricted;
+    out["customRatingAge"] = setting.custom_rating_age;
+    out["customSnsPostRestricted"] = setting.custom_sns_post_restricted;
+    out["customFreeCommunicationRestricted"] = setting.custom_free_communication_restricted;
+    out["ratingOrganization"] = setting.rating_organization;
+    if (setting.stereo_vision_restricted) {
+        out["stereoVisionRestricted"] = *setting.stereo_vision_restricted;
+    }
+    auto free_list = json::array();
+    for (const auto& [id, restricted] : setting.free_communication_applications) {
+        free_list.push_back({fmt::format("{:016x}", id), restricted});
+    }
+    out["freeCommunication"] = std::move(free_list);
+    auto exempt = json::array();
+    for (const auto id : setting.exempt_applications) {
+        exempt.push_back(fmt::format("{:016x}", id));
+    }
+    out["exempt"] = std::move(exempt);
+    std::string timer;
+    for (const auto byte : setting.play_timer) {
+        timer += fmt::format("{:02x}", byte);
+    }
+    out["playTimer"] = std::move(timer);
+    return out.dump();
+}
+
+bool LoadState(std::string_view text, Setting& setting) {
+    try {
+        const auto in = json::parse(text);
+        Setting loaded;
+        loaded.safety_level = in.at("safetyLevel").get<std::uint8_t>();
+        Need(loaded.safety_level < Levels.size());
+        loaded.age_restricted = in.at("ageRestricted").get<bool>();
+        loaded.custom_rating_age = in.at("customRatingAge").get<std::uint8_t>();
+        loaded.custom_sns_post_restricted = in.at("customSnsPostRestricted").get<bool>();
+        loaded.custom_free_communication_restricted =
+            in.at("customFreeCommunicationRestricted").get<bool>();
+        loaded.rating_organization = in.at("ratingOrganization").get<int>();
+        if (in.contains("stereoVisionRestricted")) {
+            loaded.stereo_vision_restricted = in.at("stereoVisionRestricted").get<bool>();
+        }
+        const auto parse_id = [](const json& value) {
+            return static_cast<std::uint64_t>(std::stoull(value.get<std::string>(), nullptr, 16));
+        };
+        for (const auto& entry : in.at("freeCommunication")) {
+            loaded.free_communication_applications.emplace_back(parse_id(entry.at(0)),
+                                                                entry.at(1).get<bool>());
+        }
+        for (const auto& entry : in.at("exempt")) {
+            loaded.exempt_applications.insert(parse_id(entry));
+        }
+        const auto timer = in.at("playTimer").get<std::string>();
+        Need(timer.size() == 2 * PlayTimerSize);
+        for (std::size_t i = 0; i < PlayTimerSize; ++i) {
+            loaded.play_timer[i] =
+                static_cast<std::uint8_t>(std::stoul(timer.substr(2 * i, 2), nullptr, 16));
+        }
+        setting = std::move(loaded);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool UpsertFreeCommunication(std::vector<std::pair<std::uint64_t, bool>>& list, std::uint64_t id,
+                             bool restricted) {
+    for (auto& entry : list) {
+        if (entry.first == id) {
+            entry.second = restricted;
+            return true;
+        }
+    }
+    if (list.size() >= FreeCommunicationCapacity) {
+        return false;
+    }
+    list.emplace_back(id, restricted);
+    return true;
+}
 
 std::uint32_t ChangedMask(const Setting* before, std::string_view pin_before, bool stereo_before,
                           const Setting* after, std::string_view pin_after, bool stereo_after) {

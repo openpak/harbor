@@ -16,7 +16,9 @@ namespace {
 // keys then fail): find out at boot, not at the first sign-in.
 bool RoundTrip(OpenPak::SecretStore& store) {
     constexpr std::string_view key = "harbor-secret-probe";
-    const bool works = store.Store(key, "probe") && store.Load(key) == "probe";
+    // JSON with escaped quotes: the shape GNOME Keyring was seen to lose.
+    constexpr std::string_view probe = R"({"probe":"a \"quoted\" value","n":1234})";
+    const bool works = store.Store(key, probe) && store.Load(key) == probe;
     store.Erase(key);
     return works && !store.Load(key).has_value();
 }

@@ -37,6 +37,10 @@ public:
         static std::size_t GetApplicationPoolSize();
         static std::size_t GetAppletPoolSize();
         static std::size_t GetMinimumNonSecureSystemPoolSize();
+
+        // A HOME session runs the firmware's applets on a stock console's Applet pool, without
+        // the memory Atmosphère takes from it. Set before the kernel is initialized.
+        static void SetStockAppletPool(bool stock);
     };
 
     // Randomness.

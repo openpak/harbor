@@ -141,6 +141,22 @@
                 android:defaultFocusHighlightEnabled="false"
                 android:visibility="invisible" />
 
+            <!-- Harbor console mode: opens the Harbor menu when no controller is connected -->
+            <ImageButton
+                android:id="@+id/harbor_menu_button"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="8dp"
+                android:alpha="0.5"
+                android:background="@drawable/circle_white"
+                android:contentDescription="@string/harbor_menu_title"
+                android:focusable="false"
+                android:padding="8dp"
+                android:src="@drawable/ic_more_vert"
+                android:visibility="gone"
+                app:tint="@android:color/black" />
+
             <Button
                 android:id="@+id/done_control_config"
                 style="@style/Widget.Material3.Button.ElevatedButton"

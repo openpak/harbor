@@ -241,6 +241,39 @@ bool TranslatorVisitor::v8_AESMC(bool D, size_t sz, size_t Vd, bool M, size_t Vm
     return true;
 }
 
+bool TranslatorVisitor::v8_SHA1H(bool D, size_t sz, size_t Vd, bool M, size_t Vm) {
+    if (sz != 0b10 || mcl::bit::get_bit<0>(Vd) || mcl::bit::get_bit<0>(Vm)) {
+        return UndefinedInstruction();
+    }
+
+    const auto d = ToVector(true, Vd, D);
+    const auto m = ToVector(true, Vm, M);
+    const IR::U32 e = ir.VectorGetElement(32, ir.GetVector(m), 0);
+    ir.SetVector(d, ir.VectorSetElement(32, ir.ZeroVector(), 0, ir.RotateRight(e, ir.Imm8(2))));
+    return true;
+}
+
+// As SHA1SU1 in the A64 translator (simd_sha.cpp), with Qm in place of Vn
+bool TranslatorVisitor::v8_SHA1SU1(bool D, size_t sz, size_t Vd, bool M, size_t Vm) {
+    if (sz != 0b10 || mcl::bit::get_bit<0>(Vd) || mcl::bit::get_bit<0>(Vm)) {
+        return UndefinedInstruction();
+    }
+
+    const auto d = ToVector(true, Vd, D);
+    const auto m = ToVector(true, Vm, M);
+    const IR::U128 x = ir.GetVector(d);
+    const IR::U128 y = ir.GetVector(m);
+
+    const IR::U128 shuffled_y = ir.VectorSetElement(32, ir.VectorRotateWholeVectorRight(y, 32), 3, ir.Imm32(0));
+    const IR::U128 t = ir.VectorEor(x, shuffled_y);
+    const IR::U128 rotated_t = ir.VectorRotateLeft(32, t, 1);
+
+    const IR::U32 low_rotated_t = ir.RotateRight(ir.VectorGetElement(32, rotated_t, 0), ir.Imm8(31));
+    const IR::U32 high_t = ir.VectorGetElement(32, rotated_t, 3);
+    ir.SetVector(d, ir.VectorSetElement(32, rotated_t, 3, ir.Eor(low_rotated_t, high_t)));
+    return true;
+}
+
 bool TranslatorVisitor::v8_SHA256SU0(bool D, size_t sz, size_t Vd, bool M, size_t Vm) {
     if (sz != 0b10 || mcl::bit::get_bit<0>(Vd) || mcl::bit::get_bit<0>(Vm)) {
         return UndefinedInstruction();

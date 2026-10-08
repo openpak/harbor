@@ -18,11 +18,15 @@
 #include "common/android/id_cache.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/param_package.h"
 #include "common/settings.h"
 #include "core/openpak/boot_connection.h"
 #include "frontend_common/joycon_rails.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
+#include "hid_core/frontend/emulated_controller.h"
+#include "hid_core/hid_core.h"
+#include "hid_core/hid_types.h"
 #include "harbor_setup_android.h"
 #include "native.h"
 
@@ -280,6 +284,69 @@ bool ConsoleMode() {
     return console_mode.load();
 }
 
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): physical pads and the touch
+// overlay share the handheld controller (docs/android-port/controller-support.md).
+void StartWithJoyconsAttached() {
+    constexpr std::size_t HandheldIndex = 8;
+    auto& players = Settings::values.players.GetValue();
+    auto& player1 = players[0];
+    auto& handheld = players[HandheldIndex];
+    // A pad bound before HOME and Capture were mapped gets them now (see AddSystemButtons).
+    auto& home = player1.buttons[Settings::NativeButton::Home];
+    auto& capture = player1.buttons[Settings::NativeButton::Screenshot];
+    for (const auto button : {Settings::NativeButton::Plus, Settings::NativeButton::Minus,
+                              Settings::NativeButton::A, Settings::NativeButton::B}) {
+        const Common::ParamPackage param{player1.buttons[button]};
+        if (param.Get("engine", "") != "android" || !param.Has("button")) {
+            continue;
+        }
+        if (home.empty()) {
+            auto mode = param;
+            mode.Set("button", 110); // KEYCODE_BUTTON_MODE
+            home = mode.Serialize();
+            LOG_INFO(Frontend, "harbor: the controller's Mode button is HOME");
+        }
+        if (capture.empty() && param.Get("guid", "").ends_with("0b05")) {
+            auto button9 = param;
+            button9.Set("button", 196); // KEYCODE_BUTTON_9 (BUTTON_10 arrives as it too)
+            capture = button9.Serialize();
+            LOG_INFO(Frontend, "harbor: the ASUS controller's BUTTON_9/BUTTON_10 are Capture");
+        }
+        break;
+    }
+    handheld.buttons = player1.buttons;
+    handheld.analogs = player1.analogs;
+    handheld.motions = player1.motions;
+    player1.controller_type = Settings::ControllerType::Handheld;
+    player1.connected = false;
+    handheld.controller_type = Settings::ControllerType::Handheld;
+    handheld.connected = true;
+    LOG_INFO(Frontend, "harbor: the console starts with its Joy-Cons attached (Handheld connected, "
+                       "Player 1 disconnected)");
+}
+
+void SetJoyconsDetached(Core::HID::HIDCore& hid, bool detached) {
+    using Core::HID::NpadIdType;
+    using Core::HID::NpadStyleIndex;
+    auto* const handheld = hid.GetEmulatedController(NpadIdType::Handheld);
+    auto* const player1 = hid.GetEmulatedController(NpadIdType::Player1);
+    // A style changes only while its controller is disconnected.
+    player1->Disconnect();
+    handheld->Disconnect();
+    if (detached) {
+        player1->SetNpadStyleIndex(NpadStyleIndex::JoyconDual);
+        player1->Connect();
+    } else {
+        player1->SetNpadStyleIndex(NpadStyleIndex::Handheld);
+        handheld->SetNpadStyleIndex(NpadStyleIndex::Handheld);
+        handheld->Connect();
+    }
+    LOG_INFO(Frontend, "harbor: Joy-Cons {} (Handheld {}, Player 1 {})",
+             detached ? "detached" : "attached",
+             handheld->IsConnected() ? "connected" : "disconnected",
+             player1->IsConnected() ? "connected" : "disconnected");
+}
+
 } // namespace Harbor
 
 /// SDL's entry point for HarborSetupActivity: SDLActivity runs it on its own thread, and finishes the
@@ -422,12 +489,19 @@ JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerRequest(
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setJoyconsDetached(JNIEnv*, jobject,
                                                                                      jboolean detached) {
-    FrontendCommon::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),
-                                       detached == JNI_TRUE);
+    Harbor::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),
+                               detached == JNI_TRUE);
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_logGuestThreads(JNIEnv*, jobject) {
     EmulationSession::GetInstance().System().LogGuestThreads();
+}
+
+/// Loads the console's Vulkan driver and checks it is the one the setup chose: "" when it is, else
+/// why the console must not boot (EmulationSession::CheckGpuDriver). Not on the UI thread.
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkGpuDriver(JNIEnv* env,
+                                                                                    jobject) {
+    return Common::Android::ToJString(env, EmulationSession::GetInstance().CheckGpuDriver());
 }
 
 JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_joyconsDetached(JNIEnv*, jobject) {

@@ -103,7 +103,6 @@ struct KernelCore::Impl {
         // Initialize kernel memory and resources.
         InitializeSystemResourceLimit(kernel, system.CoreTiming());
         InitializeMemoryLayout();
-        InitializeAppletResourceLimit(kernel);
         InitializeShutdownThreads();
         InitializePhysicalCores();
         InitializePreemption(kernel);
@@ -162,7 +161,6 @@ struct KernelCore::Impl {
         CleanupObject(time_shared_mem);
         CleanupObject(hidbus_shared_mem);
         CleanupObject(system_resource_limit);
-        CleanupObject(applet_resource_limit);
 
         for (u32 core_id = 0; core_id < Core::Hardware::NUM_CPU_CORES; core_id++) {
             if (shutdown_threads[core_id]) {
@@ -268,22 +266,6 @@ struct KernelCore::Impl {
         // Reserve secure applet memory, introduced in firmware 5.0.0
         constexpr u64 secure_applet_memory_size{KSystemControl::SecureAppletMemorySize};
         ASSERT(system_resource_limit->Reserve(kernel, LimitableResource::PhysicalMemoryMax, secure_applet_memory_size));
-    }
-
-    // Creates the one resource limit every Applet-pool process shares, as pm does on the console:
-    // svcGetInfo(TotalMemorySize) then tells an applet what the pool really has left, and the web
-    // applet sizes its heap from that. The object counts are four times a single process's.
-    void InitializeAppletResourceLimit(KernelCore& kernel) {
-        applet_resource_limit = KResourceLimit::Create(system.Kernel());
-        applet_resource_limit->Initialize();
-        KResourceLimit::Register(kernel, applet_resource_limit);
-
-        const s64 pool_size = static_cast<s64>(memory_manager->GetSize(KMemoryManager::Pool::Applet));
-        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::PhysicalMemoryMax, pool_size).IsSuccess());
-        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::ThreadCountMax, 4 * 800).IsSuccess());
-        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::EventCountMax, 4 * 900).IsSuccess());
-        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::TransferMemoryCountMax, 4 * 200).IsSuccess());
-        ASSERT(applet_resource_limit->SetLimitValue(LimitableResource::SessionCountMax, 4 * 1133).IsSuccess());
     }
 
     void InitializePreemption(KernelCore& kernel) {
@@ -815,7 +797,6 @@ struct KernelCore::Impl {
 
     Init::KSlabResourceCounts slab_resource_counts{};
     KResourceLimit* system_resource_limit{};
-    KResourceLimit* applet_resource_limit{};
 
     KPageBufferSlabHeap page_buffer_slab_heap;
 
@@ -921,10 +902,6 @@ const KResourceLimit* KernelCore::GetSystemResourceLimit() const {
 
 KResourceLimit* KernelCore::GetSystemResourceLimit() {
     return impl->system_resource_limit;
-}
-
-KResourceLimit* KernelCore::GetAppletResourceLimit() {
-    return impl->applet_resource_limit;
 }
 
 void KernelCore::AppendNewProcess(KProcess* process) {

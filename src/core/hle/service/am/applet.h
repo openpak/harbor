@@ -9,6 +9,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <stack>
 
 #include "common/math_util.h"
@@ -127,6 +128,10 @@ struct Applet {
     // the lock before the process is terminated, so the window system never pauses or resumes a
     // process the kernel is tearing down (a host-thread SetActivity racing Terminate crashed).
     bool process_exiting{};
+
+    // ISelfController 20 SetDesirableKeyboardLayout: the layout this applet wants the library
+    // applets it starts to type with (nn::settings::KeyboardLayout).
+    std::optional<u32> desirable_keyboard_layout{};
 
     // Self state
     bool exit_locked{};

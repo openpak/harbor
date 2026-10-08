@@ -127,9 +127,6 @@ public:
     /// Retrieves a shared pointer to the system resource limit instance.
     KResourceLimit* GetSystemResourceLimit();
 
-    /// The resource limit shared by every process in the Applet pool.
-    KResourceLimit* GetAppletResourceLimit();
-
     /// Adds/removes the given pointer to an internal list of active processes.
     void AppendNewProcess(KProcess* process);
     void RemoveProcess(KProcess* process);

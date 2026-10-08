@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include <fmt/format.h>
@@ -332,13 +335,44 @@ void LinkUser(const std::string& uid) {
 
 namespace OpenPak {
 
+namespace {
+
+// Users whose link OnFirmwareUserRegistered is still making.
+std::mutex pending_mutex;
+std::condition_variable pending_changed;
+std::set<std::string> pending_links;
+
+} // namespace
+
 void OnFirmwareUserRegistered(const std::string& uid) {
     if (uid.empty() || !Session::Enabled() || !Account::HasAccount()) {
         return;
     }
+    {
+        std::scoped_lock lock{pending_mutex};
+        pending_links.insert(uid);
+    }
     // Network round trips (the website, then dauth, the device account and federation): never on
     // the caller's thread, which answers the guest.
-    std::thread([uid] { Account::LinkUser(uid); }).detach();
+    std::thread([uid] {
+        Account::LinkUser(uid);
+        {
+            std::scoped_lock lock{pending_mutex};
+            pending_links.erase(uid);
+        }
+        pending_changed.notify_all();
+    }).detach();
+}
+
+void WaitForFirmwareUserLink(const std::string& uid) {
+    // A link takes ~1.5 s (four round trips); a slow network gets the honest "not linked" after this.
+    constexpr auto MaxWait = std::chrono::seconds{8};
+    std::unique_lock lock{pending_mutex};
+    if (!pending_links.contains(uid)) {
+        return;
+    }
+    LOG_INFO(WebService, "[OpenPak] account: waiting for the new user's link before answering");
+    pending_changed.wait_for(lock, MaxWait, [&] { return !pending_links.contains(uid); });
 }
 
 } // namespace OpenPak

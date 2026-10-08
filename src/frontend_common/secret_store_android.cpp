@@ -5,6 +5,8 @@
 // AES-256-GCM under a non-exportable Keystore key and keeps the ciphertext in the app's no-backup
 // directory; this is its native face.
 
+#include <thread>
+
 #include <jni.h>
 
 #include "common/android/android_common.h"
@@ -27,44 +29,57 @@ bool ClearException(JNIEnv* env) {
     return false;
 }
 
+/// Runs `call` with a JNIEnv on a short-lived thread of its own and waits for it. Callers include
+/// HLE services such as pctl, which run on guest-core fibers: Java on a fiber's stack (outside the
+/// stack ART knows for the thread) killed the process with SIGSEGV and no tombstone. A plain thread
+/// with its own stack, attached for the call and detached when it ends, is safe from any caller.
+template <typename Call>
+void OnJavaThread(Call&& call) {
+    std::thread{[&call] { call(Common::Android::GetEnvForThread()); }}.join();
+}
+
 class KeystoreSecretStore final : public OpenPak::SecretStore {
 public:
     KeystoreSecretStore(jclass secrets_, jmethodID load_, jmethodID store_, jmethodID erase_)
         : secrets{secrets_}, load{load_}, store{store_}, erase{erase_} {}
 
-    // OpenPak calls these from its own native threads, which stay attached: every local
-    // reference is deleted here rather than left for a frame that never pops.
     std::optional<std::string> Load(std::string_view key) override {
-        JNIEnv* env = Common::Android::GetEnvForThread();
-        jstring jkey = Common::Android::ToJString(env, key);
-        auto value = static_cast<jstring>(env->CallStaticObjectMethod(secrets, load, jkey));
-        const bool failed = ClearException(env);
-        env->DeleteLocalRef(jkey);
-        if (failed || !value) {
-            return std::nullopt;
-        }
-        std::string out = Common::Android::GetJString(env, value);
-        env->DeleteLocalRef(value);
+        std::optional<std::string> out;
+        OnJavaThread([&](JNIEnv* env) {
+            jstring jkey = Common::Android::ToJString(env, key);
+            auto value = static_cast<jstring>(env->CallStaticObjectMethod(secrets, load, jkey));
+            const bool failed = ClearException(env);
+            env->DeleteLocalRef(jkey);
+            if (!failed && value) {
+                out = Common::Android::GetJString(env, value);
+            }
+            if (value) {
+                env->DeleteLocalRef(value);
+            }
+        });
         return out;
     }
 
     bool Store(std::string_view key, std::string_view secret) override {
-        JNIEnv* env = Common::Android::GetEnvForThread();
-        jstring jkey = Common::Android::ToJString(env, key);
-        jstring jsecret = Common::Android::ToJString(env, secret);
-        const bool ok = env->CallStaticBooleanMethod(secrets, store, jkey, jsecret) == JNI_TRUE;
-        const bool failed = ClearException(env);
-        env->DeleteLocalRef(jsecret);
-        env->DeleteLocalRef(jkey);
-        return ok && !failed;
+        bool ok = false;
+        OnJavaThread([&](JNIEnv* env) {
+            jstring jkey = Common::Android::ToJString(env, key);
+            jstring jsecret = Common::Android::ToJString(env, secret);
+            ok = env->CallStaticBooleanMethod(secrets, store, jkey, jsecret) == JNI_TRUE;
+            ok = !ClearException(env) && ok;
+            env->DeleteLocalRef(jsecret);
+            env->DeleteLocalRef(jkey);
+        });
+        return ok;
     }
 
     void Erase(std::string_view key) override {
-        JNIEnv* env = Common::Android::GetEnvForThread();
-        jstring jkey = Common::Android::ToJString(env, key);
-        env->CallStaticVoidMethod(secrets, erase, jkey);
-        ClearException(env);
-        env->DeleteLocalRef(jkey);
+        OnJavaThread([&](JNIEnv* env) {
+            jstring jkey = Common::Android::ToJString(env, key);
+            env->CallStaticVoidMethod(secrets, erase, jkey);
+            ClearException(env);
+            env->DeleteLocalRef(jkey);
+        });
     }
 
 private:

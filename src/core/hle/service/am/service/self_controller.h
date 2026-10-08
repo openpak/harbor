@@ -36,6 +36,7 @@ private:
     Result EnterFatalSection();
     Result LeaveFatalSection();
     Result GetLibraryAppletLaunchableEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result SetDesirableKeyboardLayout(u32 layout);
     Result SetScreenShotPermission(ScreenshotPermission screen_shot_permission);
     Result SetOperationModeChangedNotification(bool enabled);
     Result SetPerformanceModeChangedNotification(bool enabled);

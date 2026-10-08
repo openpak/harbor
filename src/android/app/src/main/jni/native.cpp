@@ -7,9 +7,13 @@
 #define VMA_IMPLEMENTATION
 #include "video_core/vulkan_common/vma.h"
 
+#include <cctype>
+#include <climits>
 #include <codecvt>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <locale>
 #include <map>
 #include <set>
@@ -181,6 +185,21 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
         handle = adrenotools_open_libvulkan(
             RTLD_NOW, featureFlags | ADRENOTOOLS_DRIVER_CUSTOM, nullptr, hook_lib_dir.c_str(),
             custom_driver_dir.c_str(), custom_driver_name.c_str(), file_redirect_dir_, nullptr);
+        // The driver itself only loads at the first Vulkan instance; CheckGpuDriver confirms it.
+        if (handle) {
+            LOG_INFO(Frontend, "gpu driver: custom {} from {} set up through adrenotools",
+                     custom_driver_name, custom_driver_dir);
+        } else {
+            LOG_ERROR(Frontend,
+                      "gpu driver: custom {} from {} could not be set up (file {}); falling back "
+                      "to the system driver",
+                      custom_driver_name, custom_driver_dir,
+                      access((custom_driver_dir + custom_driver_name).c_str(), R_OK) == 0
+                          ? "present"
+                          : "missing");
+        }
+    } else {
+        LOG_INFO(Frontend, "gpu driver: no custom driver installed, the system driver is used");
     }
 
     // Try to load the system driver.
@@ -189,7 +208,130 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
                                             nullptr, nullptr, file_redirect_dir_, nullptr);
     }
 
+    std::scoped_lock lock{m_driver_mutex};
     m_vulkan_library = std::make_shared<Common::DynamicLibrary>(handle);
+    m_custom_driver_path = custom_driver_name.empty() ? "" : custom_driver_dir + custom_driver_name;
+    m_driver_check.reset();
+#endif
+}
+
+namespace {
+
+/// Whether the library at `path` is mapped into this process (the driver loaded from it).
+bool IsLibraryMapped(const std::string& path) {
+    char resolved[PATH_MAX];
+    const std::string real = realpath(path.c_str(), resolved) ? resolved : path;
+    std::ifstream maps{"/proc/self/maps"};
+    std::string line;
+    while (std::getline(maps, line)) {
+        const auto slash = line.find('/');
+        if (slash != std::string::npos) {
+            const std::string_view mapped{line.data() + slash, line.size() - slash};
+            if (mapped == real || mapped == path) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// The GPU's name: the Vulkan device's when known, else the kernel's (e.g. "Adreno650v2").
+std::string GpuName(const std::string& vulkan_name) {
+    if (!vulkan_name.empty()) {
+        return vulkan_name;
+    }
+    std::ifstream model{"/sys/class/kgsl/kgsl-3d0/gpu_model"};
+    std::string name;
+    std::getline(model, name);
+    return name;
+}
+
+/// The Vulkan loader to ask about the GPU: the custom driver's when one is installed (Harbor: the
+/// phone's own driver then never loads into the process), else the system one.
+std::shared_ptr<Common::DynamicLibrary> ProbeLibrary() {
+    if (auto custom = EmulationSession::GetInstance().CustomDriverLibrary()) {
+        return custom;
+    }
+    auto library = std::make_shared<Common::DynamicLibrary>();
+    if (!library->Open("libvulkan.so")) {
+        return nullptr;
+    }
+    return library;
+}
+
+bool IsAdreno6xx(const std::string& gpu_name) {
+    // "Adreno (TM) 650" from Vulkan, "Adreno650v2" from the kernel.
+    for (const std::string_view prefix : {"Adreno (TM) 6", "Adreno6"}) {
+        const auto at = gpu_name.find(prefix);
+        if (at != std::string::npos && at + prefix.size() + 1 < gpu_name.size() &&
+            std::isdigit(static_cast<unsigned char>(gpu_name[at + prefix.size()])) &&
+            std::isdigit(static_cast<unsigned char>(gpu_name[at + prefix.size() + 1]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+std::shared_ptr<Common::DynamicLibrary> EmulationSession::CustomDriverLibrary() {
+    std::scoped_lock lock{m_driver_mutex};
+    return m_custom_driver_path.empty() ? nullptr : m_vulkan_library;
+}
+
+std::string EmulationSession::CheckGpuDriver() {
+#ifdef ARCHITECTURE_arm64
+    std::scoped_lock lock{m_driver_mutex};
+    if (m_driver_check) {
+        return *m_driver_check;
+    }
+    if (m_custom_driver_path.empty() || !m_vulkan_library) {
+        m_driver_check = "";
+        return "";
+    }
+
+    // The driver loads with the library's first instance; the renderer's later instance reuses it.
+    std::string device_name;
+    u32 driver_version = 0;
+    try {
+        Vulkan::vk::InstanceDispatch dld;
+        const auto instance = Vulkan::CreateInstance(*m_vulkan_library, dld, VK_API_VERSION_1_1);
+        const auto physical_devices = instance.EnumeratePhysicalDevices();
+        if (!physical_devices.empty()) {
+            const auto properties =
+                Vulkan::vk::PhysicalDevice(physical_devices[0], dld).GetProperties();
+            device_name = properties.deviceName;
+            driver_version = properties.driverVersion;
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR(Frontend, "gpu driver: no Vulkan instance from the selected driver: {}", e.what());
+    }
+
+    const std::string library = m_custom_driver_path.substr(m_custom_driver_path.rfind('/') + 1);
+    if (IsLibraryMapped(m_custom_driver_path)) {
+        LOG_INFO(Frontend, "gpu driver: the console renders with {} (device {}, driver version {:#x})",
+                 m_custom_driver_path, device_name, driver_version);
+        m_driver_check = "";
+        return "";
+    }
+
+    const std::string gpu = GpuName(device_name);
+    const std::string problem = fmt::format(
+        "The selected graphics driver ({}) did not load; the phone's own driver ({}) would run "
+        "the console instead.",
+        library, gpu.empty() ? "unknown GPU" : gpu);
+    if (IsAdreno6xx(gpu)) {
+        LOG_CRITICAL(Frontend, "gpu driver: {} not mapped after loading; refusing to boot: {}",
+                     m_custom_driver_path, problem);
+        m_driver_check = problem;
+    } else {
+        LOG_WARNING(Frontend, "gpu driver: {} not mapped after loading; continuing: {}",
+                    m_custom_driver_path, problem);
+        m_driver_check = "";
+    }
+    return *m_driver_check;
+#else
+    return "";
 #endif
 }
 
@@ -286,6 +428,12 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
                                                                const bool frontend_initiated) {
     std::scoped_lock lock(m_mutex);
 
+    // Harbor: the console never falls back silently from the driver the setup chose (the launcher
+    // checked already; this covers a driver changed since).
+    if (Harbor::ConsoleMode() && !CheckGpuDriver().empty()) {
+        return Core::SystemResultStatus::ErrorVideoCore;
+    }
+
     // Create the render window.
     m_window = std::make_unique<EmuWindow_Android>(m_native_window, m_vulkan_library);
 
@@ -296,6 +444,9 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     m_system.SetShuttingDown(false);
     m_system.ApplySettings();
     Settings::LogSettings();
+    if (Harbor::ConsoleMode()) {
+        Harbor::StartWithJoyconsAttached();
+    }
     m_system.HIDCore().ReloadInputDevices();
     if (Harbor::ConsoleMode()) {
         // A console session runs the firmware's own keyboard and browser, never Android's.
@@ -874,9 +1025,15 @@ jobjectArray Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getSystemDriverInfo(
     const char* file_redirect_dir_{};
     int featureFlags{};
     std::string hook_lib_dir = Common::Android::GetJString(env, j_hook_lib_dir);
-    auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
-                                             nullptr, nullptr, file_redirect_dir_, nullptr);
-    auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
+    // Harbor: with a custom driver installed, describe that one and keep the phone's own driver out
+    // of the process.
+    auto driver_library = EmulationSession::GetInstance().CustomDriverLibrary();
+    if (!driver_library) {
+        auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr,
+                                                 hook_lib_dir.c_str(), nullptr, nullptr,
+                                                 file_redirect_dir_, nullptr);
+        driver_library = std::make_shared<Common::DynamicLibrary>(handle);
+    }
     InputCommon::InputSubsystem input_subsystem;
     auto window =
         std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
@@ -909,9 +1066,15 @@ jstring Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getGpuModel(JNIEnv *env, j
     const char* file_redirect_dir_{};
     int featureFlags{};
     std::string hook_lib_dir = Common::Android::GetJString(env, j_hook_lib_dir);
-    auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
-                                             nullptr, nullptr, file_redirect_dir_, nullptr);
-    auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
+    // Harbor: with a custom driver installed, describe that one and keep the phone's own driver out
+    // of the process.
+    auto driver_library = EmulationSession::GetInstance().CustomDriverLibrary();
+    if (!driver_library) {
+        auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr,
+                                                 hook_lib_dir.c_str(), nullptr, nullptr,
+                                                 file_redirect_dir_, nullptr);
+        driver_library = std::make_shared<Common::DynamicLibrary>(handle);
+    }
     InputCommon::InputSubsystem input_subsystem;
     auto window =
             std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
@@ -1164,14 +1327,14 @@ constexpr u32 VENDOR_QUALCOMM = 0x5143;
 constexpr u32 VENDOR_ARM = 0x13B5;
 
 VkPhysicalDeviceProperties GetVulkanDeviceProperties() {
-    Common::DynamicLibrary library;
-    if (!library.Open("libvulkan.so")) {
+    const auto library = ProbeLibrary();
+    if (!library) {
         return {};
     }
 
     Vulkan::vk::InstanceDispatch dld;
     // TODO: warn the user that Vulkan is unavailable rather than hard crash
-    const auto instance = Vulkan::CreateInstance(library, dld, VK_API_VERSION_1_1);
+    const auto instance = Vulkan::CreateInstance(*library, dld, VK_API_VERSION_1_1);
     const auto physical_devices = instance.EnumeratePhysicalDevices();
     if (physical_devices.empty()) {
         return {};
@@ -1182,13 +1345,13 @@ VkPhysicalDeviceProperties GetVulkanDeviceProperties() {
 }
 
 bool GetFrameGenerationSupport() {
-    Common::DynamicLibrary library;
-    if (!library.Open("libvulkan.so")) {
+    const auto library = ProbeLibrary();
+    if (!library) {
         return false;
     }
 
     Vulkan::vk::InstanceDispatch dld;
-    const auto instance = Vulkan::CreateInstance(library, dld, VK_API_VERSION_1_1);
+    const auto instance = Vulkan::CreateInstance(*library, dld, VK_API_VERSION_1_1);
     const auto physical_devices = instance.EnumeratePhysicalDevices();
     if (physical_devices.empty()) {
         return false;
