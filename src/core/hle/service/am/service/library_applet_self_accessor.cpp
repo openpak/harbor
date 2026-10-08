@@ -20,6 +20,7 @@
 #include "core/hle/service/am/service/library_applet_self_accessor.h"
 #include "core/hle/service/am/service/storage.h"
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/erpt/erpt.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/ns/application_manager_interface.h"
@@ -283,19 +284,39 @@ Result ILibraryAppletSelfAccessor::GetDesirableKeyboardLayout(Out<u32> out_desir
     R_SUCCEED();
 }
 
-// An applet showed the user an error. A console files it with erpt for the error history; this
-// system keeps no error history yet (erpt is a stub), so the code is logged. Behaviour follows the
-// Ryujinx Harbor (MIT-licensed Ryujinx base).
+// An applet showed the user an error: am files a Visible erpt report for it (firmware 23.0.1 am
+// 0x7314c, through erpt:c 5): ErrorInfo with the code and AbortFlag/CreateProcessFailureFlag
+// false, and the main applet's ApplicationInfo, so Settings > Support > Error History lists it.
+// A code outside 2000-2999/0-9999 is filed as 2999-9999 with the raw pair in InvalidErrorCode,
+// as the firmware formats codes. The error context's fields are not parsed into the report.
+static void FileVisibleError(Core::System& system, Applet& applet, ErrorCode error_code) {
+    ERPT::Context error_info;
+    error_info.category = ERPT::Category_ErrorInfo;
+    error_info.Set(116, false); // AbortFlag
+    error_info.Set(152, false); // CreateProcessFailureFlag
+    std::string code;
+    if (error_code.category >= 2000 && error_code.category < 3000 && error_code.number < 10000) {
+        code = fmt::format("{:04}-{:04}", error_code.category, error_code.number);
+    } else {
+        code = "2999-9999";
+        error_info.Set(681, fmt::format("{}-{}", error_code.category, error_code.number));
+    }
+    const auto main = GetMainIdentity(applet);
+    const std::vector<ERPT::Context> additional{ERPT::MakeApplicationInfo(
+        system, main.application_id, static_cast<s32>(main.applet_id))};
+    LOG_WARNING(Service_AM, "am: applet {} reports visible error {}",
+                static_cast<u32>(applet.applet_id), code);
+    ERPT::CreateHostReport(system, ERPT::ReportType_Visible, code, &error_info, additional);
+}
+
 Result ILibraryAppletSelfAccessor::ReportVisibleError(ErrorCode error_code) {
-    LOG_WARNING(Service_AM, "am: applet {} reports visible error {:04}-{:04}",
-                static_cast<u32>(m_applet->applet_id), error_code.category, error_code.number);
+    FileVisibleError(system, *m_applet, error_code);
     R_SUCCEED();
 }
 
 Result ILibraryAppletSelfAccessor::ReportVisibleErrorWithErrorContext(
     ErrorCode error_code, InLargeData<ErrorContext, BufferAttr_HipcMapAlias> error_context) {
-    LOG_WARNING(Service_AM, "am: applet {} reports visible error {:04}-{:04} (with context)",
-                static_cast<u32>(m_applet->applet_id), error_code.category, error_code.number);
+    FileVisibleError(system, *m_applet, error_code);
     R_SUCCEED();
 }
 

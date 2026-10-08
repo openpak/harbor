@@ -639,6 +639,10 @@ add_library(core STATIC
     hle/service/cmif_types.h
     hle/service/erpt/erpt.cpp
     hle/service/erpt/erpt.h
+    hle/service/erpt/erpt_fields.h
+    hle/service/erpt/msgpack_writer.h
+    hle/service/erpt/report_builder.h
+    hle/service/erpt/report_store.h
     hle/service/es/es.cpp
     hle/service/es/es.h
     hle/service/eupld/eupld.cpp
