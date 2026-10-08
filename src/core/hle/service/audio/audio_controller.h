@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/set/settings_types.h"
@@ -59,6 +61,12 @@ private:
     Result AcquireTargetNotification(OutCopyHandle<Kernel::KReadableEvent> out_notification_event);
     Result Unknown5000(Out<SharedPointer<IAudioController>> out_audio_controller);
 
+    /// Whether this is a HOME session, where the active target's volume and mute are the console's
+    /// output gain (AudioCore::Sink::SetConsoleOutputGain) instead of Eden's host volume. Decided
+    /// at the first volume command, when the session is known.
+    bool UseConsoleGain();
+    void ApplyConsoleGain();
+
     KernelHelpers::ServiceContext service_context;
 
     Kernel::KEvent* notification_event;
@@ -66,6 +74,7 @@ private:
     std::array<s32, 6> m_target_volumes{{15, 15, 15, 15, 15, 15}};
     std::array<bool, 6> m_target_muted{{false, false, false, false, false, false}};
     Set::AudioOutputModeTarget m_active_target{Set::AudioOutputModeTarget::Speaker};
+    std::optional<bool> m_console_gain;
 };
 
 } // namespace Service::Audio
