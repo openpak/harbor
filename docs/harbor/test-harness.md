@@ -14,7 +14,10 @@ scripts/harbor/drive.sh [--layout us|uk|auto] <name> <command> [args...] [<comma
 (`$SCR/build/<worktree>/desktop/bin/harbor`, or `$SCR/build/desktop` for the main checkout); set
 `HARBOR_BIN` to override. It creates `$SCR/run/<name>/` (the run directory is the working directory,
 so the data lives in `<run>/user/`), extracts firmware 23.0.1 once into `$SCR/run/_fw-23.0.1/`,
-symlinks `~/.switch/{prod,title}.keys`, writes a minimal `qt-config.ini` (no first-run prompts,
+symlinks `~/.switch/{prod,title}.keys`, gives a run with no `user/openpak/` the shared test template
+`$SCR/run/_openpak-template/` (`server.json` with the public site, and the `news-test-boot` marker
+that makes a `--qlaunch` run connect to OpenPak at boot; never the owner's data, so without it every
+Nintendo name fails closed and the account sign-in shows 2810-1006), writes a minimal `qt-config.ini` (no first-run prompts,
 vsync Immediate, null audio, line-flushed log, no pause or confirm dialogs, Handheld
 connected and Player 1 not, so a title sees one controller), and starts `harbor --qlaunch` in handheld mode (the 23.0.1 starter stops at "remove the
 console from the dock" when docked; `--docked` selects docked, re-applied on every start). `--fresh`

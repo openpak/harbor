@@ -34,7 +34,8 @@ private:
     Result GetSize(Out<s64> out_size);
     Result Get(Out<u64> out_written, u64 offset, OutBuffer<BufferAttr_HipcMapAlias> out_buffer);
     Result Cancel();
-    Result GetErrorContext(OutBuffer<BufferAttr_HipcMapAlias> out_error_context);
+    Result GetErrorContext(
+        OutLargeData<std::array<u8, 0x200>, BufferAttr_HipcMapAlias> out_error_context);
 
     Service::Event* event{};
 };

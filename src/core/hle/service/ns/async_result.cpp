@@ -59,11 +59,12 @@ Result ICompletedAsyncValue::Cancel() {
     R_SUCCEED();
 }
 
-Result ICompletedAsyncValue::GetErrorContext(OutBuffer<BufferAttr_HipcMapAlias> out_error_context) {
-    // No error happened: an empty nn::err::ErrorContext (the buffer's fixed size is not
-    // established, so all of it is cleared).
+Result ICompletedAsyncValue::GetErrorContext(
+    OutLargeData<std::array<u8, 0x200>, BufferAttr_HipcMapAlias> out_error_context) {
+    // No error happened: an empty nn::err::ErrorContext. 0x200 bytes, as 23.0.1 ns's handlers
+    // (0x177b98, 0x17ce8c) expect.
     LOG_DEBUG(Service_NS, "called");
-    std::memset(out_error_context.data(), 0, out_error_context.size());
+    *out_error_context = {};
     R_SUCCEED();
 }
 
