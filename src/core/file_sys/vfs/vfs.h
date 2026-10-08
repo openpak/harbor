@@ -188,6 +188,12 @@ public:
 
     // Returns the full path of this file as a string, recursively
     virtual std::string GetFullPath() const;
+
+    // The host path a file was opened with (a content URI on Android); empty for files that are
+    // not host files, such as the entries inside a container.
+    virtual std::string GetHostPath() const {
+        return {};
+    }
 };
 
 // A class representing a directory in an abstract filesystem.
