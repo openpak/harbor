@@ -47,6 +47,7 @@ import org.yuzu.yuzu_emu.overlay.model.OverlayControlData
 import org.yuzu.yuzu_emu.overlay.model.OverlayLayout
 import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.harbor.HarborNative
+import org.yuzu.yuzu_emu.harbor.HarborPower
 import org.yuzu.yuzu_emu.utils.Log
 import org.yuzu.yuzu_emu.utils.NativeConfig
 
@@ -255,7 +256,7 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         }
 
         for (button in overlayButtons) {
-            if (!button.updateStatus(event)) {
+            if (button.isPower || !button.updateStatus(event)) {
                 continue
             }
             NativeInput.onOverlayButtonEvent(
@@ -370,7 +371,7 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
     }
 
     private fun isTouchInputConsumed(track_id: Int): Boolean {
-        if (harborFingers.containsKey(track_id)) {
+        if (harborFingers.containsKey(track_id) || track_id == harborPowerFinger) {
             return true
         }
         for (button in overlayButtons) {
@@ -512,6 +513,10 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
                     return false
                 }
                 val button = harborButtonAt(event.getX(index), event.getY(index), 1f) ?: return false
+                if (button.isPower) {
+                    harborPowerDown(id, button)
+                    return true
+                }
                 harborFingers[id] = button
                 harborPress(button, port)
                 return true
@@ -529,8 +534,9 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
                     if (current != null && harborContains(current, x, y, HARBOR_HIT_SLOP)) {
                         continue
                     }
-                    // Off the button it was on: let it go, and press the one the finger slid onto.
-                    val next = harborButtonAt(x, y, 1f)
+                    // Off the button it was on: let it go, and press the one the finger slid onto
+                    // (never the power button).
+                    val next = harborButtonAt(x, y, 1f, power = false)
                     if (next === current) {
                         continue
                     }
@@ -542,7 +548,12 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
                 return changed
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
-                val id = event.getPointerId(event.actionIndex)
+                val index = event.actionIndex
+                val id = event.getPointerId(index)
+                if (id == harborPowerFinger) {
+                    harborPowerUp(event.getX(index), event.getY(index))
+                    return true
+                }
                 if (!harborFingers.containsKey(id)) {
                     return false
                 }
@@ -558,8 +569,8 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         overlayDpads.any { it.trackId == id } || overlayJoysticks.any { it.trackId == id }
 
     /** The button under the point, the nearest centre when slop makes two overlap. */
-    private fun harborButtonAt(x: Float, y: Float, slop: Float): InputOverlayDrawableButton? =
-        overlayButtons.filter { harborContains(it, x, y, slop) }.minByOrNull {
+    private fun harborButtonAt(x: Float, y: Float, slop: Float, power: Boolean = true): InputOverlayDrawableButton? =
+        overlayButtons.filter { (power || !it.isPower) && harborContains(it, x, y, slop) }.minByOrNull {
             val dx = x - it.bounds.exactCenterX()
             val dy = y - it.bounds.exactCenterY()
             dx * dx + dy * dy
@@ -593,8 +604,48 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
     }
 
+    // The power button: a tap is a short press (sleep), a press held for a second the power
+    // button's hold (the power menu), sent once while still held. Sliding off cancels it.
+    private var harborPowerFinger = -1
+    private var harborPowerButton: InputOverlayDrawableButton? = null
+    private var harborPowerHeld = false
+    private val harborPowerHold = Runnable {
+        harborPowerHeld = true
+        HarborPower.hold("touch controls")
+    }
+
+    private fun harborPowerDown(id: Int, button: InputOverlayDrawableButton) {
+        harborPowerCancel()
+        harborPowerFinger = id
+        harborPowerButton = button
+        harborPowerHeld = false
+        button.setPressed(true)
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        postDelayed(harborPowerHold, HarborPower.HOLD_MS)
+    }
+
+    private fun harborPowerUp(x: Float, y: Float) {
+        val button = harborPowerButton
+        val tap = !harborPowerHeld && button != null && harborContains(button, x, y, HARBOR_HIT_SLOP)
+        harborPowerCancel()
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE)
+        if (tap) {
+            HarborPower.shortPress("touch controls")
+        }
+    }
+
+    private fun harborPowerCancel() {
+        removeCallbacks(harborPowerHold)
+        harborPowerButton?.setPressed(false)
+        harborPowerButton = null
+        harborPowerFinger = -1
+        harborPowerHeld = false
+        invalidate()
+    }
+
     /** Lets go of every button and the touch screen (the view goes, the controls are rebuilt). */
     private fun harborReleaseAll() {
+        harborPowerCancel()
         if (harborHeld.isNotEmpty()) {
             val port = harborPort()
             for (button in harborHeld.keys) {
@@ -949,6 +1000,23 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
                             position
                         )
                     )
+                }
+
+                OverlayControl.BUTTON_POWER.id -> {
+                    // Harbor console mode only: the console's power button.
+                    if (HarborConsole.active) {
+                        overlayButtons.add(
+                            initializeOverlayButton(
+                                context,
+                                windowSize,
+                                R.drawable.facebutton_power,
+                                R.drawable.facebutton_power_depressed,
+                                NativeButton.Home,
+                                data,
+                                position
+                            )
+                        )
+                    }
                 }
 
                 OverlayControl.BUTTON_CAPTURE.id -> {
@@ -1491,6 +1559,8 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
                 OverlayControl.BUTTON_CAPTURE.id,
                 OverlayControl.BUTTON_PLUS.id,
                 OverlayControl.BUTTON_MINUS.id -> 0.07f
+
+                OverlayControl.BUTTON_POWER.id -> 0.06f
 
                 OverlayControl.BUTTON_L.id,
                 OverlayControl.BUTTON_R.id,

@@ -71,6 +71,9 @@ object HarborNative {
     /** The console's power button held: HOME's overlay opens its power menu. */
     external fun pressPower()
 
+    /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
+    external fun powerShortPress()
+
     /** The console's output gain for Android's audio focus: 1 full, 0.25 ducked, 0 muted. */
     external fun setHostGain(gain: Float)
 

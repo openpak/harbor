@@ -58,6 +58,8 @@ import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.harbor.HarborAudioFocus
 import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborPower
+import org.yuzu.yuzu_emu.harbor.HarborSleep
 import org.yuzu.yuzu_emu.model.EmulationViewModel
 import org.yuzu.yuzu_emu.model.Game
 import org.yuzu.yuzu_emu.network.NetPlayManager
@@ -272,6 +274,11 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     override fun onPause() {
         if (HarborConsole.active) {
             HarborAudioFocus.release()
+            // Leaving Harbor wakes a sleeping console; the screen's own pause takes over.
+            HarborSleep.wake("Harbor left")
+            mainHandler.removeCallbacks(harborVolumeHold)
+            mainHandler.removeCallbacks(harborVolumeSingle)
+            harborVolumePending = false
         }
         if (foreground === this) foreground = null
         // Nothing stays held in the guest while Harbor is in the background.
@@ -577,8 +584,50 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         return false
     }
 
+    // Harbor console mode: Volume Down is also the console's power button. A single press still
+    // lowers the volume (after a short wait for a second press), a hold of HarborPower.HOLD_MS is
+    // the power button's hold (the power menu), a quick double press the short press (sleep).
+    private var harborVolumeHoldFired = false
+    private var harborVolumePending = false
+    private val harborVolumeHold = Runnable {
+        harborVolumeHoldFired = true
+        HarborPower.hold("Volume Down")
+    }
+    private val harborVolumeSingle = Runnable {
+        harborVolumePending = false
+        (getSystemService(AUDIO_SERVICE) as AudioManager).adjustStreamVolume(
+            AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI
+        )
+    }
+
+    private fun harborVolumeDown(event: KeyEvent): Boolean {
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
+                harborVolumeHoldFired = false
+                mainHandler.postDelayed(harborVolumeHold, HarborPower.HOLD_MS)
+            }
+            KeyEvent.ACTION_UP -> {
+                mainHandler.removeCallbacks(harborVolumeHold)
+                if (harborVolumeHoldFired || event.isCanceled) {
+                    harborVolumeHoldFired = false
+                } else if (harborVolumePending) {
+                    mainHandler.removeCallbacks(harborVolumeSingle)
+                    harborVolumePending = false
+                    HarborPower.shortPress("Volume Down twice")
+                } else {
+                    harborVolumePending = true
+                    mainHandler.postDelayed(harborVolumeSingle, HARBOR_DOUBLE_PRESS_MS)
+                }
+            }
+        }
+        return true
+    }
+
     override fun dispatchKeyEvent(keyEvent: KeyEvent): Boolean {
 
+        if (HarborConsole.active && keyEvent.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return harborVolumeDown(keyEvent)
+        }
         if (keyEvent.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
             keyEvent.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             return super.dispatchKeyEvent(keyEvent)
@@ -588,6 +637,17 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
                                 keyEvent.device?.isVirtual == false
 
         val isControllerInput = InputHandler.isPhysicalGameController(keyEvent.device)
+
+        // Harbor: a sleeping console wakes on any controller button (HOME included) or Android
+        // back; the press itself does not reach the guest.
+        if (HarborConsole.active && HarborSleep.sleeping &&
+            (isControllerInput || keyEvent.keyCode == KeyEvent.KEYCODE_BACK)
+        ) {
+            if (keyEvent.action == KeyEvent.ACTION_DOWN && keyEvent.repeatCount == 0) {
+                HarborSleep.wake(if (isControllerInput) "controller" else "Android back")
+            }
+            return true
+        }
 
         // Harbor console mode: Android back (button or gesture) opens the Harbor menu here, before
         // anything else can take the key.
@@ -1052,6 +1112,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
         // How long a Plus or Minus press waits for its partner (the Harbor menu chord).
         private const val HARBOR_CHORD_WINDOW_MS = 150L
+        // How long a Volume Down press waits for a second one (a double press is sleep).
+        private const val HARBOR_DOUBLE_PRESS_MS = 300L
         private const val ASUS_VID = 0x0b05
 
         /** The emulation screen while it is resumed (HarborKeyService hands it controller keys). */

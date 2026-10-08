@@ -53,6 +53,7 @@ object HarborConsole {
     /** Registers the library, applies the console preset and starts the HOME menu in place of `from`. */
     fun boot(from: Activity) {
         active = true
+        HarborSleep.reset()
         HarborNative.setConsoleMode(true)
         // What Eden's main screen sets up before any game: the multiplayer/network layer.
         NativeLibrary.initMultiplayer()
@@ -235,6 +236,7 @@ object HarborConsole {
 
     /** "Harbor stopped" with `reason` in place of `activity` (the emulation screen). */
     fun showStopped(activity: Activity, reason: String) {
+        HarborSleep.reset()
         Log.info("[Harbor] the console stopped: $reason")
         HarborAudioFocus.release()
         activity.startActivity(HarborStoppedActivity.stopped(activity, reason))

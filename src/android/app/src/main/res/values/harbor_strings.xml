@@ -54,4 +54,5 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_pad_edit">Edit layout</string>
     <string name="harbor_pad_adjust">Size and opacity</string>
     <string name="harbor_pad_reset">Reset layout</string>
+    <string name="harbor_pad_power">Power</string>
 </resources>

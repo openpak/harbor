@@ -67,6 +67,8 @@ jmethodID commit_driver = nullptr;
 jmethodID discard_driver = nullptr;
 jmethodID select_driver = nullptr;
 jmethodID finish_setup = nullptr;
+jclass sleep_class = nullptr;
+jmethodID sleep_changed = nullptr;
 
 std::mutex picks_mutex;
 std::map<int, PickCallback> picks;
@@ -388,6 +390,17 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     discard_driver = env->GetStaticMethodID(bridge_class, "discardDriver", "(Ljava/lang/String;)V");
     select_driver = env->GetStaticMethodID(bridge_class, "selectDriver", "(Ljava/lang/String;)Z");
     finish_setup = env->GetStaticMethodID(bridge_class, "finishSetup", "(Z)V");
+    jclass sleep_local = env->FindClass("org/yuzu/yuzu_emu/harbor/HarborSleep");
+    sleep_class = static_cast<jclass>(env->NewGlobalRef(sleep_local));
+    env->DeleteLocalRef(sleep_local);
+    sleep_changed = env->GetStaticMethodID(sleep_class, "onSleepChanged", "(Z)V");
+    // am calls this when the console goes to sleep or wakes (a short power press): HarborSleep
+    // pauses the guest and blanks the screen on the UI thread.
+    EmulationSession::GetInstance().System().GetAppletManager().SetSleepHandler([](bool sleeping) {
+        JNIEnv* thread_env = Common::Android::GetEnvForThread();
+        thread_env->CallStaticVoidMethod(sleep_class, sleep_changed, sleeping ? JNI_TRUE : JNI_FALSE);
+        ClearException(thread_env);
+    });
 }
 
 /// "" when the console can boot, "setup" when the setup must run first, else why the check itself
@@ -532,13 +545,18 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_pressPower(JN
         LOG_INFO(Frontend, "harbor: power button ignored: the console is not running");
         return;
     }
-    auto* const window_system = session.System().GetAppletManager().GetWindowSystem();
-    if (window_system == nullptr) {
-        LOG_INFO(Frontend, "harbor: power button ignored: no window system");
+    session.System().GetAppletManager().PowerButtonMiddlePress();
+}
+
+/// The console's power button pressed briefly: it goes to sleep, or wakes when it sleeps
+/// (AppletManager::PowerButtonShortPress; HarborSleep does the host side).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerShortPress(JNIEnv*, jobject) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsRunning()) {
+        LOG_INFO(Frontend, "harbor: power button ignored: the console is not running");
         return;
     }
-    LOG_INFO(Frontend, "harbor: power button held (power menu)");
-    window_system->OnPowerButtonPressed(Service::AM::ButtonPressDuration::MiddlePressing);
+    session.System().GetAppletManager().PowerButtonShortPress();
 }
 
 /// Android's audio focus as a gain on the console's output (1 full, 0.25 ducked, 0 muted). The
