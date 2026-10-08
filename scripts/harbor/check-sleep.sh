@@ -53,5 +53,5 @@ sleep 3
 wait_for 'the console wakes' 10
 wait_for 'PmState MinimumAwake -> FullAwake' 5
 wait_for 'FinishedSleepSequence' 5
-since | grep -q 'idle: the screen dims' && echo "dimmed before sleeping"
+since | grep 'idle: the screen dims' >/dev/null && echo "dimmed before sleeping"
 echo "PASS: sleep and wake ($(since | grep -c 'unknown contract') unknown-contract line(s) on the way)"
