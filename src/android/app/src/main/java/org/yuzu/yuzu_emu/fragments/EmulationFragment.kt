@@ -734,6 +734,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             }
 
             override fun onDrawerOpened(drawerView: View) {
+                if (HarborConsole.active) {
+                    binding.drawerLayout.closeDrawers()
+                    return
+                }
                 binding.drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
                 binding.inGameMenu.requestFocus()
                 emulationViewModel.setDrawerOpen(true)
@@ -746,7 +750,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             }
 
             override fun onDrawerClosed(drawerView: View) {
-                binding.drawerLayout.setDrawerLockMode(IntSetting.LOCK_DRAWER.getInt())
+                binding.drawerLayout.setDrawerLockMode(
+                    if (HarborConsole.active) DrawerLayout.LOCK_MODE_LOCKED_CLOSED else IntSetting.LOCK_DRAWER.getInt()
+                )
                 emulationViewModel.setDrawerOpen(false)
             }
 
@@ -989,7 +995,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
         emulationViewModel.emulationStarted.collect(viewLifecycleOwner) {
             if (it) {
-                binding.drawerLayout.setDrawerLockMode(IntSetting.LOCK_DRAWER.getInt())
+                binding.drawerLayout.setDrawerLockMode(
+                    if (HarborConsole.active) DrawerLayout.LOCK_MODE_LOCKED_CLOSED else IntSetting.LOCK_DRAWER.getInt()
+                )
                 ViewUtils.showView(binding.surfaceInputOverlay)
                 ViewUtils.hideView(binding.loadingIndicator)
 
@@ -1033,6 +1041,12 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             }
         }
         emulationViewModel.drawerOpen.collect(viewLifecycleOwner) {
+            if (it && HarborConsole.active) {
+                // Harbor: Eden's in-game menu (its settings, controls, rooms) never opens; the
+                // Harbor menu is the console's.
+                emulationViewModel.setDrawerOpen(false)
+                return@collect
+            }
             if (it) {
                 binding.drawerLayout.open()
                 binding.inGameMenu.requestFocus()
