@@ -44,11 +44,12 @@ Result IDaemonController::GetApplicationAutoTransferSetting(Out<bool> out_is_ena
     R_SUCCEED();
 }
 
-Result IDaemonController::SetApplicationAutoTransferSetting(bool is_enabled, Common::UUID user_id,
-                                                            u64 application_id) {
+Result IDaemonController::SetApplicationAutoTransferSetting(
+    SetApplicationSettingParameters params) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X} is_enabled={}",
-             Common::Redact(user_id), application_id, is_enabled);
-    settings->SetApplicationAutoTransfer(user_id.RawString(), application_id, is_enabled);
+             Common::Redact(params.user_id), params.application_id, params.is_enabled);
+    settings->SetApplicationAutoTransfer(params.user_id.RawString(), params.application_id,
+                                         params.is_enabled);
     R_SUCCEED();
 }
 
@@ -60,9 +61,10 @@ Result IDaemonController::GetGlobalAutoUploadSetting(Out<bool> out_is_enabled,
     R_SUCCEED();
 }
 
-Result IDaemonController::SetGlobalAutoUploadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
-    settings->SetGlobalAutoUpload(user_id.RawString(), is_enabled);
+Result IDaemonController::SetGlobalAutoUploadSetting(SetGlobalSettingParameters params) {
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
+             params.is_enabled);
+    settings->SetGlobalAutoUpload(params.user_id.RawString(), params.is_enabled);
     R_SUCCEED();
 }
 
@@ -82,9 +84,10 @@ Result IDaemonController::GetGlobalAutoDownloadSetting(Out<bool> out_is_enabled,
     R_SUCCEED();
 }
 
-Result IDaemonController::SetGlobalAutoDownloadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
-    settings->SetGlobalAutoDownload(user_id.RawString(), is_enabled);
+Result IDaemonController::SetGlobalAutoDownloadSetting(SetGlobalSettingParameters params) {
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
+             params.is_enabled);
+    settings->SetGlobalAutoDownload(params.user_id.RawString(), params.is_enabled);
     R_SUCCEED();
 }
 
