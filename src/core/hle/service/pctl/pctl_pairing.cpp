@@ -37,6 +37,8 @@ using json = nlohmann::json;
 constexpr Moon::Description Unreachable = 2003;
 constexpr std::uint32_t TagSettingsChanged = 4000;
 constexpr std::uint32_t TagUnlinked = 4002;
+/// A server key always ends in "-<port>", so this never names a server.
+constexpr const char* LocalKey = "local";
 
 struct Reply {
     int status = 0;
@@ -50,6 +52,8 @@ std::int64_t Now() {
                std::chrono::system_clock::now().time_since_epoch())
         .count();
 }
+
+std::string DecodeRecord(const std::string& stored);
 
 struct Globals {
     std::mutex mutex;
@@ -171,7 +175,11 @@ Pairing::Pairing(std::string server_key) : impl{std::make_shared<Impl>()} {
 
 Pairing& Pairing::Current() {
     auto& globals = GetGlobals();
-    const std::string key = OpenPak::Session::detail::ServerKey();
+    // With no OpenPak server configured the console's own settings still persist, under "local".
+    std::string key = OpenPak::Session::detail::ServerKey();
+    if (key.empty()) {
+        key = LocalKey;
+    }
     Pairing* pairing;
     bool start_sync;
     {
@@ -211,14 +219,13 @@ void Pairing::RemoveListener(int id) {
 }
 
 void Pairing::Impl::Load() {
-    if (server_key.empty()) {
-        return;
-    }
     const auto secret = OpenPak::LoadSecret(SecretKey());
     if (!secret || secret->empty()) {
+        LOG_INFO(Service_PCTL, "pctl: no saved record ({})", secret ? "empty" : "none");
         return;
     }
-    const json root = json::parse(*secret, nullptr, false);
+    LOG_INFO(Service_PCTL, "pctl: record read ({} bytes)", secret->size());
+    const json root = json::parse(DecodeRecord(*secret), nullptr, false);
     try {
         if (root.is_discarded() || !root.is_object()) {
             throw std::runtime_error("not an object");
@@ -231,13 +238,23 @@ void Pairing::Impl::Load() {
         }
         paired_device = device;
         active = root.at("active").get<bool>();
+        if (!active) {
+            paired_device = 0;
+        }
         pin = root.value("pin", std::string{});
         stereo_vision_restricted = root.value("stereoVisionRestricted", false);
-        if (const auto body = root.value("setting", std::string{}); !body.empty()) {
+        // The state this build wrote (the parent's setting with the console's own changes), else
+        // the parent's document as an earlier build kept it.
+        setting_body = root.value("setting", std::string{});
+        if (const auto state = root.value("state", std::string{}); !state.empty()) {
+            Setting loaded;
+            if (LoadState(state, loaded)) {
+                setting = std::move(loaded);
+            }
+        } else if (!setting_body.empty()) {
             Setting parsed;
-            if (ParseSetting(body, parsed) == Moon::Success) {
+            if (ParseSetting(setting_body, parsed) == Moon::Success) {
                 setting = std::move(parsed);
-                setting_body = body;
             }
         }
         setting_etag = root.value("settingEtag", std::string{});
@@ -269,11 +286,85 @@ void Pairing::Impl::Load() {
     }
 }
 
-void Pairing::Impl::SaveLocked() {
-    if (server_key.empty()) {
-        return;
+namespace {
+
+// The record goes to the password store as base64 under a "pctl1:" prefix: libsecret with
+// GNOME Keyring was seen answering an empty secret for a JSON text full of \" escapes (the
+// setting document is kept inside the record as a string), and persistently so across restarts.
+constexpr std::string_view RecordPrefix = "pctl1:";
+constexpr std::string_view Base64Chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string EncodeRecord(const std::string& json_text) {
+    std::string out{RecordPrefix};
+    std::size_t i = 0;
+    for (; i + 2 < json_text.size(); i += 3) {
+        const unsigned n = (static_cast<unsigned char>(json_text[i]) << 16) |
+                           (static_cast<unsigned char>(json_text[i + 1]) << 8) |
+                           static_cast<unsigned char>(json_text[i + 2]);
+        out += {Base64Chars[(n >> 18) & 63], Base64Chars[(n >> 12) & 63],
+                Base64Chars[(n >> 6) & 63], Base64Chars[n & 63]};
     }
-    if (!active && pin.empty()) {
+    if (const std::size_t rest = json_text.size() - i; rest != 0) {
+        unsigned n = static_cast<unsigned char>(json_text[i]) << 16;
+        if (rest == 2) {
+            n |= static_cast<unsigned char>(json_text[i + 1]) << 8;
+        }
+        out += Base64Chars[(n >> 18) & 63];
+        out += Base64Chars[(n >> 12) & 63];
+        out += rest == 2 ? Base64Chars[(n >> 6) & 63] : '=';
+        out += '=';
+    }
+    return out;
+}
+
+/// The JSON text of a stored record: decoded when it carries the prefix, as is otherwise (an
+/// earlier build kept plain JSON). Empty when the base64 is bad.
+std::string DecodeRecord(const std::string& stored) {
+    if (stored.compare(0, RecordPrefix.size(), RecordPrefix) != 0) {
+        return stored;
+    }
+    std::string out;
+    unsigned bits = 0;
+    int count = 0;
+    for (std::size_t i = RecordPrefix.size(); i < stored.size() && stored[i] != '='; ++i) {
+        const auto position = Base64Chars.find(stored[i]);
+        if (position == std::string_view::npos) {
+            return {};
+        }
+        bits = (bits << 6) | static_cast<unsigned>(position);
+        count += 6;
+        if (count >= 8) {
+            count -= 8;
+            out += static_cast<char>((bits >> count) & 0xff);
+        }
+    }
+    return out;
+}
+
+/// Keep `text` and read it back. The system password store has answered an empty secret for one
+/// it just accepted (seen with libsecret, in a store/lookup loop: roughly one write in five), which
+/// would drop the PIN at the next start. A few more writes make it stick.
+bool StoreVerified(const std::string& key, const std::string& text) {
+    for (int attempt = 1; attempt <= 3; ++attempt) {
+        if (!OpenPak::StoreSecret(key, text)) {
+            return false;
+        }
+        const auto back = OpenPak::LoadSecret(key);
+        if (back && *back == text) {
+            return true;
+        }
+        LOG_WARNING(Service_PCTL,
+                    "pctl: the password store did not return the record it kept (attempt {})",
+                    attempt);
+    }
+    return false;
+}
+
+} // namespace
+
+void Pairing::Impl::SaveLocked() {
+    if (!active && pin.empty() && !setting) {
         OpenPak::EraseSecret(SecretKey());
         return;
     }
@@ -291,6 +382,9 @@ void Pairing::Impl::SaveLocked() {
     if (!setting_body.empty()) {
         out["setting"] = setting_body;
     }
+    if (setting) {
+        out["state"] = SerializeState(*setting);
+    }
     out["stereoVisionRestricted"] = stereo_vision_restricted;
     auto owners = nlohmann::ordered_json::array();
     if (found_device == paired_device) {
@@ -305,8 +399,11 @@ void Pairing::Impl::SaveLocked() {
         }
     }
     out["owners"] = std::move(owners);
-    if (!OpenPak::StoreSecret(SecretKey(), out.dump())) {
+    const std::string text = EncodeRecord(out.dump());
+    if (!StoreVerified(SecretKey(), text)) {
         LOG_WARNING(Service_PCTL, "pctl: the secret store did not keep the pairing record");
+    } else {
+        LOG_INFO(Service_PCTL, "pctl: record kept ({} bytes)", text.size());
     }
 }
 
@@ -480,6 +577,72 @@ void Pairing::SetStereoVisionRestricted(bool restricted) {
     }
     impl->stereo_vision_restricted = restricted;
     impl->SaveLocked();
+}
+
+namespace {
+
+/// Change the setting in force the way a console setter does: under the lock, kept, and the
+/// listeners told. The raw document of the parent's last sync is dropped so the next sync is seen
+/// as a change and brings the parent's setting back.
+template <typename Change>
+void ChangeSetting(Pairing::Impl& impl, Change&& change) {
+    {
+        std::lock_guard lock{impl.mutex};
+        if (!impl.setting) {
+            impl.setting.emplace();
+        }
+        change(*impl.setting);
+        impl.setting_body.clear();
+        impl.SaveLocked();
+    }
+    NotifyChanged();
+}
+
+} // namespace
+
+void Pairing::SetSafetyLevel(std::uint8_t level, int default_organization) {
+    ChangeSetting(*impl, [&](Setting& setting) {
+        // The organisation is fixed to the default at the first level set (.text 0x41880).
+        if (setting.rating_organization < 0) {
+            setting.rating_organization = default_organization;
+        }
+        setting.safety_level = level;
+    });
+}
+
+void Pairing::SetCustomSettings(const Rules::Restriction& custom) {
+    ChangeSetting(*impl, [&](Setting& setting) {
+        setting.age_restricted = custom.rating_age != 0;
+        setting.custom_rating_age = custom.rating_age;
+        setting.custom_sns_post_restricted = custom.sns_post_restricted;
+        setting.custom_free_communication_restricted = custom.free_communication_restricted;
+    });
+}
+
+void Pairing::SetDefaultRatingOrganization(int organization) {
+    ChangeSetting(*impl, [&](Setting& setting) { setting.rating_organization = organization; });
+}
+
+bool Pairing::AddFreeCommunicationApplication(std::uint64_t application_id, bool restricted) {
+    bool added = false;
+    ChangeSetting(*impl, [&](Setting& setting) {
+        added = UpsertFreeCommunication(setting.free_communication_applications, application_id,
+                                        restricted);
+    });
+    return added;
+}
+
+void Pairing::UpdateFreeCommunicationApplications(
+    const std::vector<std::pair<std::uint64_t, bool>>& entries) {
+    ChangeSetting(*impl, [&](Setting& setting) {
+        for (const auto& [id, restricted] : entries) {
+            UpsertFreeCommunication(setting.free_communication_applications, id, restricted);
+        }
+    });
+}
+
+void Pairing::DeleteSettings() {
+    ForgetPairing();
 }
 
 Moon::Description Pairing::RequestPairing(const std::string& code) {
@@ -732,7 +895,7 @@ void Pairing::ForgetPairing() {
 
 void Pairing::SyncSoon() {
     std::lock_guard lock{impl->mutex};
-    if (!impl->active || impl->server_key.empty()) {
+    if (!impl->active || impl->server_key == LocalKey) {
         return;
     }
     impl->sync_requested = true;

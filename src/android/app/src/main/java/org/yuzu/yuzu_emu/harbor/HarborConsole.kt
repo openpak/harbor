@@ -4,11 +4,14 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.net.Uri
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -17,12 +20,20 @@ import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.dialogs.QuickSettings
+import org.yuzu.yuzu_emu.features.input.NativeInput
+import org.yuzu.yuzu_emu.features.input.model.NativeButton
+import org.yuzu.yuzu_emu.features.input.model.NpadStyleIndex
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.model.AppletInfo
 import org.yuzu.yuzu_emu.model.Game
+import org.yuzu.yuzu_emu.model.MinimalDocumentFile
+import org.yuzu.yuzu_emu.utils.FileUtil
 import org.yuzu.yuzu_emu.utils.GameHelper
+import org.yuzu.yuzu_emu.utils.GpuDriverHelper
+import org.yuzu.yuzu_emu.features.settings.model.StringSetting
+import java.io.File
 import org.yuzu.yuzu_emu.utils.InputHandler
 import org.yuzu.yuzu_emu.utils.LosslessScalingHelper
 import org.yuzu.yuzu_emu.utils.Log
@@ -51,6 +62,14 @@ object HarborConsole {
                 NativeLibrary.initializeSystem(true)
             }
             HarborNative.applyConsolePreset()
+            Log.info("[Harbor] console start: graphics driver ${ensureDriver()}")
+            // The driver loads now, so a selected one that failed stops the boot here, not in HOME.
+            val driverProblem = HarborNative.checkGpuDriver()
+            if (driverProblem.isNotEmpty()) {
+                Log.error("[Harbor] console not started: $driverProblem")
+                from.runOnUiThread { showDriverRefusal(from, driverProblem) }
+                return@thread
+            }
             // The in-game drawer stays shut; the Harbor menu replaces it.
             IntSetting.LOCK_DRAWER.setInt(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
             IntSetting.RENDERER_SCREEN_LAYOUT.setInt(Settings.EmulationOrientation.SensorLandscape.int)
@@ -64,13 +83,19 @@ object HarborConsole {
                 Log.warning("[Harbor] library scan failed: ${e.message}")
                 -1
             }
+            val addons = try {
+                registerAddons()
+            } catch (e: Exception) {
+                Log.warning("[Harbor] add-on scan failed: ${e.message}")
+                -1
+            }
             // OpenPak before HOME, with its credentials in the Android Keystore.
             (from as? HarborStartActivity)?.let { start ->
                 start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
             }
             HarborNative.connectOpenPak()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
-            Log.info("[Harbor] console boot: $games titles registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
+            Log.info("[Harbor] console boot: $games titles and $addons add-on files registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
             from.runOnUiThread {
                 if (qlaunch.isEmpty()) {
                     openSetup(from)
@@ -89,6 +114,82 @@ object HarborConsole {
                 from.finish()
             }
         }
+    }
+
+    /**
+     * The setup's DLC and update folders are SAF tree URIs, which core's file system cannot walk, so
+     * their .nsp/.xci files are registered here, the way Eden's game list registers games (after
+     * GameHelper.getGames, which clears the registrations first). Returns how many were registered.
+     */
+    private fun registerAddons(): Int {
+        var count = 0
+        fun walk(files: Array<MinimalDocumentFile>, depth: Int) {
+            if (depth <= 0) {
+                return
+            }
+            for (file in files) {
+                if (file.isDirectory) {
+                    walk(FileUtil.listFiles(file.uri), depth - 1)
+                } else if (FileUtil.getExtension(file.uri).lowercase() in ADDON_EXTENSIONS) {
+                    NativeLibrary.addFileToFilesystemProvider(file.uri.toString())
+                    count++
+                }
+            }
+        }
+        for (folder in HarborNative.addonFolders().distinct()) {
+            val uri = Uri.parse(folder)
+            if (folder.isEmpty() || !FileUtil.isTreeUriValid(uri)) {
+                Log.warning("[Harbor] an add-on folder is no longer readable; set it again in the setup")
+                continue
+            }
+            walk(FileUtil.listFiles(uri), ADDON_SCAN_DEPTH)
+        }
+        return count
+    }
+
+    private val ADDON_EXTENSIONS = setOf("nsp", "xci")
+    private const val ADDON_SCAN_DEPTH = 3
+
+    /**
+     * The chosen graphics driver unpacked where Eden loads it from (as Eden's game launch does), so
+     * HOME runs with it. Returns its name for the log.
+     */
+    private fun ensureDriver(): String {
+        val chosen = GpuDriverHelper.customDriverSettingData
+        if (GpuDriverHelper.installedCustomDriverData != chosen) {
+            val path = StringSetting.DRIVER_PATH.getString()
+            if (chosen.name == null || !File(path).exists()) {
+                GpuDriverHelper.installDefaultDriver()
+            } else if (!GpuDriverHelper.installCustomDriver(File(path))) {
+                Log.warning("[Harbor] the chosen graphics driver could not be unpacked")
+            }
+        }
+        val installed = GpuDriverHelper.installedCustomDriverData
+        return installed.name?.let { "$it ${installed.version ?: ""}".trim() } ?: "the phone's"
+    }
+
+    /**
+     * The selected graphics driver did not load (EmulationSession::CheckGpuDriver): the console does
+     * not boot on the phone's own driver instead. The setup chooses another; Exit closes Harbor.
+     */
+    fun showDriverRefusal(from: Activity, problem: String) {
+        if (from.isFinishing) {
+            return
+        }
+        val dialog = AlertDialog.Builder(from, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(R.string.harbor_driver_failed_title)
+            .setMessage(problem + "\n\n" + from.getString(R.string.harbor_driver_failed_hint))
+            .setCancelable(false)
+            .setPositiveButton(R.string.harbor_menu_setup_again) { _, _ ->
+                HarborNative.stopOpenPak()
+                restartIntoSetup(from)
+            }
+            .setNegativeButton(R.string.harbor_menu_exit) { _, _ ->
+                HarborNative.stopOpenPak()
+                from.finishAndRemoveTask()
+            }
+            .show()
+        HarborPanelInput.attach(dialog)
     }
 
     /** Opens the setup wizard: directly the first time in a process, else in a new process. */
@@ -217,20 +318,32 @@ object HarborConsole {
      * Restart, Graphics driver, Show/Hide FPS, Log threads, Frame generation (on GPUs that can run
      * it), Set up again, Exit. Physical input is released first so nothing stays held in the guest.
      */
-    fun showMenu(activity: EmulationActivity) {
-        if (activity.isFinishing || menuOpen) {
+    fun showMenu(activity: EmulationActivity, trigger: String) {
+        // A menu left behind by an earlier emulation screen (destroyed without a dismiss) does not
+        // count: only one showing on this screen does.
+        val open = menuDialog?.takeIf { it.isShowing && it.ownerActivity === activity }
+        if (activity.isFinishing || open != null) {
+            Log.info("[Harbor] menu asked for by $trigger: ${if (open != null) "already open" else "the screen is closing"}")
             return
         }
-        menuOpen = true
+        Log.info("[Harbor] menu opened by $trigger")
         InputHandler.releaseAll()
         val fps = BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean()
         val items = buildList<Pair<Int, () -> Unit>> {
             add(R.string.harbor_menu_resume to {})
+            add(R.string.harbor_menu_home to { pressHome(HOME_SHORT_MS) })
+            add(R.string.harbor_menu_home_hold to { pressHome(HOME_HOLD_MS) })
             add(
                 (if (HarborNative.joyconsDetached()) R.string.harbor_menu_attach_joycons else R.string.harbor_menu_detach_joycons) to {
                     HarborNative.setJoyconsDetached(!HarborNative.joyconsDetached())
                 }
             )
+            if (!HarborKeyService.enabled(activity)) {
+                add(R.string.harbor_menu_controller_home to {
+                    Toast.makeText(activity, R.string.harbor_key_service_hint, Toast.LENGTH_LONG).show()
+                    activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                })
+            }
             add(R.string.harbor_menu_restart to { activity.harborStop { restartConsole(activity) } })
             add(R.string.harbor_menu_driver to { showDriverPicker(activity) })
             add(
@@ -265,10 +378,12 @@ object HarborConsole {
                 items[which].second()
             }
             .setOnDismissListener {
-                menuOpen = false
+                menuDialog = null
                 activity.harborResetChord()
             }
             .show()
+        dialog.setOwnerActivity(activity)
+        menuDialog = dialog
         HarborPanelInput.attach(dialog)
     }
 
@@ -301,6 +416,21 @@ object HarborConsole {
         HarborPanelInput.attach(dialog)
     }
 
+    /**
+     * The setup finished: the console boots in a fresh process, as at any cold start. The wizard's
+     * SDL and Borealis are still winding down in this one, and the core read the NAND before the
+     * firmware and keys were installed. The helper process ends this one.
+     */
+    fun bootAfterSetup(from: Activity) {
+        Log.info("[Harbor] the setup finished; starting the console in a new process")
+        from.startActivity(
+            Intent(from, HarborRestartActivity::class.java)
+                .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
+                .putExtra(HarborRestartActivity.EXTRA_CONSOLE, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        )
+    }
+
     /** Harbor in a fresh process, straight back to the console (a new graphics driver loads then). */
     private fun restartProcess(from: Activity) {
         Log.info("[Harbor] restarting the process")
@@ -329,6 +459,41 @@ object HarborConsole {
         Runtime.getRuntime().exit(0)
     }
 
-    @Volatile
-    private var menuOpen = false
+    private var menuDialog: android.app.Dialog? = null
+
+    /**
+     * The Harbor menu's Show FPS, kept by Harbor itself: off unless chosen there, whatever Eden's
+     * own default or saved setting for its performance overlay says.
+     */
+    var showFps: Boolean
+        get() = preferences().getBoolean(PREF_SHOW_FPS, false)
+        set(value) = preferences().edit().putBoolean(PREF_SHOW_FPS, value).apply()
+
+    private fun preferences() = org.yuzu.yuzu_emu.YuzuApplication.appContext
+        .getSharedPreferences("harbor", android.content.Context.MODE_PRIVATE)
+
+    private const val PREF_SHOW_FPS = "show_fps"
+
+    /**
+     * The HOME button from the Harbor menu, held for `holdMs` on the controller the touch overlay
+     * drives (Handheld while the Joy-Cons are attached, Player 1 when detached). am times it like a
+     * real press: under 400 ms is a short press, past the long-press time quick settings.
+     */
+    private fun pressHome(holdMs: Long) {
+        val port = if (NativeInput.getStyleIndex(0) == NpadStyleIndex.Handheld) 8 else 0
+        Log.info("[Harbor] HOME from the menu, held $holdMs ms")
+        val handler = Handler(Looper.getMainLooper())
+        // After the menu has closed, so the press lands in the guest.
+        handler.postDelayed({
+            NativeInput.onOverlayButtonEvent(port, NativeButton.Home, NativeInput.ButtonState.PRESSED)
+            handler.postDelayed({
+                NativeInput.onOverlayButtonEvent(port, NativeButton.Home, NativeInput.ButtonState.RELEASED)
+            }, holdMs)
+        }, HOME_AFTER_MENU_MS)
+    }
+
+    private const val HOME_SHORT_MS = 100L
+    // Past am's 800 ms default and any long-press time the HOME menu sets for itself.
+    private const val HOME_HOLD_MS = 1500L
+    private const val HOME_AFTER_MENU_MS = 200L
 }

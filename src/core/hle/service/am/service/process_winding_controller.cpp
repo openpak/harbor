@@ -105,6 +105,7 @@ Result IProcessWindingController::WindAndDoReserved() {
         std::scoped_lock lk{m_applet->lock};
 
         reserved_applet = m_applet->reserved_applet;
+        m_applet->process_exiting = true;
         m_applet->display_layer_manager.SetWindowVisibility(false);
         m_applet->exit_locked = false;
         system.SetExitLocked(false);

@@ -74,4 +74,9 @@ namespace OpenPak {
 /// picture. Returns at once; never blocks on the network. `uid` is the 32 hex digits of the UserId.
 void OnFirmwareUserRegistered(const std::string& uid);
 
+/// While OnFirmwareUserRegistered's link of `uid` runs, waits for it (at most a few seconds), so
+/// acc answers the firmware with the linked state rather than the moment before it. Returns at once
+/// for any other user.
+void WaitForFirmwareUserLink(const std::string& uid);
+
 } // namespace OpenPak

@@ -11,6 +11,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import org.yuzu.yuzu_emu.features.input.NativeInput
+import org.yuzu.yuzu_emu.harbor.HarborRestartActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyStore
@@ -57,6 +58,48 @@ class YuzuApplication : Application() {
         notificationManager.createNotificationChannel(foregroundService)
     }
 
+    /**
+     * Harbor: a Java/Kotlin exception that would end the process goes to eden_log.txt first (critical
+     * lines are flushed at once), then to Android's own handler as before.
+     */
+    /**
+     * Harbor restarts its process between the setup and the console; Eden's log moves the previous
+     * process's file aside at start. It is copied into this log first, so eden_log.txt shows the
+     * whole boot.
+     */
+    private fun carryPreviousLog() {
+        runCatching {
+            val previous = File(getPublicFilesDir(), "log/eden_log.txt.old.txt")
+            if (!previous.exists()) {
+                return
+            }
+            val bytes = previous.readBytes()
+            val tail = if (bytes.size > PREVIOUS_LOG_LIMIT) {
+                bytes.copyOfRange(bytes.size - PREVIOUS_LOG_LIMIT, bytes.size)
+            } else {
+                bytes
+            }
+            Log.info(
+                "[Harbor] ===== the previous process's log (before the restart) =====\n" +
+                    String(tail, Charsets.UTF_8) +
+                    "[Harbor] ===== end of the previous process's log; this process starts here ====="
+            )
+        }
+    }
+
+    private fun logUncaughtExceptions() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                Log.critical(
+                    "[Harbor] uncaught exception on ${thread.name}: " +
+                        android.util.Log.getStackTraceString(throwable)
+                )
+            }
+            previous?.uncaughtException(thread, throwable)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         application = this
@@ -65,7 +108,14 @@ class YuzuApplication : Application() {
             return
         }
         documentsTree = DocumentsTree()
+        val restarted = File(filesDir, HarborRestartActivity.RESTART_MARKER)
+        val afterRestart = restarted.exists()
+        restarted.delete()
         DirectoryInitialization.start()
+        logUncaughtExceptions()
+        if (afterRestart) {
+            carryPreviousLog()
+        }
 
         // Initialize Freedreno config BEFORE loading native library
         // This ensures GPU driver environment variables are set before adrenotools initializes
@@ -83,6 +133,7 @@ class YuzuApplication : Application() {
     }
 
     companion object {
+        private const val PREVIOUS_LOG_LIMIT = 4 * 1024 * 1024
         var documentsTree: DocumentsTree? = null
         lateinit var application: YuzuApplication
 

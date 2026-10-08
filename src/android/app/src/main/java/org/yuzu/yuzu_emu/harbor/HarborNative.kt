@@ -35,6 +35,9 @@ object HarborNative {
     /** Every applet from the firmware, handheld; saved, since the emulation screen reloads the config. */
     external fun applyConsolePreset()
 
+    /** The setup's DLC and update folders (SAF tree URIs), whose files the console boot registers. */
+    external fun addonFolders(): Array<String>
+
     /** Connects to OpenPak before HOME boots (blocking: up to ~10 s on a first connect). Not on the UI thread. */
     external fun connectOpenPak()
 
@@ -46,6 +49,12 @@ object HarborNative {
 
     /** The Joy-Cons off (true) or back on the console's rails. */
     external fun setJoyconsDetached(detached: Boolean)
+
+    /**
+     * Loads the console's graphics driver and checks it is the one the setup chose: "" when it is,
+     * else why the console must not boot. Not on the UI thread.
+     */
+    external fun checkGpuDriver(): String
 
     /** Whether the Joy-Cons are off the rails. */
     external fun joyconsDetached(): Boolean

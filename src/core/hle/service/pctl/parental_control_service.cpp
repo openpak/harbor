@@ -238,22 +238,22 @@ IParentalControlService::IParentalControlService(Core::System& system_, Capabili
         {1023, &IParentalControlService::GetRestrictedFeatureFlagSet, "GetRestrictedFeatureFlagSet"}, // 23.0.0+
         {1031, &IParentalControlService::IsRestrictionEnabled, "IsRestrictionEnabled"},
         {1032, &IParentalControlService::GetSafetyLevel, "GetSafetyLevel"},
-        {1033, nullptr, "SetSafetyLevel"},
+        {1033, &IParentalControlService::SetSafetyLevel, "SetSafetyLevel"},
         {1034, &IParentalControlService::GetSafetyLevelSettings, "GetSafetyLevelSettings"},
         {1035, &IParentalControlService::GetCurrentSettings, "GetCurrentSettings"},
-        {1036, nullptr, "SetCustomSafetyLevelSettings"},
+        {1036, &IParentalControlService::SetCustomSafetyLevelSettings, "SetCustomSafetyLevelSettings"},
         {1037, &IParentalControlService::GetDefaultRatingOrganization, "GetDefaultRatingOrganization"},
-        {1038, nullptr, "SetDefaultRatingOrganization"},
+        {1038, &IParentalControlService::SetDefaultRatingOrganization, "SetDefaultRatingOrganization"},
         {1039, &IParentalControlService::GetFreeCommunicationApplicationListCount, "GetFreeCommunicationApplicationListCount"},
-        {1042, nullptr, "AddToFreeCommunicationApplicationList"},
-        {1043, nullptr, "DeleteSettings"},
+        {1042, &IParentalControlService::AddToFreeCommunicationApplicationList, "AddToFreeCommunicationApplicationList"},
+        {1043, &IParentalControlService::DeleteSettings, "DeleteSettings"},
         {1044, &IParentalControlService::GetFreeCommunicationApplicationList, "GetFreeCommunicationApplicationList"},
-        {1045, nullptr, "UpdateFreeCommunicationApplicationList"},
+        {1045, &IParentalControlService::UpdateFreeCommunicationApplicationList, "UpdateFreeCommunicationApplicationList"},
         {1046, nullptr, "DisableFeaturesForReset"},
         {1047, nullptr, "NotifyApplicationDownloadStarted"},
         {1048, nullptr, "NotifyNetworkProfileCreated"},
         {1049, nullptr, "ResetFreeCommunicationApplicationList"},
-        {1050, nullptr, "AddToFreeCommunicationApplicationList"}, //20.0.0+
+        {1050, &IParentalControlService::AddToFreeCommunicationApplicationListWithFlag, "AddToFreeCommunicationApplicationList"}, //20.0.0+
         {1051, nullptr, "NotifyApplicationDownloadStarted"}, //20.0.0+
         {1061, &IParentalControlService::ConfirmStereoVisionRestrictionConfigurable, "ConfirmStereoVisionRestrictionConfigurable"},
         {1062, &IParentalControlService::GetStereoVisionRestriction, "GetStereoVisionRestriction"},
@@ -289,7 +289,7 @@ IParentalControlService::IParentalControlService(Core::System& system_, Capabili
         {1458, &IParentalControlService::IsPlayTimerAlarmDisabled, "IsPlayTimerAlarmDisabled"},
         {1459, &IParentalControlService::GetPlayTimerRemainingTimeDisplayInfo, "GetPlayTimerRemainingTimeDisplayInfo"},
         {1460, &IParentalControlService::GetWatcherStatusDisplayInfo, "GetWatcherStatusDisplayInfo"}, // 23.0.0+
-        {1471, nullptr, "NotifyWrongPinCodeInputManyTimes"},
+        {1471, &IParentalControlService::NotifyWrongPinCodeInputManyTimes, "NotifyWrongPinCodeInputManyTimes"},
         {1472, nullptr, "CancelNetworkRequest"},
         {1473, &IParentalControlService::GetUnlinkedEvent, "GetUnlinkedEvent"},
         {1474, nullptr, "ClearUnlinkedEvent"},
@@ -635,6 +635,123 @@ void IParentalControlService::GetFreeCommunicationApplicationList(HLERequestCont
     rb.Push(count);
 }
 
+// ---------------------------------------------------------------------------------------------
+// The console's own setters (System Settings > Parental Controls without a smart device). Each
+// impl tests permission bit 0x4 first (pctl:s and pctl:a carry it), then its arguments; 22.5.0
+// impls at .text 0x2cff0, 0x2d170, 0x2d230, 0x2d440, 0x2d480, 0x2d3f0, 0x2d270. The Ryujinx Harbor
+// has no setters; these contracts are read from the firmware.
+
+void IParentalControlService::SetSafetyLevel(HLERequestContext& ctx) {
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    IPC::RequestParser rp{ctx};
+    const auto level = rp.Pop<u32>();
+    if (level > 4) {
+        PushResult(ctx, ResultInvalidArgument);
+        return;
+    }
+    Pairing::Current().SetSafetyLevel(static_cast<u8>(level),
+                                      Rules::DefaultOrganization(Region(), Language()));
+    LOG_INFO(Service_PCTL, "pctl: safety level set to {}", SafetyLevelName(static_cast<u8>(level)));
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::SetCustomSafetyLevelSettings(HLERequestContext& ctx) {
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    IPC::RequestParser rp{ctx};
+    const auto settings = rp.PopRaw<RestrictionSettings>();
+    Pairing::Current().SetCustomSettings(
+        {settings.rating_age, settings.sns_post_restriction != 0,
+         settings.free_communication_restriction != 0});
+    LOG_INFO(Service_PCTL, "pctl: custom restriction settings set (age {})", settings.rating_age);
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::SetDefaultRatingOrganization(HLERequestContext& ctx) {
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    IPC::RequestParser rp{ctx};
+    const auto organization = rp.Pop<u32>();
+    // pctl keeps one byte and checks nothing (.text 0x41820).
+    Pairing::Current().SetDefaultRatingOrganization(static_cast<u8>(organization));
+    LOG_INFO(Service_PCTL, "pctl: default rating organization set to {}",
+             static_cast<u8>(organization));
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::AddToFreeCommunicationApplicationList(HLERequestContext& ctx) {
+    // 1042 (u64 application_id): listed with the flag clear.
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    IPC::RequestParser rp{ctx};
+    const auto application_id = rp.Pop<u64>();
+    if (!Pairing::Current().AddFreeCommunicationApplication(application_id, false)) {
+        LOG_WARNING(Service_PCTL, "pctl: the free-communication list is full");
+    }
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::AddToFreeCommunicationApplicationListWithFlag(
+    HLERequestContext& ctx) {
+    // 1050 (u64 application_id, bool): the same with the flag given.
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    IPC::RequestParser rp{ctx};
+    const auto application_id = rp.Pop<u64>();
+    const auto restricted = rp.Pop<bool>();
+    if (!Pairing::Current().AddFreeCommunicationApplication(application_id, restricted)) {
+        LOG_WARNING(Service_PCTL, "pctl: the free-communication list is full");
+    }
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::UpdateFreeCommunicationApplicationList(HLERequestContext& ctx) {
+    // (buffer<FreeCommunicationApplicationInfo, 5>): 0x10-byte entries, the title id and at +8
+    // whether it is restricted, each added or changed (.text 0x42140 over 0x3cec0).
+    if (!Has(0x4)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    std::vector<std::pair<std::uint64_t, bool>> entries;
+    if (ctx.CanReadBuffer(0)) {
+        const auto buffer = ctx.ReadBuffer(0);
+        for (std::size_t offset = 0; offset + 0x10 <= buffer.size(); offset += 0x10) {
+            std::uint64_t id;
+            std::memcpy(&id, buffer.data() + offset, sizeof(id));
+            entries.emplace_back(id, buffer[offset + 8] != 0);
+        }
+    }
+    if (!entries.empty()) {
+        Pairing::Current().UpdateFreeCommunicationApplications(entries);
+    }
+    PushResult(ctx, ResultSuccess);
+}
+
+void IParentalControlService::DeleteSettings(HLERequestContext& ctx) {
+    // Needs permission bit 0x4 or 0x40 (.text 0x2d270). pctl resets its savedata and tears the
+    // pairing down; here the setting, the PIN and any pairing are dropped on this console only.
+    if (!Has(0x44)) {
+        PushResult(ctx, ResultPermissionDenied);
+        return;
+    }
+    LOG_UNKNOWN_CONTRACT(Service_PCTL,
+                         "pctl 1043 DeleteSettings: local reset only; the server is not told of "
+                         "a pairing dropped with it");
+    Pairing::Current().DeleteSettings();
+    PushResult(ctx, ResultSuccess);
+}
+
 void IParentalControlService::ConfirmStereoVisionRestrictionConfigurable(HLERequestContext& ctx) {
     PushResult(ctx, Has(0x2) ? ResultSuccess : ResultPermissionDenied);
 }
@@ -722,6 +839,15 @@ void IParentalControlService::GetPinCodeLength(HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
     rb.Push(static_cast<s32>(Pairing::Current().InForce().pin.size()));
+}
+
+void IParentalControlService::NotifyWrongPinCodeInputManyTimes(HLERequestContext& ctx) {
+    // The firmware's PIN applet calls this after repeated wrong entries; leaving it out made the
+    // applet assert on its first wrong PIN. pctl records an event for the parent app to see; with
+    // no events upload here nothing is kept.
+    LOG_UNKNOWN_CONTRACT(Service_PCTL, "pctl 1471 NotifyWrongPinCodeInputManyTimes: no event is "
+                                       "recorded or uploaded; answered success");
+    PushResult(ctx, ResultSuccess);
 }
 
 void IParentalControlService::GetPinCodeChangedEvent(HLERequestContext& ctx) {

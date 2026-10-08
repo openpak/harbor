@@ -206,6 +206,19 @@ struct KernelCore::Impl {
     }
 
     void CloseServices() {
+        // Stop the host threads that would otherwise keep calling into a kernel being torn down.
+        std::vector<std::function<void()>> stops;
+        {
+            std::scoped_lock lk{host_thread_stop_lock};
+            for (auto& [id, stop] : host_thread_stops) {
+                stops.push_back(std::move(stop));
+            }
+            host_thread_stops.clear();
+        }
+        for (auto& stop : stops) {
+            stop();
+        }
+
         // Ensures all servers gracefully shutdown.
         std::scoped_lock lk{server_lock};
         server_managers.clear();
@@ -251,7 +264,7 @@ struct KernelCore::Impl {
         system_resource_limit->Reserve(kernel, LimitableResource::PhysicalMemoryMax, kernel_size);
 
         // Reserve secure applet memory, introduced in firmware 5.0.0
-        constexpr u64 secure_applet_memory_size{4_MiB};
+        constexpr u64 secure_applet_memory_size{KSystemControl::SecureAppletMemorySize};
         ASSERT(system_resource_limit->Reserve(kernel, LimitableResource::PhysicalMemoryMax, secure_applet_memory_size));
     }
 
@@ -799,6 +812,10 @@ struct KernelCore::Impl {
     std::mutex server_lock;
     std::vector<std::unique_ptr<Service::ServerManager>> server_managers;
 
+    std::mutex host_thread_stop_lock;
+    std::vector<std::pair<u64, std::function<void()>>> host_thread_stops;
+    u64 next_host_thread_stop_id{1};
+
     std::array<std::optional<Kernel::PhysicalCore>, Core::Hardware::NUM_CPU_CORES> cores;
 
     // Next host thead ID to use, 0-3 IDs represent core threads, >3 represent others
@@ -865,6 +882,18 @@ void KernelCore::Shutdown() {
 
 void KernelCore::CloseServices() {
     impl->CloseServices();
+}
+
+u64 KernelCore::AddHostThreadStop(std::function<void()> stop) {
+    std::scoped_lock lk{impl->host_thread_stop_lock};
+    const u64 id = impl->next_host_thread_stop_id++;
+    impl->host_thread_stops.emplace_back(id, std::move(stop));
+    return id;
+}
+
+void KernelCore::RemoveHostThreadStop(u64 id) {
+    std::scoped_lock lk{impl->host_thread_stop_lock};
+    std::erase_if(impl->host_thread_stops, [id](const auto& entry) { return entry.first == id; });
 }
 
 const KResourceLimit* KernelCore::GetSystemResourceLimit() const {

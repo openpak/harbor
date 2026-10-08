@@ -48,6 +48,7 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
 | `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
+| `menu <name>` | opens a Harbor menu entry (console mode): `frame-gen`; while its dialog (or any modal host dialog) is open, `key` and `type` go to it |
 | `threads` | guest thread dump to the log |
 | `quit` | closes the main window (clean shutdown, about 10 s) |
 
@@ -65,6 +66,23 @@ keyboard into the shared memory of the most recently created applet resource, wh
 applet while it is open. While Eden's Qt keyboard dialog is showing (swkbd HLE, outside a HOME
 session) the keys go to that dialog instead. Only printable ASCII is typed; a line with any other
 character types nothing.
+
+## The setup wizard in scripted runs
+
+The wizard (before Qt) does not read the control FIFO. Under `HARBOR_CONTROL` it only runs with
+`--harbor-setup` (and console mode only with `--harbor-setup` or `--harbor-console`). Two environment
+variables answer its pickers and text fields without a dialog or a keyboard, in order:
+
+| Variable | Answers |
+|---|---|
+| `HARBOR_SETUP_PICKS="<path>\|<path>\|..."` | the next file and folder pickers (prod.keys, the firmware zip, the game/DLC/update folders) |
+| `HARBOR_SETUP_TEXT="<file>\|<n>\|=<text>\|..."` | the next text fields (the OpenPak account page): `<n>` is line `n` of `<file>`, only the value of a `key=value` line; `=<text>` is the text itself |
+
+`HARBOR_SETUP_TEXT` is for the test account: point it at the secrets file and give line numbers, so the
+values never appear on a command line, in the log (only `harbor: scripted text`) or in this repo. The
+field order is the page's: email, password, then (create mode) nickname, birthday, country. Fields
+are opened with A (Return) on their row. A screenshot of a filled form shows the email address: crop
+it out or take none.
 
 ## Thread dump and svcBreak
 

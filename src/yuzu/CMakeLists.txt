@@ -254,6 +254,12 @@ if (YUZU_CRASH_DUMPS)
     target_compile_definitions(yuzu PRIVATE YUZU_CRASH_DUMPS)
 endif()
 
+if (ENABLE_LSFG)
+    target_sources(yuzu PRIVATE
+        harbor_frame_gen.cpp
+        harbor_frame_gen.h)
+endif()
+
 if (ENABLE_RESHADE)
     target_sources(yuzu PRIVATE
         configuration/configure_post_processing.cpp

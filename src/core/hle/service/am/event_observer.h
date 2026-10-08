@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <condition_variable>
+
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 #include "core/hle/service/kernel_helpers.h"
@@ -31,6 +33,7 @@ public:
     void RequestUpdate();
 
 private:
+    void Stop();
     void LinkDeferred();
     MultiWaitHolder* WaitSignaled(std::stop_token stop_token);
     void Process(MultiWaitHolder* holder);
@@ -61,8 +64,12 @@ private:
     MultiWait m_multi_wait;
     MultiWait m_deferred_wait_list;
 
-    // Processing thread.
+    // Processing thread, and its exit (signalled under m_exit_lock).
     std::jthread m_thread{};
+    std::mutex m_exit_lock{};
+    std::condition_variable m_exit_cv{};
+    bool m_thread_exited{};
+    u64 m_kernel_stop_id{};
 };
 
 } // namespace Service::AM

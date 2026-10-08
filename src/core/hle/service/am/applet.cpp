@@ -35,7 +35,9 @@ void Applet::UpdateSuspensionStateLocked(bool force_message) {
     const bool prev_activity_runnable = is_activity_runnable;
     const bool was_changed = curr_activity_runnable != prev_activity_runnable;
 
-    if (was_changed) {
+    if (was_changed && process_exiting) {
+        // Nothing to pause or resume: the process is ending.
+    } else if (was_changed) {
         if (curr_activity_runnable) {
             process->Suspend(false);
         } else {

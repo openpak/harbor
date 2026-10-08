@@ -51,6 +51,8 @@ void ApplyConsolePreset();
 /// The setup's DLC and update folders as Eden's external content folders, and the add-ons beside
 /// the games too. Set at every boot, before the content providers are built and the library is
 /// scanned, so HOME and every title see the latest update and DLC (a new one the next boot).
+/// On Android the folders are tree URIs core cannot walk: none go to core, the launcher registers
+/// their files.
 void ApplyRecordFolders(const Record& record);
 
 /// Before every console boot, off the UI thread: the platform's password store for OpenPak's

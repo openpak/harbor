@@ -8,6 +8,7 @@
 #include "core/hle/service/caps/caps_a.h"
 #include "core/hle/service/caps/caps_c.h"
 #include "core/hle/service/caps/caps_manager.h"
+#include "core/hle/service/caps/caps_overlay_screenshot.h"
 #include "core/hle/service/caps/caps_sc.h"
 #include "core/hle/service/caps/caps_ss.h"
 #include "core/hle/service/caps/caps_su.h"
@@ -35,6 +36,7 @@ public:
 void LoopProcess(Core::System& system) {
     auto server_manager = std::make_unique<ServerManager>(system);
     auto album_manager = std::make_shared<AlbumManager>(system);
+    SetOverlayScreenShotAlbum(album_manager);
 
     server_manager->RegisterNamedService("caps:a", std::make_shared<IAlbumAccessorService>(system, album_manager));
     server_manager->RegisterNamedService("caps:c", std::make_shared<IAlbumControlService>(system, album_manager));

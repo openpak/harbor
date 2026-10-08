@@ -699,7 +699,19 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         buildId = buildVersion.split("-").getOrNull(0) ?: ""
         driverInUse = driverViewModel.selectedDriverVersion.value
 
+        if (HarborConsole.active) {
+            // The console's touch controls are on (a controller hides them while it is connected,
+            // a touch brings them back), and the stats text shows only with the menu's Show FPS:
+            // whatever an earlier session or Eden's defaults saved.
+            BooleanSetting.SHOW_INPUT_OVERLAY.setBoolean(true)
+            BooleanSetting.SHOW_PERFORMANCE_OVERLAY.setBoolean(HarborConsole.showFps)
+        }
         updateQuickOverlayMenuEntry(BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean())
+        if (HarborConsole.active) {
+            binding.harborMenuButton.setOnClickListener {
+                (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it, "on-screen button") }
+            }
+        }
         onPhysicalControllerStateChanged(InputHandler.androidControllers.isNotEmpty())
 
         binding.surfaceEmulation.holder.addCallback(this)
@@ -926,7 +938,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 override fun handleOnBackPressed() {
                     if (HarborConsole.active) {
                         // Harbor's console mode: Android back opens the Harbor menu, not Eden's drawer.
-                        (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it) }
+                        (activity as? EmulationActivity)?.let { HarborConsole.showMenu(it, "Android back") }
                         return
                     }
                     if (!NativeLibrary.isRunning()) {
@@ -1087,8 +1099,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             val shouldShowOverlay = if (args.overlayGamelessEditMode) {
                 true
             } else {
-                showInputOverlay && emulationViewModel.emulationStarted.value &&
-                    !hasPhysicalControllerConnected
+                // Harbor: the overlay view stays up in console mode (it carries the touchscreen
+                // and brings the controls back on a touch); only its controls hide.
+                emulationViewModel.emulationStarted.value && (HarborConsole.active ||
+                    (showInputOverlay && !hasPhysicalControllerConnected))
             }
             b.surfaceInputOverlay.setVisible(shouldShowOverlay)
             if (!isInFoldableLayout) {
@@ -1543,9 +1557,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     /** Harbor menu: the frame-rate overlay on or off, saved for every boot. */
     fun harborShowStats(show: Boolean) {
         if (!isAdded || _binding == null) return
+        HarborConsole.showFps = show
         BooleanSetting.SHOW_PERFORMANCE_OVERLAY.setBoolean(show)
         NativeConfig.saveGlobalConfig()
         updateShowStatsOverlay()
+        updateSocOverlay()
     }
 
     @SuppressLint("DefaultLocale")
@@ -1737,7 +1753,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     private fun updateSocOverlay() {
-        val showSOCOverlay = BooleanSetting.SHOW_SOC_OVERLAY.getBoolean()
+        // Harbor console mode: the device/driver line belongs to Show FPS too.
+        val showSOCOverlay = BooleanSetting.SHOW_SOC_OVERLAY.getBoolean() &&
+            (!HarborConsole.active || BooleanSetting.SHOW_PERFORMANCE_OVERLAY.getBoolean())
         binding.showSocOverlayText.apply {
             setTextColor(
                 MaterialColors.getColor(
@@ -2528,14 +2546,18 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }, seconds * 1000L)
     }
 
-    /** A connected controller keeps the touch controls hidden; touching the screen does not bring them back. */
-    private fun overlayHeldByController(): Boolean =
-        hasPhysicalControllerConnected && BooleanSetting.HIDE_OVERLAY_ON_CONTROLLER_INPUT.getBoolean()
-
     fun handleScreenTap(isLongTap: Boolean) {
         if (!isAdded || _binding == null) return
         if (binding.surfaceInputOverlay.isGamelessMode()) return
-        if (overlayHeldByController()) return
+        // Harbor: a touch brings back the touch controls a controller hid (on connecting or on its
+        // input); the controller's next input hides them again.
+        if (HarborConsole.active && !isLongTap && !BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean() &&
+            (overlayHiddenByPhysicalController || wasInputOverlayAutoHidden)
+        ) {
+            overlayHiddenByPhysicalController = false
+            toggleOverlay(true)
+            controllerInputReceived = false
+        }
         if (!BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()) return
         // failsafe
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
@@ -2557,7 +2579,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         val autoHideSeconds = IntSetting.INPUT_OVERLAY_AUTO_HIDE.getInt()
         val autoHideEnabled = BooleanSetting.ENABLE_INPUT_OVERLAY_AUTO_HIDE.getBoolean()
         val showInputOverlay = BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()
-        if (autoHideEnabled && showInputOverlay && !overlayHeldByController()) {
+        if (autoHideEnabled && showInputOverlay) {
             toggleOverlay(true)
             startOverlayAutoHideTimer(autoHideSeconds)
         }
@@ -2624,7 +2646,18 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         hasPhysicalControllerConnected = hasConnectedControllers
         controllerInputReceived = false
         if (!isAdded || _binding == null) return
+        // Harbor: with no controller (no Plus+Minus), the menu stays one tap away.
+        binding.harborMenuButton.visibility =
+            if (HarborConsole.active && !hasConnectedControllers) View.VISIBLE else View.GONE
         if (binding.surfaceInputOverlay.isGamelessMode()) return
+
+        if (HarborConsole.active) {
+            // Hidden while a controller is connected, back when the last one goes.
+            overlayHiddenByPhysicalController = hasConnectedControllers
+            wasInputOverlayAutoHidden = false
+            toggleOverlay(!hasConnectedControllers)
+            return
+        }
 
         if (hasConnectedControllers) {
             if (BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean() &&

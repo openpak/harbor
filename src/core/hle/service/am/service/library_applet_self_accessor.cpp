@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/file_sys/control_metadata.h"
@@ -21,6 +23,7 @@
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/ns/application_manager_interface.h"
 #include "core/hle/service/ns/service_getter_interface.h"
+#include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
 
 namespace Service::AM {
@@ -183,6 +186,10 @@ Result ILibraryAppletSelfAccessor::ExitProcessAndReturn() {
     LOG_INFO(Service_AM, "called");
 
     if (const auto caller_applet = m_applet->caller_applet.lock(); caller_applet) {
+        {
+            std::scoped_lock lk{m_applet->lock};
+            m_applet->process_exiting = true;
+        }
         m_applet->process->Terminate();
     } else {
         system.GetUserChannel() = m_applet->user_channel_launch_parameter;
@@ -217,8 +224,35 @@ Result ILibraryAppletSelfAccessor::GetCallerAppletIdentityInfoStack(
 }
 
 Result ILibraryAppletSelfAccessor::GetDesirableKeyboardLayout(Out<u32> out_desirable_layout) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_desirable_layout = 0;
+    // The layout the caller set with ISelfController 20.
+    if (const auto caller = m_applet->caller_applet.lock(); caller) {
+        std::scoped_lock lk{caller->lock};
+        if (caller->desirable_keyboard_layout) {
+            *out_desirable_layout = *caller->desirable_keyboard_layout;
+            LOG_INFO(Service_AM, "called, the caller's layout {}", *out_desirable_layout);
+            R_SUCCEED();
+        }
+    }
+
+    // A console answers an error when the caller set none (which one is not documented) and the
+    // applet then picks its own default. Answering 0 (Japanese) made the web applets' inline
+    // keyboard type Shift+2 as '"'; the system keyboard layout is what the user chose.
+    Set::KeyboardLayout layout{};
+    const auto set_sys =
+        system.ServiceManager().GetService<Set::ISystemSettingsServer>("set:sys", true);
+    if (set_sys) {
+        (void)set_sys->GetKeyboardLayout(Out<Set::KeyboardLayout>{&layout});
+    }
+    *out_desirable_layout = static_cast<u32>(layout);
+
+    // The software keyboard asks on every key press: warn once.
+    static std::atomic_bool warned{};
+    if (!warned.exchange(true)) {
+        LOG_WARNING(Service_AM,
+                    "unknown contract: ILibraryAppletSelfAccessor 19 with no layout from the "
+                    "caller; returning the system keyboard layout {}",
+                    *out_desirable_layout);
+    }
     R_SUCCEED();
 }
 

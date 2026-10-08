@@ -288,6 +288,9 @@ private:
             return true;
         }
         const std::string uid = OpenPakAccount::UidString(account_id);
+        // PlayerSelect's "Sign In and Link" asks this right after creating the user, while the
+        // setup's account is still being linked to it (OnFirmwareUserRegistered).
+        OpenPak::WaitForFirmwareUserLink(uid);
         if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
             return OpenPak::Session::Linked(uid);
         }
@@ -588,7 +591,7 @@ public:
             {11, &IProfileCommon::LoadImage, "LoadImage"},
             {20, &IProfileCommon::Unknown20, "Unknown20"},
             {21, &IProfileCommon::Unknown21, "Unknown21"},
-            {30, &IProfileCommon::Unknown30, "Unknown30"}
+            {30, &IProfileCommon::GetImageId, "GetImageId"}
         };
         // clang-format on
         RegisterHandlers(functions);
@@ -627,14 +630,26 @@ protected:
         rb.Push(ResultSuccess);
     }
 
-    void Unknown30(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "(STUBBED) called.");
+    // qlaunch (RdtAccountManager::update_) reloads the HOME icon only when these 16 bytes change.
+    void GetImageId(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        OpenPakAccount::ApplyPendingAdoptions(profile_manager);
 
-        // TODO (jarrodnorwell)
-        // inbytes: 0x0, outbytes: 0x10
+        std::array<u8, 0x10> id{};
+        const Common::FS::IOFile image(GetImagePath(user_id), Common::FS::FileAccessMode::Read,
+                                       Common::FS::FileType::BinaryFile);
+        if (image.IsOpen()) {
+            std::vector<u8> buffer(image.GetSize());
+            if (image.Read(buffer) == buffer.size()) {
+                id = ProfileManager::ImageId(buffer);
+            }
+        } else {
+            id = ProfileManager::ImageId(Core::Constants::ACCOUNT_BACKUP_JPEG);
+        }
 
-        IPC::ResponseBuilder rb{ctx, 2};
+        IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(ResultSuccess);
+        rb.PushRaw(id);
     }
 
     void Unknown110(HLERequestContext& ctx) {

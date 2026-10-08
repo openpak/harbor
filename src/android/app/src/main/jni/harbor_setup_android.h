@@ -3,10 +3,25 @@
 
 #pragma once
 
+namespace Core::HID {
+class HIDCore;
+}
+
 namespace Harbor {
 
 /// Whether this process boots the console (HOME menu) rather than a game picked from Eden's list.
 /// Set by the Harbor launcher through HarborNative.setConsoleMode.
 bool ConsoleMode();
+
+/// A console starts with its Joy-Cons on the rails: the phone and whatever controller is attached
+/// to it are the handheld console. Sets the input settings so that the Handheld controller is
+/// connected and Player 1 is not (Player 1's style Handheld, which also sends the touch overlay to
+/// the Handheld controller), both with Player 1's mappings. Call before HIDCore reloads them.
+void StartWithJoyconsAttached();
+
+/// Joy-Cons off the rails: Handheld disconnects and Player 1 connects as a pair of Joy-Cons; on the
+/// rails again: the reverse. Player 1 and Handheld carry the same mappings, so every physical pad
+/// and the touch overlay follow. Not saved: the next console start is attached again.
+void SetJoyconsDetached(Core::HID::HIDCore& hid, bool detached);
 
 } // namespace Harbor

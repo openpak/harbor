@@ -61,6 +61,19 @@ Moon::Description ParseSetting(std::string_view body, Setting& setting);
 
 std::string_view SafetyLevelName(std::uint8_t level);
 
+/// The setting in force as the console keeps it (its own document, not the parent's): what the
+/// parent sent and what the console's own setters changed. The PIN is kept apart, not in here.
+std::string SerializeState(const Setting& setting);
+/// False when the text is not a state this build wrote (the setting is then left as it was).
+bool LoadState(std::string_view text, Setting& setting);
+
+/// The free-communication list pctl keeps (a title once, with whether it is restricted), at most
+/// this many titles (its table, 94 blocks of 32).
+inline constexpr std::size_t FreeCommunicationCapacity = 2976;
+/// Add a title, or change its flag when it is listed (.text 0x3d210). False when the list is full.
+bool UpsertFreeCommunication(std::vector<std::pair<std::uint64_t, bool>>& list, std::uint64_t id,
+                             bool restricted);
+
 namespace Rules {
 
 /// nn::pctl::RestrictionSettings: the allowed rating age, SNS posting and free communication

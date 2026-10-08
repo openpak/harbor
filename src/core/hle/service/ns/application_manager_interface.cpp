@@ -955,7 +955,9 @@ Result IApplicationManagerInterface::Unknown4023(Out<UnknownTryPopRecord> out_re
 Result IApplicationManagerInterface::Unknown4042(OutInterface<IAsyncResult> out_interface,
                                                  OutCopyHandle<Kernel::KReadableEvent> out_event,
                                                  u64 arg1, u64 arg2) {
-    LOG_WARNING(Service_NS, "(STUBBED) called, arg1={:016X}, arg2={:016X}", arg1, arg2);
+    LOG_UNKNOWN_CONTRACT(Service_NS, "IApplicationManagerInterface 4042 (Virtual Game Cards), "
+                                     "arg1={:016X} arg2={:016X}; IAsyncResult on the shared event",
+                         arg1, arg2);
     *out_event = unknown_event.GetHandle();
     *out_interface = std::make_shared<IAsyncResult>(system, &unknown_event);
     R_SUCCEED();

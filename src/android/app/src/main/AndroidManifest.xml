@@ -130,6 +130,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Keep emulation running in background"/>
         </service>
 
+        <service
+            android:name="org.yuzu.yuzu_emu.harbor.HarborKeyService"
+            android:label="@string/harbor_key_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/harbor_key_service" />
+        </service>
+
         <provider
             android:name=".features.DocumentProvider"
             android:authorities="${applicationId}.user"

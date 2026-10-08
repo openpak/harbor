@@ -9,6 +9,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <stack>
 
 #include "common/math_util.h"
@@ -119,6 +120,18 @@ struct Applet {
     std::shared_ptr<Applet> reserved_applet{};
     bool unwind_after_reserved{};
     bool is_winding{};
+    // The ended process has been let go as soon as am saw it end, so its memory is back in the
+    // pool at once, as on the console, not when the last reference to this applet goes (a winding
+    // Shop kept its whole web heap while playerSelect and Login ran). Unwinding loads it again.
+    bool process_released{};
+    // The applet asked to end its own process (ExitProcessAndReturn, WindAndDoReserved). Set under
+    // the lock before the process is terminated, so the window system never pauses or resumes a
+    // process the kernel is tearing down (a host-thread SetActivity racing Terminate crashed).
+    bool process_exiting{};
+
+    // ISelfController 20 SetDesirableKeyboardLayout: the layout this applet wants the library
+    // applets it starts to type with (nn::settings::KeyboardLayout).
+    std::optional<u32> desirable_keyboard_layout{};
 
     // Self state
     bool exit_locked{};

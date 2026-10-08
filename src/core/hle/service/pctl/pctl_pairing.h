@@ -86,6 +86,22 @@ public:
     std::pair<std::vector<std::uint8_t>, std::string> Mii() const;
 
     void SetPin(std::string pin);
+
+    // The console's own setters, for System Settings > Parental Controls without a smart device
+    // (pctl 1033, 1036, 1038, 1042/1050, 1045, 1043). The setting they change is the one the
+    // parent's sync replaces; kept in the secret store like the PIN, per OpenPak server (or
+    // "local" with none configured).
+    /// pctl takes the default organisation for the region and language when none is set yet
+    /// (.text 0x41880), so the caller names it.
+    void SetSafetyLevel(std::uint8_t level, int default_organization);
+    void SetCustomSettings(const Rules::Restriction& custom);
+    void SetDefaultRatingOrganization(int organization);
+    /// False when the list is full.
+    bool AddFreeCommunicationApplication(std::uint64_t application_id, bool restricted);
+    void UpdateFreeCommunicationApplications(
+        const std::vector<std::pair<std::uint64_t, bool>>& entries);
+    /// Parental controls deleted from System Settings: no PIN, no setting, no pairing.
+    void DeleteSettings();
     void SetTemporarilyUnlocked(bool unlocked);
     /// pctl keeps it only while a PIN is set (.text 0x41a10).
     void SetStereoVisionRestricted(bool restricted);
