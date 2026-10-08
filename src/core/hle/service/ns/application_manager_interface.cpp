@@ -27,6 +27,7 @@
 #include "core/launch_timestamp_cache.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -40,7 +41,8 @@
 
 #ifdef __ANDROID__
 #include "common/fs/fs_android.h"
-#elif !defined(_WIN32)
+#endif
+#ifndef _WIN32
 #include <unistd.h>
 #endif
 
@@ -122,6 +124,32 @@ bool IsContentUri(const std::string& path) {
 }
 #endif
 
+// A split NSP/XCI: a folder named like the file holding only its numbered parts (00, 01, ...).
+// Returns the parts, or nothing when the folder holds anything else.
+std::optional<std::vector<std::filesystem::path>> SplitParts(const std::filesystem::path& folder) {
+    auto extension = folder.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension != ".nsp" && extension != ".xci") {
+        return std::nullopt;
+    }
+    std::vector<std::filesystem::path> parts;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+        const auto name = entry.path().filename().string();
+        const bool part = name.size() == 2 && std::isxdigit(static_cast<unsigned char>(name[0])) &&
+                          std::isxdigit(static_cast<unsigned char>(name[1]));
+        if (!part || !entry.is_regular_file(ec)) {
+            return std::nullopt;
+        }
+        parts.push_back(entry.path());
+    }
+    if (ec || parts.empty()) {
+        return std::nullopt;
+    }
+    return parts;
+}
+
 u64 LibraryFileSize(const std::string& path) {
 #ifdef __ANDROID__
     if (IsContentUri(path)) {
@@ -129,12 +157,20 @@ u64 LibraryFileSize(const std::string& path) {
     }
 #endif
     std::error_code ec;
+    if (std::filesystem::is_directory(std::filesystem::path{path}, ec)) {
+        u64 total = 0;
+        for (const auto& part : SplitParts(path).value_or(std::vector<std::filesystem::path>{})) {
+            total += static_cast<u64>(std::filesystem::file_size(part, ec));
+        }
+        return total;
+    }
     const auto size = std::filesystem::file_size(std::filesystem::path{path}, ec);
     return ec ? 0 : static_cast<u64>(size);
 }
 
 // Deleting a file needs write access to its folder (desktop) or a SAF grant whose provider
-// supports deleting it (Android). A folder is never deleted.
+// supports deleting it (Android). The only folder ever deleted is a split NSP/XCI's own folder,
+// and only when it holds nothing but its numbered parts.
 bool CanDeleteLibraryFile(const std::string& path) {
 #ifdef __ANDROID__
     if (IsContentUri(path)) {
@@ -144,8 +180,20 @@ bool CanDeleteLibraryFile(const std::string& path) {
     const std::filesystem::path file{path};
     std::error_code ec;
     const auto status = std::filesystem::symlink_status(file, ec);
-    if (ec || std::filesystem::is_directory(status) || !std::filesystem::exists(status)) {
+    if (ec || !std::filesystem::exists(status)) {
         return false;
+    }
+    if (std::filesystem::is_directory(status)) {
+        const auto parts = SplitParts(file);
+        if (!parts) {
+            return false;
+        }
+#ifndef _WIN32
+        // The parts go from the split folder, then the folder from its parent.
+        if (::access(file.c_str(), W_OK | X_OK) != 0) {
+            return false;
+        }
+#endif
     }
 #ifdef _WIN32
     return (status.permissions() & std::filesystem::perms::owner_write) !=
@@ -163,7 +211,31 @@ bool DeleteLibraryFile(const std::string& path) {
     }
 #endif
     std::error_code ec;
-    return std::filesystem::remove(std::filesystem::path{path}, ec) && !ec;
+    const std::filesystem::path file{path};
+    if (std::filesystem::is_directory(file, ec)) {
+        const auto parts = SplitParts(file);
+        if (!parts) {
+            return false;
+        }
+        for (const auto& part : *parts) {
+            if (!std::filesystem::remove(part, ec) || ec) {
+                return false;
+            }
+        }
+    }
+    return std::filesystem::remove(file, ec) && !ec;
+}
+
+void LogUpdateFoundTwice(u64 application_id, u32 external, u32 manual) {
+    static std::mutex mutex;
+    static std::set<u64> logged;
+    std::scoped_lock lk{mutex};
+    if (logged.insert(application_id).second) {
+        LOG_INFO(Service_NS,
+                 "HOME library: {:016X} has updates in the update folders (v{}) and the game "
+                 "folders (v{}); the newest is used",
+                 application_id, external, manual);
+    }
 }
 
 } // Anonymous namespace
@@ -246,8 +318,9 @@ u32 FindInstalledApplicationVersion(Core::System& system, u64 application_id) {
     const auto update_id = FileSys::GetUpdateTitleID(application_id);
     const auto& disabled = Settings::values.disabled_addons[application_id];
 
-    // The external folders win, then the frontend's own, as FileSys::PatchManager picks the update
-    // it applies. Each lists its updates newest first.
+    // The newest enabled update in the user's folders (the external folders and the frontend's
+    // game folders together), as FileSys::PatchManager picks the update it applies: a title whose
+    // update is found twice runs the newest one.
     const auto newest_enabled = [&](const auto* provider) -> std::optional<u32> {
         if (provider == nullptr) {
             return std::nullopt;
@@ -262,11 +335,13 @@ u32 FindInstalledApplicationVersion(Core::System& system, u64 application_id) {
     const auto* const external = content.GetExternalProvider();
     const auto* const manual = static_cast<const FileSys::ManualContentProvider*>(
         content.GetSlotProvider(FileSys::ContentProviderUnionSlot::FrontendManual));
-    if (const auto version = newest_enabled(external)) {
-        return *version;
+    const auto from_external = newest_enabled(external);
+    const auto from_manual = newest_enabled(manual);
+    if (from_external && from_manual) {
+        LogUpdateFoundTwice(application_id, *from_external, *from_manual);
     }
-    if (const auto version = newest_enabled(manual)) {
-        return *version;
+    if (from_external || from_manual) {
+        return (std::max)(from_external.value_or(0), from_manual.value_or(0));
     }
 
     // An update installed on the NAND or the SD card, else the base title.
