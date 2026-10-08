@@ -36,6 +36,8 @@ public:
 
     VirtualDir Create(SaveDataSpaceId space, const SaveDataAttribute& meta) const;
     VirtualDir Open(SaveDataSpaceId space, const SaveDataAttribute& meta) const;
+    /// Whether the save exists, without creating it the way Open may.
+    bool Exists(SaveDataSpaceId space, const SaveDataAttribute& meta) const;
 
     VirtualDir GetSaveDataSpaceDirectory(SaveDataSpaceId space) const;
 
@@ -56,6 +58,8 @@ public:
     void WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const;
     /// Removes system save save_id for every user, with its owner record.
     Result DeleteSystemSaveData(u64 save_id) const;
+    /// Whether system save save_id exists for any user.
+    bool SystemSaveDataExists(u64 save_id) const;
 
 private:
     Core::System& system;

@@ -21,6 +21,8 @@ public:
                           const FileSys::SaveDataAttribute& attribute);
     Result OpenSaveData(FileSys::VirtualDir* out_save_data, FileSys::SaveDataSpaceId space,
                         const FileSys::SaveDataAttribute& attribute);
+    bool SaveDataExists(FileSys::SaveDataSpaceId space,
+                        const FileSys::SaveDataAttribute& attribute) const;
     Result OpenSaveDataSpace(FileSys::VirtualDir* out_save_data_space,
                              FileSys::SaveDataSpaceId space);
 
@@ -32,6 +34,7 @@ public:
     std::optional<u64> ReadSystemSaveDataOwner(u64 save_id) const;
     void WriteSystemSaveDataOwner(u64 save_id, u64 owner_id);
     Result DeleteSystemSaveData(u64 save_id);
+    bool SystemSaveDataExists(u64 save_id) const;
 
 private:
     Core::System& system;

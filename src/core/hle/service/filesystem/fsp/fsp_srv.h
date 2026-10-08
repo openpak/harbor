@@ -59,8 +59,9 @@ private:
                                     FileSys::SaveDataAttribute save_struct, u128 uid);
     Result CreateSaveDataFileSystemBySystemSaveDataId(
         FileSys::SaveDataAttribute save_struct, FileSys::SaveDataCreationInfo save_create_struct);
-    Result CreateSaveDataFileSystemWithCreationInfo2(
-        FileSys::SaveDataCreationInfo2 save_data_creation_info);
+    void CreateSaveDataFileSystemWithCreationInfo2(HLERequestContext& ctx);
+    Result CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId space,
+                                      const FileSys::SaveDataAttribute& attribute);
     void RecordSystemSaveDataOwner(const FileSys::SaveDataAttribute& attribute, u64 owner_id);
     Result DeleteSaveDataFileSystem(u64 save_data_id);
     Result IsExFatSupported(Out<bool> out_is_supported);

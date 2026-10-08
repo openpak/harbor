@@ -90,6 +90,12 @@ VirtualDir SaveDataFactory::Open(SaveDataSpaceId space, const SaveDataAttribute&
     return out;
 }
 
+bool SaveDataFactory::Exists(SaveDataSpaceId space, const SaveDataAttribute& meta) const {
+    const auto save_directory = GetFullPath(program_id, dir, space, meta.type, meta.program_id,
+                                            meta.user_id, meta.system_save_data_id);
+    return dir->GetDirectoryRelative(save_directory) != nullptr;
+}
+
 VirtualDir SaveDataFactory::GetSaveDataSpaceDirectory(SaveDataSpaceId space) const {
     return dir->GetDirectoryRelative(GetSaveDataSpaceIdPath(space));
 }
@@ -221,6 +227,12 @@ void SaveDataFactory::WriteSystemSaveDataOwner(u64 save_id, u64 owner_id) const 
         return;
     }
     file->WriteObject(owner_id);
+}
+
+bool SaveDataFactory::SystemSaveDataExists(u64 save_id) const {
+    const auto save_root = dir->GetDirectoryRelative("/system/save");
+    return save_root != nullptr &&
+           save_root->GetSubdirectory(fmt::format("{:016X}", save_id)) != nullptr;
 }
 
 Result SaveDataFactory::DeleteSystemSaveData(u64 save_id) const {

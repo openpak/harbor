@@ -22,7 +22,9 @@ ISaveDataInfoReader::ISaveDataInfoReader(Core::System& system_,
     };
     RegisterHandlers(functions);
 
-    FindAllSaves(space);
+    if (save_data_controller != nullptr) {
+        info = FindAllSaves(*save_data_controller, space);
+    }
 }
 
 ISaveDataInfoReader::~ISaveDataInfoReader() = default;
@@ -63,25 +65,29 @@ Result ISaveDataInfoReader::ReadSaveDataInfo(
     R_SUCCEED();
 }
 
-void ISaveDataInfoReader::FindAllSaves(FileSys::SaveDataSpaceId space) {
+std::vector<ISaveDataInfoReader::SaveDataInfo> ISaveDataInfoReader::FindAllSaves(
+    SaveDataController& save_data_controller, FileSys::SaveDataSpaceId space) {
+    std::vector<SaveDataInfo> info;
     FileSys::VirtualDir save_root{};
-    const auto result = save_data_controller->OpenSaveDataSpace(&save_root, space);
+    const auto result = save_data_controller.OpenSaveDataSpace(&save_root, space);
 
     if (result != ResultSuccess || save_root == nullptr) {
         LOG_ERROR(Service_FS, "The save root for the space_id={:02X} was invalid!", space);
-        return;
+        return info;
     }
 
     for (const auto& type : save_root->GetSubdirectories()) {
         if (type->GetName() == "save") {
-            FindNormalSaves(space, type);
+            FindNormalSaves(info, space, type);
         } else if (space == FileSys::SaveDataSpaceId::Temporary) {
-            FindTemporaryStorageSaves(space, type);
+            FindTemporaryStorageSaves(info, space, type);
         }
     }
+    return info;
 }
 
-void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
+void ISaveDataInfoReader::FindNormalSaves(std::vector<SaveDataInfo>& info,
+                                          FileSys::SaveDataSpaceId space,
                                           const FileSys::VirtualDir& type) {
     for (const auto& save_id : type->GetSubdirectories()) {
         // Emulator bookkeeping (/system/save/.harbor) is not a save.
@@ -99,9 +105,9 @@ void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
             std::reverse(user_id_numeric.begin(), user_id_numeric.end());
 
             if (save_id_numeric != 0) {
-                // System Save Data
+                // System Save Data. fs indexes a system save under its static id.
                 info.emplace_back(SaveDataInfo{
-                    0,
+                    save_id_numeric,
                     space,
                     FileSys::SaveDataType::System,
                     {},
@@ -136,7 +142,8 @@ void ISaveDataInfoReader::FindNormalSaves(FileSys::SaveDataSpaceId space,
     }
 }
 
-void ISaveDataInfoReader::FindTemporaryStorageSaves(FileSys::SaveDataSpaceId space,
+void ISaveDataInfoReader::FindTemporaryStorageSaves(std::vector<SaveDataInfo>& info,
+                                                    FileSys::SaveDataSpaceId space,
                                                     const FileSys::VirtualDir& type) {
     for (const auto& user_id : type->GetSubdirectories()) {
         // Skip non user id subdirectories
