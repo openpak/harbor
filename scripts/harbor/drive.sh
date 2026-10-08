@@ -11,6 +11,9 @@
 #   home   home-long   capture   power   screenshot <png>   threads   quit
 #   type <text>   type-line <file> <n>   key <name>   detach   attach   dock   terminate
 #   layout <us|uk|auto>   key-timing <hold ms> <gap ms>
+#   menu <harbor|settings|frame-gen|controllers|back|close|backup|restore|new-console>
+#   hostkey <Enter|Escape|Backspace|Space|Up|Down|Left|Right|Tab|letter|digit> [ms]
+#   pad plug   pad unplug   pad <tap|down|up> <button> [ms]   pad axis <n> <value> [ms]
 #   sleep <seconds>       (handled here, not sent)
 # type-line types line n of a file (the value alone for key=value) and is logged only by length: use it
 # for passwords. type's text must not contain a command word.
@@ -20,6 +23,11 @@
 # with a warning. --layout or the layout command overrides it. Keys are held and released for 100 ms each
 # by default (the firmware reads the keyboard once per frame); key-timing changes that.
 # Buttons: A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK
+# pad drives an SDL virtual gamepad ("Harbor test pad") that Eden finds like a real one; its buttons are
+# SDL's names (a b x y back guide start leftstick rightstick leftshoulder rightshoulder dpup dpdown dpleft
+# dpright misc1) or numbers, axes SDL's numbers (0-1 left stick, 2-3 right, 4-5 triggers).
+# hostkey presses a key as the render window passes it on (controller mappings, the Harbor menu), not
+# on the guest's USB keyboard (that is key).
 # Relative screenshot paths land under the run directory. A screenshot is taken by the renderer (frame
 # only, no window chrome); if the guest is idle and presents no frame, the window is captured with grim.
 #
@@ -39,7 +47,7 @@ FIFO="$RUN/control"
 
 is_command() {
     case "$1" in
-        press|hold|release|stick|home|home-long|capture|power|screenshot|threads|quit|sleep|type|type-line|key|detach|attach|layout|key-timing|terminate|dock) return 0 ;;
+        press|hold|release|stick|home|home-long|capture|power|screenshot|threads|quit|sleep|type|type-line|key|detach|attach|layout|key-timing|terminate|dock|menu|hostkey|pad) return 0 ;;
         *) return 1 ;;
     esac
 }

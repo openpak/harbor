@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -32,6 +33,7 @@
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/main.h"
 #include "yuzu/harbor_control.h"
+#include "yuzu/harbor_test_pad.h"
 
 namespace {
 
@@ -518,6 +520,65 @@ void HarborControl::Execute(const std::string& line) {
         if (hooks.threads) {
             hooks.threads();
         }
+    } else if (cmd == "pad") {
+        // The SDL test pad (harbor_test_pad.h): a physical controller as Eden's SDL driver sees it.
+        const auto usage = [] {
+            LOG_WARNING(Frontend, "harbor-control: usage: pad plug | pad unplug | pad tap <button> [ms] | "
+                                  "pad down <button> | pad up <button> | pad axis <n> <value> [ms]");
+        };
+        if (words.size() < 2) {
+            usage();
+        } else if (words[1] == "plug") {
+            HarborTestPad::Attach();
+        } else if (words[1] == "unplug") {
+            HarborTestPad::Detach();
+        } else if ((words[1] == "tap" || words[1] == "down" || words[1] == "up") && words.size() >= 3) {
+            const int button = HarborTestPad::ButtonIndex(words[2]);
+            if (button < 0 || !HarborTestPad::SetButton(button, words[1] != "up")) {
+                usage();
+            } else if (words[1] == "tap") {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ms_at(3, DefaultPressMs)));
+                HarborTestPad::SetButton(button, false);
+            }
+        } else if (words[1] == "axis" && words.size() >= 4) {
+            const int axis = std::atoi(words[2].c_str());
+            if (!HarborTestPad::SetAxis(axis, std::strtof(words[3].c_str(), nullptr))) {
+                usage();
+            } else if (words.size() > 4) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(ms_at(4, 0)));
+                HarborTestPad::SetAxis(axis, 0.0f);
+            }
+        } else {
+            usage();
+        }
+    } else if (cmd == "hostkey") {
+        // A key on the host keyboard as the render window passes it on (the keyboard engine's port
+        // 0: what controller mappings and the Harbor menu read), not the guest's USB keyboard.
+        static const std::pair<const char*, int> names[] = {
+            {"Enter", Qt::Key_Return}, {"Escape", Qt::Key_Escape}, {"Backspace", Qt::Key_Backspace},
+            {"Space", Qt::Key_Space},  {"Up", Qt::Key_Up},         {"Down", Qt::Key_Down},
+            {"Left", Qt::Key_Left},    {"Right", Qt::Key_Right},   {"Tab", Qt::Key_Tab},
+        };
+        int code = 0;
+        if (words.size() >= 2) {
+            for (const auto& [name, value] : names) {
+                if (words[1] == name) {
+                    code = value;
+                }
+            }
+            if (code == 0 && words[1].size() == 1 && std::isalnum(static_cast<unsigned char>(words[1][0]))) {
+                code = std::toupper(static_cast<unsigned char>(words[1][0]));
+            }
+        }
+        if (code == 0) {
+            LOG_WARNING(Frontend, "harbor-control: usage: hostkey <Enter|Escape|Backspace|Space|Up|Down|"
+                                  "Left|Right|Tab|a letter or digit> [ms]");
+            return;
+        }
+        auto* const keyboard = input_subsystem.GetKeyboard();
+        keyboard->PressKey(code);
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms_at(2, DefaultPressMs)));
+        keyboard->ReleaseKey(code);
     } else if (cmd == "menu") {
         // A Harbor menu entry by name (its dialogs then take `key` and `type`).
         if (words.size() < 2 || !hooks.menu) {
