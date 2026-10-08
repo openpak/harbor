@@ -115,6 +115,17 @@
 
 // These are wrappers to avoid the calls to CreateDirectory and CreateFile because of the Windows
 // defines.
+// F7 and the harness: a docked console has no rails, so the Joy-Cons stay detached; attaching
+// would leave only the handheld controller, which docked mode ignores, and every button would go
+// dead. Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+static void HarborSetJoyconsDetached(bool detached) {
+    if (!detached && Settings::IsDockedMode()) {
+        LOG_INFO(Frontend, "harbor: F7 ignored: the console is docked, the Joy-Cons stay detached");
+        return;
+    }
+    FrontendCommon::SetJoyconsDetached(QtCommon::system->HIDCore(), detached);
+}
+
 static FileSys::VirtualDir VfsFilesystemCreateDirectoryWrapper(const std::string& path,
                                                                FileSys::OpenMode mode) {
     return QtCommon::vfs->CreateDirectory(path, mode);
@@ -552,8 +563,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     auto* joycon_shortcut = new QShortcut(QKeySequence(Qt::Key_F7), this);
     joycon_shortcut->setContext(Qt::ApplicationShortcut);
     connect(joycon_shortcut, &QShortcut::activated, this, [] {
-        auto& hid = QtCommon::system->HIDCore();
-        FrontendCommon::SetJoyconsDetached(hid, !FrontendCommon::JoyconsDetached(hid));
+        HarborSetJoyconsDetached(!FrontendCommon::JoyconsDetached(QtCommon::system->HIDCore()));
     });
 
     // Test harness: HARBOR_CONTROL=<fifo path> accepts input, screenshot and dump commands.
@@ -586,10 +596,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                         LOG_WARNING(Frontend, "harbor-control: no menu entry \"{}\"", name);
                     }
                 },
-            .joycons =
-                [](bool detached) {
-                    FrontendCommon::SetJoyconsDetached(QtCommon::system->HIDCore(), detached);
-                },
+            .joycons = [](bool detached) { HarborSetJoyconsDetached(detached); },
+            .power = [] { QtCommon::system->GetAppletManager().PowerButtonMiddlePress(); },
+            .terminate = [] { QtCommon::system->GetAppletManager().ForceTerminateApplication(); },
+            .dock = [this] { OnToggleDockedMode(); },
         });
 
     // Harness runs use the system password store too (console mode installs it before OpenPak
@@ -664,6 +674,14 @@ void MainWindow::HarborRestartConsole() {
 
 /// The Harbor menu (console mode): host settings for the console as a whole.
 void MainWindow::HarborAddMenu() {
+    // No rooms or lobby in console mode: online play is the console's own, through OpenPak.
+    ui->menu_Multiplayer->menuAction()->setVisible(false);
+    for (auto* action : ui->menu_Multiplayer->actions()) {
+        action->setEnabled(false);
+    }
+    multiplayer_state->setVisible(false);
+    multiplayer_state->GetStatusText()->setVisible(false);
+    multiplayer_state->GetStatusIcon()->setVisible(false);
 #ifdef HAS_LSFG
     auto* menu = new QMenu(tr("&Harbor"), this);
     ui->menubar->insertMenu(ui->menu_Help->menuAction(), menu);

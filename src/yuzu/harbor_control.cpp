@@ -411,8 +411,13 @@ void HarborControl::Execute(const std::string& line) {
     } else if (cmd == "capture") {
         PressFor(static_cast<int>(VirtualButton::ButtonCapture), HomeShortMs);
     } else if (cmd == "power") {
-        LOG_WARNING(Frontend, "harbor-control: power is unsupported: no power button path in this "
-                              "build (am/button_poller.cpp has none)");
+        if (hooks.power) {
+            hooks.power();
+        }
+    } else if (cmd == "terminate") {
+        if (hooks.terminate) {
+            hooks.terminate();
+        }
     } else if (cmd == "screenshot") {
         if (words.size() < 2 || !hooks.screenshot) {
             LOG_WARNING(Frontend, "harbor-control: usage: screenshot <png path>");
@@ -448,6 +453,11 @@ void HarborControl::Execute(const std::string& line) {
         if (words.size() < 2 || !TypeKey(words[1])) {
             LOG_WARNING(Frontend, "harbor-control: usage: key <Enter|Backspace|Tab|Escape|Space|"
                                   "Up|Down|Left|Right|Delete|Home|End>");
+        }
+    } else if (cmd == "dock") {
+        if (hooks.dock) {
+            QMetaObject::invokeMethod(gui_context, [this] { hooks.dock(); },
+                                      Qt::BlockingQueuedConnection);
         }
     } else if (cmd == "detach" || cmd == "attach") {
         if (hooks.joycons) {
