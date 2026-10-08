@@ -169,6 +169,48 @@ object FileUtil {
     }
 
     /**
+     * Whether a document (a file, not a folder) can be deleted: its provider supports deleting
+     * it and the app's grant still covers it.
+     * @param path content uri path
+     */
+    fun canDeleteDocument(path: String): Boolean {
+        var c: Cursor? = null
+        try {
+            val columns = arrayOf(
+                DocumentsContract.Document.COLUMN_FLAGS,
+                DocumentsContract.Document.COLUMN_MIME_TYPE
+            )
+            c = context.contentResolver.query(Uri.parse(path), columns, null, null, null)
+            if (c == null || !c.moveToFirst()) {
+                return false
+            }
+            val flags = c.getInt(0)
+            val isDirectory = c.getString(1) == DocumentsContract.Document.MIME_TYPE_DIR
+            return !isDirectory && (flags and DocumentsContract.Document.FLAG_SUPPORTS_DELETE) != 0
+        } catch (e: Exception) {
+            Log.warning("[FileUtil] Cannot query a document for deletion: " + e.javaClass.simpleName)
+        } finally {
+            closeQuietly(c)
+        }
+        return false
+    }
+
+    /**
+     * Deletes one document (a file, never a folder) through SAF.
+     * @param path content uri path
+     * @return true when it was deleted
+     */
+    fun deleteDocument(path: String): Boolean {
+        return try {
+            val document = DocumentFile.fromSingleUri(context, Uri.parse(path))
+            document != null && !document.isDirectory && document.delete()
+        } catch (e: Exception) {
+            Log.warning("[FileUtil] Cannot delete a document: " + e.javaClass.simpleName)
+            false
+        }
+    }
+
+    /**
      * Check whether given path is a directory
      * @param path content uri path
      * @return bool
