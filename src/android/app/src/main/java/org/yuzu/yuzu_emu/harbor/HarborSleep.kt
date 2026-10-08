@@ -14,8 +14,9 @@ import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.utils.Log
 
 /**
- * The console's sleep on the phone. am keeps the state (AppletManager::ToggleSleep, from a short
- * power press) and calls onSleepChanged; here the guest is paused, the screen goes black and the
+ * The console's sleep on the phone. am runs the sleep sequence (HOME answers a short power press,
+ * Sleep Mode or auto-sleep) and at its deepest point calls onSleepChanged
+ * (AppletManager::OnSleepStateChanged); here the guest is paused, the screen goes black and the
  * phone may turn its display off. The power button, HOME, any controller button, Android back or
  * a tap on the black screen (the phone's stand-in for the console's buttons) wakes it.
  */
