@@ -33,6 +33,28 @@ FileSys::SaveDataSpaceId ToStoredSpace(FileSys::SaveDataSpaceId space) {
     }
 }
 
+// The sizes fs gives a title's save when ns creates it: the NACP's account or device sizes.
+// Zero for other saves or when the title's NACP is not found.
+std::pair<s64, s64> GetTitleSaveDataSize(Core::System& system,
+                                         const FileSys::SaveDataAttribute& attribute) {
+    const bool account = attribute.type == FileSys::SaveDataType::Account;
+    if ((!account && attribute.type != FileSys::SaveDataType::Device) ||
+        attribute.program_id == 0) {
+        return {0, 0};
+    }
+    const FileSys::PatchManager pm{attribute.program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    const auto nacp = pm.GetControlMetadata().first;
+    if (nacp == nullptr) {
+        return {0, 0};
+    }
+    const auto& raw = nacp->raw;
+    return account ? std::pair<s64, s64>{static_cast<s64>(raw.user_account_save_data_size),
+                                         static_cast<s64>(raw.user_account_save_data_journal_size)}
+                   : std::pair<s64, s64>{static_cast<s64>(raw.device_save_data_size),
+                                         static_cast<s64>(raw.device_save_data_journal_size)};
+}
+
 FileSys::SaveDataSize GetDefaultSaveDataSize(Core::System& system, u64 program_id) {
     const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
                                    system.GetContentProvider()};
@@ -154,18 +176,27 @@ Result SaveDataController::ReadSaveDataExtraData(
     if (!factory->Exists(space, attribute)) {
         return FileSys::ResultTargetNotFound;
     }
+    FileSys::SaveDataExtraData extra_data{};
     if (const auto stored = factory->ReadExtraData(space, attribute)) {
-        *out_extra_data = *stored;
-        return ResultSuccess;
+        extra_data = *stored;
+    } else {
+        extra_data.attr = attribute;
+        if (attribute.type == FileSys::SaveDataType::System) {
+            extra_data.owner_id =
+                factory->ReadSystemSaveDataOwner(attribute.system_save_data_id).value_or(0);
+        } else {
+            extra_data.owner_id = attribute.program_id;
+        }
     }
 
-    FileSys::SaveDataExtraData extra_data{};
-    extra_data.attr = attribute;
-    if (attribute.type == FileSys::SaveDataType::System) {
-        extra_data.owner_id =
-            factory->ReadSystemSaveDataOwner(attribute.system_save_data_id).value_or(0);
-    } else {
-        extra_data.owner_id = attribute.program_id;
+    // A console's save always carries the sizes it was made with, and qlaunch extends a title's
+    // save to its NACP sizes when they are larger, which fails with ExtensionSizeInvalid
+    // (2002-6067) unless those sizes are whole MiB. Title saves made here without a size (by
+    // Eden, or before extra data was kept) read the NACP sizes fs would have made them with.
+    if (extra_data.available_size == 0 && extra_data.journal_size == 0) {
+        const auto [size, journal_size] = GetTitleSaveDataSize(system, attribute);
+        extra_data.available_size = size;
+        extra_data.journal_size = journal_size;
     }
     *out_extra_data = extra_data;
     return ResultSuccess;
