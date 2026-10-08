@@ -81,6 +81,7 @@ FileSys::SaveImage::SaveGeometry Geometry(Core::System& system,
     FileSys::SaveImage::SaveGeometry geometry{};
     geometry.data_size = extra_data.available_size;
     geometry.journal_size = extra_data.journal_size;
+    geometry.save_data_type = static_cast<u8>(extra_data.attr.type);
     if (geometry.data_size == 0) {
         const FileSys::PatchManager pm{extra_data.attr.program_id,
                                        system.GetFileSystemController(),
@@ -93,17 +94,6 @@ FileSys::SaveImage::SaveGeometry Geometry(Core::System& system,
         }
     }
     return geometry;
-}
-
-/// Tests of the transfer path before the save image codec: HARBOR_SAVE_TRANSFER_TEST_IMAGE names
-/// a fixed image file. Export sends its bytes as the save image stream; import writes the stream
-/// it received to "<file>.imported" instead of into the save. Never set in normal use.
-std::optional<std::filesystem::path> TestImage() {
-    const char* path = std::getenv("HARBOR_SAVE_TRANSFER_TEST_IMAGE");
-    if (path == nullptr || *path == 0) {
-        return std::nullopt;
-    }
-    return std::filesystem::path{path};
 }
 
 } // namespace
@@ -215,20 +205,9 @@ Result Importer::Finalize() {
     FileSys::SaveImage::ImageParameters parameters{content.hash_algorithm,
                                                    content.is_integrity_seed_enabled != 0,
                                                    content.hash_salt};
-    if (const auto test_image = TestImage()) {
-        auto target = *test_image;
-        target += ".imported";
-        Common::FS::IOFile file{target, Common::FS::FileAccessMode::Write,
-                                Common::FS::FileType::BinaryFile};
-        const auto bytes = stream->ReadAllBytes();
-        R_UNLESS(file.IsOpen() && file.WriteSpan(std::span<const u8>{bytes}) == bytes.size(),
-                 ResultImportDataVerification);
-        LOG_WARNING(Service_FS, "save transfer: test image imported to a file, not the save");
-    } else {
-        const auto geometry = Geometry(*system, extra_data);
-        R_UNLESS(FileSys::SaveImage::ImportSaveImage(stream, parameters, geometry, dir),
-                 ResultImportDataVerification);
-    }
+    const auto geometry = Geometry(*system, extra_data);
+    R_UNLESS(FileSys::SaveImage::ImportSaveImage(stream, parameters, geometry, dir),
+             ResultImportDataVerification);
     // The save keeps the archive's extra data (its time stamp and commit id travel with it),
     // under this console's attribute.
     FileSys::SaveDataExtraData imported = extra_data;
@@ -309,24 +288,16 @@ Result TransferManager::OpenFullExporter(std::shared_ptr<Exporter>* out,
     }
     FileSys::VirtualDir dir{};
     R_TRY(controller->OpenSaveData(&dir, space, attribute));
+    // Harbor keeps no save thumbnails: the codec puts the console's zero thumbnail first.
+    const auto image =
+        FileSys::SaveImage::ExportSaveImage(dir, Geometry(system, exporter->extra_data));
+    R_UNLESS(image.has_value(), ResultTransferNotReady);
     ArchiveSource source;
-    if (const auto test_image = TestImage()) {
-        Common::FS::IOFile file{*test_image, Common::FS::FileAccessMode::Read,
-                                Common::FS::FileType::BinaryFile};
-        R_UNLESS(file.IsOpen(), ResultTransferNotReady);
-        source.stream.resize(file.GetSize());
-        file.ReadSpan(std::span<u8>{source.stream});
-        LOG_WARNING(Service_FS, "save transfer: exporting a fixed test image, not the save");
-    } else {
-        const auto image = FileSys::SaveImage::ExportSaveImage(
-            dir, Geometry(system, exporter->extra_data));
-        R_UNLESS(image.has_value(), ResultTransferNotReady);
-        for (const auto& [kind, file] : image->storages) {
-            const auto bytes = file->ReadAllBytes();
-            source.stream.insert(source.stream.end(), bytes.begin(), bytes.end());
-        }
-        source.integrity_seed = image->parameters.integrity_seed;
+    for (const auto& [kind, file] : image->storages) {
+        const auto bytes = file->ReadAllBytes();
+        source.stream.insert(source.stream.end(), bytes.begin(), bytes.end());
     }
+    source.integrity_seed = image->parameters.integrity_seed;
     std::memcpy(source.extra_data.data(), &exporter->extra_data, source.extra_data.size());
 
     Key128 seed{};
