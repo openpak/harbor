@@ -15,6 +15,7 @@
 
 #include "common/logging.h"
 #include "core/openpak/platform.h"
+#include "core/openpak/olsc_transfer.h"
 #include "core/openpak/session.h"
 
 namespace OpenPak::Olsc {
@@ -162,6 +163,10 @@ static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item) {
         static_cast<std::uint32_t>(Number(item, "launch_required_version").value_or(0));
     archive.previous_id = Number(item, "previous_save_data_archive_id").value_or(0);
     archive.series_id = Number(item, "series_id").value_or(0);
+    if (const auto digest_bytes = Transfer::FromBase64Url(digest->get<std::string>());
+        digest_bytes && digest_bytes->size() >= 8) {
+        std::memcpy(&archive.commit_id, digest_bytes->data(), 8);
+    }
     archive.saved_at = Number(item, "saved_at_as_unixtime").value_or(0);
     archive.finished_at = Number(item, "finished_at_as_unixtime").value_or(0);
     archive.platform_key_generation =
@@ -352,6 +357,7 @@ std::string SerializeArchives(const std::vector<ArchiveInfo>& archives) {
                         {"launch_required_version", a.launch_required_version},
                         {"previous_id", a.previous_id},
                         {"series_id", a.series_id},
+                        {"commit_id", a.commit_id},
                         {"saved_at", a.saved_at},
                         {"finished_at", a.finished_at},
                         {"platform_key_generation", a.platform_key_generation},
@@ -385,6 +391,7 @@ std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view tex
         a.launch_required_version = static_cast<std::uint32_t>(u64("launch_required_version"));
         a.previous_id = u64("previous_id");
         a.series_id = u64("series_id");
+        a.commit_id = u64("commit_id");
         a.saved_at = u64("saved_at");
         a.finished_at = u64("finished_at");
         a.platform_key_generation = static_cast<std::uint8_t>(u64("platform_key_generation"));
