@@ -109,11 +109,28 @@ bool CreateGlContext() {
         return false;
     }
 
-    egl.display = get_display(EGL_DEFAULT_DISPLAY);
+    // Offscreen needs no window system: Mesa's surfaceless platform first on desktop, then the
+    // default display (Android, and drivers without it).
     EGLint major = 0, minor = 0;
-    if (egl.display == EGL_NO_DISPLAY || !initialize(egl.display, &major, &minor)) {
-        LOG_ERROR(Frontend, "harbor: menu: EGL did not start (0x{:x})", get_error());
-        return false;
+    egl.display = EGL_NO_DISPLAY;
+#ifndef __ANDROID__
+    if (const auto get_platform_display = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
+            egl.get_proc("eglGetPlatformDisplayEXT"))) {
+        egl.display = get_platform_display(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
+        if (egl.display != EGL_NO_DISPLAY && !initialize(egl.display, &major, &minor)) {
+            LOG_WARNING(Frontend, "harbor: menu: no surfaceless EGL (0x{:x}), trying the default display",
+                        get_error());
+            egl.display = EGL_NO_DISPLAY;
+        }
+    }
+#endif
+    if (egl.display == EGL_NO_DISPLAY) {
+        egl.display = get_display(EGL_DEFAULT_DISPLAY);
+        if (egl.display == EGL_NO_DISPLAY || !initialize(egl.display, &major, &minor)) {
+            LOG_ERROR(Frontend, "harbor: menu: EGL did not start (0x{:x})", get_error());
+            egl.display = EGL_NO_DISPLAY;
+            return false;
+        }
     }
 #ifdef __ANDROID__
     bind_api(EGL_OPENGL_ES_API);
@@ -588,8 +605,10 @@ void DrawHud() {
 
 void Run() {
     Common::SetCurrentThreadName("HarborMenu");
-    if (!CreateGlContext() || !InitBorealis()) {
-        failed = true;
+    // No GL is retried at the next open; Borealis that would not start is not (it starts once).
+    const bool gl = CreateGlContext();
+    if (!gl || !InitBorealis()) {
+        failed = !gl;
         std::scoped_lock lk{mutex};
         want_open = false;
         return;
@@ -656,11 +675,16 @@ void MenuSetHost(MenuHost& host) {
 }
 
 void MenuOpen(MenuPage page) {
-    if (!menu_host || failed) {
+    if (!menu_host) {
         LOG_WARNING(Frontend, "harbor: the menu cannot open here");
         return;
     }
     std::scoped_lock lk{mutex};
+    if (failed && thread.joinable()) {
+        // The last start found no GL: try again.
+        thread.join();
+        failed = false;
+    }
     LOG_INFO(Frontend, "harbor: menu open ({})", static_cast<int>(page));
     want_open = true;
     want_page = page;
