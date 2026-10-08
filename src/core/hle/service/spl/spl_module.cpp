@@ -10,6 +10,7 @@
 #include <vector>
 #include "common/logging.h"
 #include "common/settings.h"
+#include "core/harbor_calibration/calibration.h"
 #include "core/hle/api_version.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
@@ -140,7 +141,6 @@ Result Module::Interface::GetConfigImpl(u64* out_config, ConfigItem config_item)
     case ConfigItem::HardwareType:
     case ConfigItem::HardwareState:
     case ConfigItem::IsRecoveryBoot:
-    case ConfigItem::DeviceId:
     case ConfigItem::BootReason:
     case ConfigItem::MemoryMode:
     case ConfigItem::IsDevelopmentFunctionEnabled:
@@ -151,6 +151,10 @@ Result Module::Interface::GetConfigImpl(u64* out_config, ConfigItem config_item)
     case ConfigItem::DeviceUniqueKeyGeneration:
     case ConfigItem::Package2Hash:
         return ResultSecureMonitorNotImplemented;
+    case ConfigItem::DeviceId:
+        // This NAND's device id (its calibration); a console's is its fuse id.
+        *out_config = Harbor::Calibration::Get().DeviceId();
+        return *out_config != 0 ? ResultSuccess : ResultSecureMonitorNotImplemented;
     case ConfigItem::ExosphereApiVersion:
         // Get information about the current exosphere version.
         *out_config = (u64{HLE::ApiVersion::ATMOSPHERE_RELEASE_VERSION_MAJOR} << 56) |
