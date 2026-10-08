@@ -84,6 +84,9 @@ private:
     Result CreateApplicationAndRequestToStart(u64 application_id);
     Result GetUnknownEvent210(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result Unknown330(Out<u8> out);
+    Result RequestToShutdown();
+    Result RequestToReboot();
+    Result RequestToSleep();
     Result PrepareForJit();
 
     const std::shared_ptr<Applet> m_applet;

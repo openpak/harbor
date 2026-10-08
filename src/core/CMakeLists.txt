@@ -509,6 +509,8 @@ add_library(core STATIC
     hle/service/am/service/system_applet_proxy.h
     hle/service/am/service/window_controller.cpp
     hle/service/am/service/window_controller.h
+    hle/service/am/sleep_sequence.cpp
+    hle/service/am/sleep_sequence.h
     hle/service/am/window_system.cpp
     hle/service/am/window_system.h
     hle/service/aoc/addon_content_manager.cpp
