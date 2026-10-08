@@ -24,13 +24,21 @@
 #include <string>
 #include <vector>
 
+#include <fmt/format.h>
+#include <nlohmann/json.hpp>
+#include <openssl/core_names.h>
 #include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
 
 #include "common/logging.h"
 #include "common/redact.h"
 #include "core/openpak/boot_connection.h"
 #include "core/openpak/network_profile.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_archive.h"
+#include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
 #include "core/openpak/olsc.h"
+#include "core/openpak/olsc_transfer.h"
 #include "core/openpak/platform.h"
 
 namespace np = OpenPak::NetworkProfile;
@@ -359,6 +367,459 @@ void OlscChecks(const std::filesystem::path& dir) {
     }
 }
 
+void SaveTransferChecks(const std::filesystem::path& dir) {
+    namespace st = Service::FileSystem::SaveTransfer;
+    std::puts("save transfer crypto");
+    const auto hex = [](std::string_view text) {
+        st::Key128 out{};
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            out[i] = static_cast<u8>(std::stoi(std::string{text.substr(i * 2, 2)}, nullptr, 16));
+        }
+        return out;
+    };
+    // Random inputs, expected value from openssl enc -aes-128-ecb -d chained as spl does.
+    Check(st::DeriveKey(hex("b752f982ab4f9189815a04e3d3d11039"),
+                        hex("702d17df75e47669fd76fcf6a3a8ebfd"),
+                        hex("098ee32b29a899ec731ebdc51b0ab22e"),
+                        hex("f95b61685f1b14b7ccfeb0f34bd7c8a6"),
+                        hex("a5dd2526e7d4b63caadf35a00ec4a24d")) ==
+              hex("1211b7f6923cea2257ba681808b341e3"),
+          "key derivation chains GenerateAesKek and GenerateAesKey as spl does");
+    Check(st::MasterKeyIndex(5) == 4 && st::MasterKeyIndex(1) == 0 && st::MasterKeyIndex(0) == 0,
+          "key generation N uses master key N-1");
+    // RFC 4493, example 2.
+    const auto rfc_key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+    const auto rfc_msg = hex("6bc1bee22e409f96e93d7e117393172a");
+    Check(st::Cmac(rfc_key, rfc_msg) == hex("070a16b46b4d4144f79bdd9dd04a287c"),
+          "AES-CMAC matches RFC 4493");
+
+    st::Key128 key{};
+    st::RandomBytes(key);
+    st::Key128 iv{};
+    st::RandomBytes(iv);
+    std::vector<u8> payload(0x1fd0);
+    st::RandomBytes(payload);
+    st::Key128 tag{};
+    const auto stream = st::EncryptStream(key, iv, st::StreamKeyGeneration, payload, &tag);
+    Check(stream.size() == 0x2000 && std::memcmp(stream.data(), "AGS0", 4) == 0 &&
+              stream[6] == 5 && stream[7] == 0 && std::memcmp(stream.data() + 0x10, iv.data(), 16) == 0,
+          "an initial data stream is 0x2000 bytes: AGS0, key generation 5, IV, tag");
+    const auto back = st::DecryptStream(key, stream);
+    Check(back && *back == payload, "a stream decrypts to its payload");
+    auto tampered = stream;
+    tampered[0x40] ^= 1;
+    Check(!st::DecryptStream(key, tampered), "a changed stream byte fails the GCM tag");
+
+    std::vector<u8> plain(0x30000);
+    for (std::size_t i = 0; i < plain.size(); ++i) {
+        plain[i] = static_cast<u8>((i / 0x1000) & 0xff);
+    }
+    const auto packed = st::RawDeflate(plain);
+    const auto unpacked = st::RawInflate(packed, plain.size());
+    Check(packed.size() < plain.size() && packed[0] != 0x78 && unpacked && *unpacked == plain,
+          "raw deflate (no zlib header) round trips");
+
+    // A throwaway RSA key made here; the console's check is RSA-PSS-SHA256 against a modulus.
+    EVP_PKEY* rsa = EVP_RSA_gen(2048);
+    const auto pem = dir / "ksp-test.pem";
+    std::FILE* file = std::fopen(pem.string().c_str(), "wb");
+    PEM_write_PrivateKey(file, rsa, nullptr, nullptr, 0, nullptr, nullptr);
+    std::fclose(file);
+    BIGNUM* n = nullptr;
+    EVP_PKEY_get_bn_param(rsa, OSSL_PKEY_PARAM_RSA_N, &n);
+    st::Modulus modulus{};
+    BN_bn2binpad(n, modulus.data(), static_cast<int>(modulus.size()));
+    BN_free(n);
+    EVP_PKEY_free(rsa);
+
+    st::KeySeedPackageContent content;
+    st::RandomBytes(content.key_seed);
+    st::RandomBytes(content.initial_data_mac);
+    st::RandomBytes(content.challenge);
+    st::Key128 body_key{};
+    st::RandomBytes(body_key);
+    const auto package = st::BuildKeySeedPackage(content, 5, body_key, pem.string());
+    std::filesystem::remove(pem);
+    Check(package.has_value(), "a key seed package is built with a PEM key");
+    if (package) {
+        const auto bytes = [](const st::KeySeedPackage& p) {
+            std::array<u8, 0x200> out{};
+            std::memcpy(out.data(), &p, sizeof(p));
+            return out;
+        };
+        const auto good = bytes(*package);
+        const auto opened = st::OpenKeySeedPackage(good, body_key, modulus, content.challenge);
+        Check(opened.error == st::PackageError::None &&
+                  opened.content.key_seed == content.key_seed &&
+                  opened.content.initial_data_mac == content.initial_data_mac,
+              "SetKeySeedPackage opens it and recovers the seed and the MAC");
+        st::Key128 other{};
+        st::RandomBytes(other);
+        Check(st::OpenKeySeedPackage(good, body_key, modulus, other).error ==
+                  st::PackageError::Challenge,
+              "another session's challenge is 2-7004");
+        auto bad_tag = good;
+        bad_tag[0x20] ^= 1;
+        Check(st::OpenKeySeedPackage(bad_tag, body_key, modulus, content.challenge).error ==
+                  st::PackageError::Mac,
+              "a changed tag is 2-7002");
+        auto other_modulus = modulus;
+        other_modulus[0x80] ^= 1;
+        Check(st::OpenKeySeedPackage(good, body_key, other_modulus, content.challenge).error ==
+                  st::PackageError::Signature,
+              "another signing key is 2-7003");
+        auto bad_version = good;
+        bad_version[1] = 1;
+        Check(st::OpenKeySeedPackage(bad_version, body_key, modulus, content.challenge).error ==
+                  st::PackageError::Version,
+              "version 0x100 is refused first");
+    }
+}
+
+void SaveArchiveChecks() {
+    namespace st = Service::FileSystem::SaveTransfer;
+    std::puts("save transfer archive");
+    st::ArchiveSource source;
+    source.stream.resize(5 * 0x4000 + 0x1234);
+    for (std::size_t i = 0; i < source.stream.size(); ++i) {
+        source.stream[i] = static_cast<u8>(i % 251 < 200 ? 0 : i);
+    }
+    st::RandomBytes(source.extra_data);
+    st::RandomBytes(source.integrity_seed);
+    st::Key128 stream_key{};
+    st::Key128 mac_key{};
+    st::RandomBytes(stream_key);
+    st::RandomBytes(mac_key);
+    st::ArchiveWriter writer{source, stream_key, mac_key};
+    Check(!writer.SetDivisionCount(65) && writer.SetDivisionCount(3), "division count 1..64");
+    const auto ids = writer.ChunkIds();
+    Check(ids.size() == 4 && ids[0] == 0x1000 && ids[2] == 0x1002 && ids[3] == 0,
+          "data chunks are 0x1000+n, the meta chunk 0 comes last");
+    writer.SetAad(st::MakeAad(0x0100A5A020D5E000, 42));
+    const auto first = writer.Chunk(0x1001);
+    const auto again = writer.Chunk(0x1001);
+    Check(first && again && *first == *again, "a chunk reads the same on every open");
+    const auto meta = writer.Chunk(0);
+    Check(meta && meta->size() == st::MetaChunkSize, "the meta chunk is 8 KiB");
+    const auto& content = writer.Content();
+    Check(content.division_count == 3 && content.chunk_sizes[0] > 0 &&
+              content.extra_data == source.extra_data && content.hash_salt == source.integrity_seed,
+          "the initial data records the chunks, the extra data and the seed");
+    const auto mac = writer.InitialDataMac();
+
+    st::ArchiveReader reader;
+    Check(reader.Open(*meta, stream_key, mac_key, mac) == st::ArchiveReader::Error::None,
+          "the importer opens the meta chunk and the package's MAC matches");
+    Check(reader.Content().aad == st::MakeAad(0x0100A5A020D5E000, 42),
+          "the AAD travels in the initial data");
+    st::ArchiveReader wrong;
+    st::Key128 other_mac{};
+    st::RandomBytes(other_mac);
+    Check(wrong.Open(*meta, stream_key, mac_key, other_mac) == st::ArchiveReader::Error::Mac,
+          "another MAC is refused");
+    auto bad = *writer.Chunk(0x1000);
+    bad[0x30] ^= 1;
+    Check(reader.Push(0x1000, bad) == st::ArchiveReader::Error::Chunk, "a changed chunk is refused");
+    bool all = true;
+    for (const u16 id : {u16{0x1002}, u16{0x1000}, u16{0x1001}}) {
+        all = all && reader.Push(id, *writer.Chunk(id)) == st::ArchiveReader::Error::None;
+    }
+    Check(all && reader.Complete() && reader.Stream() == source.stream,
+          "chunks in any order give back the save image stream");
+}
+
+namespace transfer_check {
+
+namespace tr = OpenPak::Olsc::Transfer;
+namespace st = Service::FileSystem::SaveTransfer;
+
+/// The saves server's console protocol as olsc-findings.md §6.1 specifies it, in memory.
+class FakeServer final : public tr::Rest {
+public:
+    struct Part {
+        std::uint64_t id;
+        std::uint32_t index;
+        std::string status = "uploading";
+        tr::Bytes blob;
+    };
+    struct Version {
+        std::uint64_t id;
+        std::string status = "uploading";
+        int partitions;
+        std::vector<Part> parts;
+        std::string key_seed, mac;
+    };
+    std::vector<Version> versions;
+    std::vector<std::string> calls;
+    int partitions = 3;
+    std::uint64_t next_id = 100;
+
+    tr::HttpResponse Request(const std::string& method, const std::string& host,
+                             const std::string& path, const std::string& body) override {
+        calls.push_back(method + " " + path);
+        const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
+        if (host == tr::PolicyHost) {
+            return {200, R"({"policy_type":"ALL_OK"})"};
+        }
+        if (path.find("/save_data_archives?") != std::string::npos) {
+            return {200, R"({"save_data_archives":[]})"};
+        }
+        if (path.ends_with("/save_data_archives/start_upload")) {
+            versions.push_back({next_id++, "uploading", partitions, {}, {}, {}});
+            return {200, Archive(versions.back(), false)};
+        }
+        const auto v = FindVersion(path);
+        const auto p = FindPart(path);
+        if (path.ends_with("/component_files/create") && v) {
+            v->parts.push_back({next_id++, json.value("index", 0u)});
+            return {200, Component(v->parts.back(), "")};
+        }
+        if (path.ends_with("/signed_uri") && p) {
+            const bool write = body.find("write") != std::string::npos;
+            return {200, Component(*p, write ? "put" : "get")};
+        }
+        if (path.ends_with("/finish_upload") && p) {
+            p->status = "fixed";
+            const bool ok = json.value("archive_size", 0ull) == p->blob.size() &&
+                            json.value("encoded_archive_digest", std::string{}) ==
+                                tr::Base64Url(tr::Md5(p->blob));
+            return {ok ? 200 : 400, ok ? "{}" : R"({"code":"0003"})"};
+        }
+        if (path.ends_with("/finish_upload") && v) {
+            v->status = "fixed";
+            v->key_seed = json.value("encoded_key_seed", std::string{});
+            v->mac = json.value("encoded_mac", std::string{});
+            return {200, Archive(*v, false)};
+        }
+        if (path.ends_with("/extend_upload_timeout") && v) {
+            return {200, Archive(*v, false)};
+        }
+        if (path.ends_with("/generate_key_seed_package") && v) {
+            // The fake fs reads this "package" back: challenge ∥ seed ∥ MAC, not the real format.
+            const auto challenge = tr::FromBase64Url(json.value("encoded_challenge", std::string{}));
+            tr::Bytes package(0x200);
+            const auto seed = tr::FromBase64Url(v->key_seed);
+            const auto mac = tr::FromBase64Url(v->mac);
+            std::memcpy(package.data(), challenge->data(), 16);
+            std::memcpy(package.data() + 16, seed->data(), 16);
+            std::memcpy(package.data() + 32, mac->data(), 16);
+            return {200, nlohmann::json{{"encoded_key_seed_package", tr::Base64Url(package)}}.dump()};
+        }
+        if ((path.ends_with("/start_download") || path.ends_with("/finish_download")) && v) {
+            return {200, Archive(*v, true)};
+        }
+        if (method == "GET" && v) {
+            return {200, Archive(*v, true)};
+        }
+        return {404, R"({"code":"0001"})"};
+    }
+
+    tr::HttpResponse Blob(const std::string& method, const std::string& url,
+                          std::span<const std::uint8_t> body) override {
+        const auto id = std::stoull(url.substr(url.rfind('/') + 1));
+        for (auto& v : versions) {
+            for (auto& p : v.parts) {
+                if (p.id == id) {
+                    if (method == "PUT") {
+                        p.blob.assign(body.begin(), body.end());
+                        return {200, {}};
+                    }
+                    return {200, std::string(p.blob.begin(), p.blob.end())};
+                }
+            }
+        }
+        return {404, {}};
+    }
+
+private:
+    Version* FindVersion(const std::string& path) {
+        const auto at = path.find("/save_data_archives/");
+        if (at == std::string::npos) {
+            return nullptr;
+        }
+        const auto id = std::strtoull(path.c_str() + at + 20, nullptr, 10);
+        for (auto& v : versions) {
+            if (v.id == id) {
+                return &v;
+            }
+        }
+        return nullptr;
+    }
+    Part* FindPart(const std::string& path) {
+        const auto at = path.find("/component_files/");
+        if (at == std::string::npos) {
+            return nullptr;
+        }
+        const auto id = std::strtoull(path.c_str() + at + 17, nullptr, 10);
+        for (auto& v : versions) {
+            for (auto& p : v.parts) {
+                if (p.id == id) {
+                    return &p;
+                }
+            }
+        }
+        return nullptr;
+    }
+    static std::string Component(const Part& p, const std::string& url) {
+        nlohmann::json c{{"id", p.id},
+                         {"index", p.index},
+                         {"datatype", p.index == 0 ? "meta" : "save"},
+                         {"status", p.status},
+                         {"archive_size", p.blob.size()}};
+        if (url == "put") {
+            c["put_url"] = fmt::format("https://scsi-upload.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+        } else {
+            c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+        }
+        return nlohmann::json{{"component_file", c}}.dump();
+    }
+    static std::string Archive(const Version& v, bool with_urls) {
+        nlohmann::json parts = nlohmann::json::array();
+        for (const auto& p : v.parts) {
+            nlohmann::json c{{"id", p.id}, {"index", p.index}, {"status", p.status},
+                             {"archive_size", p.blob.size()}};
+            if (with_urls) {
+                c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+            }
+            parts.push_back(c);
+        }
+        return nlohmann::json{{"save_data_archive",
+                               {{"id", v.id}, {"status", v.status},
+                                {"num_of_partitions", v.partitions}, {"component_files", parts}}}}
+            .dump();
+    }
+};
+
+class FakeExporter final : public tr::Exporter {
+public:
+    FakeExporter(const st::ArchiveSource& source, const st::Key128& k, const st::Key128& m,
+                 const tr::Key& seed_)
+        : writer{source, k, m}, seed{seed_} {}
+    bool SetDivisionCount(int count) override { return writer.SetDivisionCount(count); }
+    std::vector<std::uint16_t> ChunkIds() override { return writer.ChunkIds(); }
+    std::optional<tr::Bytes> Chunk(std::uint16_t id) override { return writer.Chunk(id); }
+    void SetAad(const tr::Aad& aad) override { writer.SetAad(aad); }
+    tr::Key KeySeed() override { return seed; }
+    std::optional<tr::Key> InitialDataMac() override { return writer.InitialDataMac(); }
+    bool Finalize() override { return true; }
+    st::ArchiveWriter writer;
+    tr::Key seed;
+};
+
+class FakeImporter final : public tr::Importer {
+public:
+    tr::Aad ImportAad() override { return reader.Content().aad; }
+    std::vector<std::uint16_t> ChunkIds() override { return reader.ChunkIds(); }
+    bool Push(std::uint16_t id, std::span<const std::uint8_t> bytes) override {
+        return reader.Push(id, bytes) == st::ArchiveReader::Error::None;
+    }
+    bool Finalize() override {
+        if (!reader.Complete()) {
+            return false;
+        }
+        *imported = reader.Stream();
+        return true;
+    }
+    st::ArchiveReader reader;
+    tr::Bytes* imported = nullptr;
+};
+
+/// One console: a stream key derived from the seed by a stand-in (the real derivation is
+/// checked above); the transfer flow only needs both ends to agree.
+class FakeFs final : public tr::Fs {
+public:
+    explicit FakeFs(st::ArchiveSource source_) : source{std::move(source_)} {
+        st::RandomBytes(challenge);
+        st::RandomBytes(own_seed);
+        st::RandomBytes(mac_key);
+    }
+    static st::Key128 StreamKey(const tr::Key& seed) {
+        return st::Cmac(seed, std::array<std::uint8_t, 4>{'k', 'e', 'y', '3'});
+    }
+    tr::Key Challenge() override { return challenge; }
+    bool SetKeySeedPackage(std::span<const std::uint8_t> package) override {
+        if (std::memcmp(package.data(), challenge.data(), 16) != 0) {
+            return false;
+        }
+        std::memcpy(package_seed.data(), package.data() + 16, 16);
+        std::memcpy(package_mac.data(), package.data() + 32, 16);
+        has_package = true;
+        return true;
+    }
+    std::unique_ptr<tr::Exporter> OpenFullExporter() override {
+        return std::make_unique<FakeExporter>(source, StreamKey(own_seed), *shared_mac_key,
+                                              own_seed);
+    }
+    std::unique_ptr<tr::Importer> OpenImporter(std::span<const std::uint8_t> meta) override {
+        if (!has_package) {
+            return nullptr;
+        }
+        auto importer = std::make_unique<FakeImporter>();
+        if (importer->reader.Open(meta, StreamKey(package_seed), *shared_mac_key, package_mac) !=
+            st::ArchiveReader::Error::None) {
+            return nullptr;
+        }
+        importer->imported = &imported;
+        return importer;
+    }
+    st::ArchiveSource source;
+    st::Key128 challenge{}, own_seed{}, mac_key{}, package_seed{}, package_mac{};
+    const st::Key128* shared_mac_key = &mac_key;
+    bool has_package = false;
+    tr::Bytes imported;
+};
+
+} // namespace transfer_check
+
+void TransferFlowChecks() {
+    using namespace transfer_check;
+    std::puts("save data cloud transfer");
+    Check(tr::Base64Url(std::array<std::uint8_t, 4>{0xfb, 0xff, 0x00, 0x01}) == "-_8AAQ" &&
+              tr::FromBase64Url("-_8AAQ") == tr::Bytes({0xfb, 0xff, 0x00, 0x01}),
+          "base64url without padding, both ways");
+    tr::LocalSave save;
+    save.application_id = 0x0100A5A020D5E000;
+    save.data_size = 0x80000;
+    save.saved_at = 1700000000;
+    save.commit_id = 0x1122334455667788;
+    save.acd_index = 2;
+    save.launch_required_version = 3;
+    const auto body = tr::StartUploadBody(save, 9);
+    Check(body.starts_with(R"({"application_id":"0100a5a020d5e000","datatype":0,"data_size":524288,)") &&
+              body.find(R"("encoded_digest":"iHdmVUQzIhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",)") !=
+                  std::string::npos &&
+              body.ends_with(R"("has_thumbnail":false,"desc":null,"auto_backup":false,"acd_index":2})"),
+          "start_upload's body has the console's keys, order and digest");
+
+    st::ArchiveSource source;
+    source.stream.resize(7 * 0x4000);
+    st::RandomBytes(source.stream);
+    FakeServer server;
+    FakeFs harbor_a{source};
+    tr::Progress progress;
+    const auto up = tr::Upload(server, harbor_a, save, 0, &progress);
+    Check(up.error == tr::Error::None && server.versions.size() == 1 &&
+              server.versions[0].status == "fixed" && server.versions[0].parts.size() == 4 &&
+              progress.done == progress.total && progress.total > 0,
+          "an upload creates every component (meta included), PUTs them and finishes");
+    Check(server.versions[0].key_seed == tr::Base64Url(harbor_a.own_seed),
+          "finish_upload carries the exporter's key seed and MAC");
+    // Download on a second console of the same account (shares the MAC key: same keys).
+    FakeFs harbor_b{st::ArchiveSource{}};
+    harbor_b.shared_mac_key = &harbor_a.mac_key;
+    const auto down = tr::Download(server, harbor_b, save.application_id, up.archive_id, nullptr);
+    Check(down.error == tr::Error::None && harbor_b.imported == source.stream,
+          "the second console downloads the same save image");
+    FakeFs harbor_c{st::ArchiveSource{}};
+    harbor_c.shared_mac_key = &harbor_a.mac_key;
+    const auto gone = tr::Download(server, harbor_c, save.application_id, 999999, nullptr);
+    Check(gone.error == tr::Error::ArchiveGone, "a missing archive is 2179-2100");
+    server.partitions = 0;
+    FakeFs harbor_d{source};
+    Check(tr::Upload(server, harbor_d, save, 0, nullptr).error == tr::Error::Fs,
+          "num_of_partitions 0 (saves today) fails at SetDivisionCount");
+}
+
 void RedactChecks() {
     std::puts("redaction");
     Check(fmt::format("{}", Common::Redact(0x1234ULL)) == "<redacted>", "Redact hides a value");
@@ -393,6 +854,9 @@ int SelfTest(bool online) {
     FetchChecks();
     RedactChecks();
     OlscChecks(dir);
+    SaveTransferChecks(dir);
+    SaveArchiveChecks();
+    TransferFlowChecks();
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {

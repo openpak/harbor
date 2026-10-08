@@ -443,6 +443,25 @@ void HarborControl::Execute(const std::string& line) {
         if (hooks.power) {
             hooks.power();
         }
+    } else if (cmd == "power-tap") {
+        // The power button pressed briefly: the window's own F5 tap (HarborSystemKeys), so the
+        // host side runs as it does for a person. It sleeps the console, or wakes it.
+        QMetaObject::invokeMethod(
+            gui_context,
+            [] {
+                for (QWidget* window : QApplication::topLevelWidgets()) {
+                    if (!window->inherits("QMainWindow")) {
+                        continue;
+                    }
+                    QKeyEvent press(QEvent::KeyPress, Qt::Key_F5, Qt::NoModifier);
+                    QApplication::sendEvent(window, &press);
+                    QKeyEvent release(QEvent::KeyRelease, Qt::Key_F5, Qt::NoModifier);
+                    QApplication::sendEvent(window, &release);
+                    return;
+                }
+                LOG_WARNING(Frontend, "harbor-control: power-tap: no main window");
+            },
+            Qt::BlockingQueuedConnection);
     } else if (cmd == "terminate") {
         if (hooks.terminate) {
             hooks.terminate();

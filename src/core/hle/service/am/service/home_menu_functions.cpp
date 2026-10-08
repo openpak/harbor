@@ -81,15 +81,19 @@ Result IHomeMenuFunctions::GetPopFromGeneralChannelEvent(
     R_SUCCEED();
 }
 
+// The same answers as ICommonStateGetter 502 (the 23.0.1 am uses one function for both) and the
+// power-state object's reboot flag: HOME asks before Sleep Mode and Restart.
 Result IHomeMenuFunctions::IsSleepEnabled(Out<bool> out_is_sleep_enbaled) {
-    LOG_INFO(Service_AM, "called");
-    *out_is_sleep_enbaled = false;
+    auto* const window_system = system.GetAppletManager().GetWindowSystem();
+    *out_is_sleep_enbaled = window_system == nullptr || window_system->IsSleepEnabled();
+    LOG_INFO(Service_AM, "called, enabled={}", *out_is_sleep_enbaled);
     R_SUCCEED();
 }
 
 Result IHomeMenuFunctions::IsRebootEnabled(Out<bool> out_is_reboot_enbaled) {
-    LOG_INFO(Service_AM, "called");
-    *out_is_reboot_enbaled = true;
+    auto* const window_system = system.GetAppletManager().GetWindowSystem();
+    *out_is_reboot_enbaled = window_system == nullptr || window_system->IsRebootEnabled();
+    LOG_INFO(Service_AM, "called, enabled={}", *out_is_reboot_enbaled);
     R_SUCCEED();
 }
 

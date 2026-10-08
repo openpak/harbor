@@ -73,17 +73,18 @@ public:
     void PowerButtonMiddlePress();
     void ForceTerminateApplication();
 
-    // The power button pressed briefly (OnSystemButtonPress PowerButtonShortPressing): the console
-    // goes to sleep, or wakes when it sleeps. am keeps the state; the frontend's sleep handler
-    // pauses the guest and blanks the screen, and wakes it on the power button, HOME or any
-    // button by calling this again.
+    // The power button pressed briefly (OnSystemButtonPress PowerButtonShortPressing). Awake, the
+    // HOME menu hears it and starts the sleep sequence (sleep_sequence.cpp); asleep, the console
+    // wakes. At the deepest point of the sequence the frontend's sleep handler pauses the guest
+    // and blanks the screen, and wakes it on the power button, HOME or any button by calling this
+    // again.
     void PowerButtonShortPress();
     [[nodiscard]] bool IsSleeping() const { return m_sleeping.load(); }
     // Called when the console goes to sleep (true) or wakes (false), with am's locks held: the
     // handler must only queue its work.
     void SetSleepHandler(std::function<void(bool)> handler);
-    // From the window system (PowerButtonShortPressing in a HOME session).
-    void ToggleSleep();
+    // From the window system's sleep sequence: the console reached its deepest state, or woke.
+    void OnSleepStateChanged(bool sleeping);
 
     // The guest asked for a reboot or a shutdown (IGlobalStateController 3/4, IOverlayFunctions
     // 10/11). In a HOME session the applets end first (the window system's shutdown sequence),

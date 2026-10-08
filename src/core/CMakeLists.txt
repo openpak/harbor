@@ -513,6 +513,8 @@ add_library(core STATIC
     hle/service/am/service/system_applet_proxy.h
     hle/service/am/service/window_controller.cpp
     hle/service/am/service/window_controller.h
+    hle/service/am/sleep_sequence.cpp
+    hle/service/am/sleep_sequence.h
     hle/service/am/window_system.cpp
     hle/service/am/window_system.h
     hle/service/aoc/addon_content_manager.cpp
@@ -676,6 +678,16 @@ add_library(core STATIC
     hle/service/filesystem/fsp/fsp_srv.cpp
     hle/service/filesystem/fsp/fsp_srv.h
     hle/service/filesystem/fsp/fsp_types.h
+    hle/service/filesystem/fsp/save_transfer/transfer_archive.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_archive.h
+    hle/service/filesystem/fsp/save_transfer/transfer_crypto.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_crypto.h
+    hle/service/filesystem/fsp/save_transfer/transfer_keys.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_keys.h
+    hle/service/filesystem/fsp/save_transfer/transfer_service.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_service.h
+    hle/service/filesystem/fsp/save_transfer/transfer_ipc.cpp
+    hle/service/filesystem/fsp/save_transfer/transfer_ipc.h
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.cpp
     hle/service/filesystem/fsp/save_data_transfer_prohibiter.h
     hle/service/filesystem/romfs_controller.cpp
@@ -959,6 +971,8 @@ add_library(core STATIC
     hle/service/olsc/remote_storage_controller.h
     hle/service/olsc/stopper_object.cpp
     hle/service/olsc/stopper_object.h
+    hle/service/olsc/transfer_runner.cpp
+    hle/service/olsc/transfer_runner.h
     hle/service/olsc/transfer_task_list_controller.cpp
     hle/service/olsc/transfer_task_list_controller.h
     hle/service/omm/omm.cpp
@@ -1020,6 +1034,8 @@ add_library(core STATIC
     hle/service/psc/pm_module.h
     hle/service/psc/pm_service.cpp
     hle/service/psc/pm_service.h
+    hle/service/psc/pm_state.cpp
+    hle/service/psc/pm_state.h
     hle/service/psc/psc.cpp
     hle/service/psc/psc.h
     hle/service/psc/time/alarms.cpp

@@ -102,6 +102,18 @@ object NativeLibrary {
         }
     }
 
+    // HOME's Delete Software for a title from the library folders. Paths in the app's own
+    // storage (DocumentsTree) are not library files and are never deleted.
+    @Keep
+    @JvmStatic
+    fun canDeleteDocument(path: String): Boolean =
+        !DocumentsTree.isNativePath(path) && FileUtil.canDeleteDocument(path)
+
+    @Keep
+    @JvmStatic
+    fun deleteDocument(path: String): Boolean =
+        !DocumentsTree.isNativePath(path) && FileUtil.deleteDocument(path)
+
     @Keep
     @JvmStatic
     fun getParentDirectory(path: String): String =

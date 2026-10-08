@@ -43,6 +43,7 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `home-long` | Home for 1200 ms (long press, above the poller's 500 ms in a HOME session, 800 ms outside one) |
 | `capture` | Capture button, short press |
 | `power` | the power button, middle press (F5 in the window) |
+| `power-tap` | the power button, short press (an F5 tap in the window): HOME starts the sleep sequence; while the console sleeps it wakes it |
 | `terminate` | force-terminates the running application (F10 in the window) |
 | `dock` | toggles docked / handheld (the Qt "Docked" menu entry); in console mode it switches silently, with no "Invalid config" dialog |
 | `type <text>` | types the text on the emulated USB keyboard, following the guest's keyboard layout (see below); logged |

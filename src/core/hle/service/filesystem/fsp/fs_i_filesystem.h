@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "common/common_funcs.h"
 #include "core/file_sys/fs_filesystem.h"
 #include "core/file_sys/fsa/fs_i_filesystem.h"
@@ -27,6 +29,9 @@ class IDirectory;
 class IFileSystem final : public ServiceFramework<IFileSystem> {
 public:
     explicit IFileSystem(Core::System& system_, FileSys::VirtualDir dir_, SizeGetter size_getter_);
+
+    /// Called on every Commit: a save file system records the commit in its extra data.
+    void SetCommitHook(std::function<void()> hook);
 
     Result CreateFile(const InLargeData<FileSys::Sf::Path, BufferAttr_HipcPointer> path, s32 option,
                       s64 size);
@@ -60,6 +65,7 @@ public:
 private:
     std::unique_ptr<FileSys::Fsa::IFileSystem> backend;
     SizeGetter size_getter;
+    std::function<void()> commit_hook;
 };
 
 } // namespace Service::FileSystem

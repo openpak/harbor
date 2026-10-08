@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "core/hle/result.h"
 #include "core/hle/service/am/am_types.h"
 
 namespace Core {
@@ -25,10 +26,15 @@ namespace Core::Timing {
 struct EventType;
 }
 
+namespace Kernel {
+class KReadableEvent;
+}
+
 namespace Service::AM {
 
 struct Applet;
 struct LockState;
+struct SleepSequence;
 class EventObserver;
 
 enum class ButtonPressDuration {
@@ -98,6 +104,22 @@ public:
     // ChangeIntoForeground goes out.
     void ReleaseForegroundHold(const Applet& child);
 
+    // Sleep, as the 23.0.1 am does it (sleep_sequence.cpp). StartSleepSequence is
+    // IGlobalStateController 2 (the HOME menu's Sleep Mode, its answer to a short power press)
+    // and IApplicationFunctions 72; with sleep disabled it is a shutdown.
+    Result StartSleepSequence(std::shared_ptr<Applet> requester);
+    bool IsSleepEnabled();
+    bool IsRebootEnabled();
+    void DisableSleepTillShutdown();
+    Result SuppressDisablingSleepTemporarily(s64 duration_ns);
+    bool IsDisablingSleepSuppressed();
+    u64 GetWakeupCount();
+    Kernel::KReadableEvent* GetSleepSequenceIdleEvent();
+    // The sleep lock (ICommonStateGetter 10-12) of one applet.
+    void RequestToAcquireSleepLock(Applet& applet);
+    Result ReleaseSleepLock(Applet& applet);
+    Result ReleaseSleepLockTransiently(Applet& applet);
+
 private:
     void UpdateCurrentApplicationLocked();
     void NotifyApplicationChangedIfNeeded();
@@ -119,6 +141,13 @@ private:
     void UpdateAppletStateLocked(Applet* applet, bool is_foreground, bool overlay_takes_input,
                                  s32 caller_z_index = -1);
     void SendButtonAppletMessageLocked(AppletMessage message);
+    void OnPowerButtonShortPressLocked();
+    bool SwallowButtonAroundSleepLocked(SystemButtonType type);
+    void UpdateSleepSequenceLocked();
+    void EnterSleepLocked();
+    void WakeLocked(const char* reason);
+    void GrantSleepLockLocked(Applet& applet);
+    void AcknowledgePrepareSleepLocked(Applet& applet);
     void RouteSystemButtonLocked(SystemButtonType type);
     void PushButtonMessageLocked(Applet* applet, AppletMessage message);
 
@@ -165,6 +194,9 @@ private:
     };
     std::vector<ForegroundHold> m_foreground_holds{};
     std::shared_ptr<Core::Timing::EventType> m_foreground_hold_event{};
+
+    // Sleep state (under m_lock).
+    std::unique_ptr<SleepSequence> m_sleep;
 };
 
 } // namespace Service::AM

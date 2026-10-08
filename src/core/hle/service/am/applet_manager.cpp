@@ -321,15 +321,8 @@ void AppletManager::SetSleepHandler(std::function<void(bool)> handler) {
     m_sleep_handler = std::move(handler);
 }
 
-void AppletManager::ToggleSleep() {
-    const bool sleeping = !m_sleeping.load();
+void AppletManager::OnSleepStateChanged(bool sleeping) {
     m_sleeping = sleeping;
-    LOG_INFO(Service_AM, "am: the console {}", sleeping ? "goes to sleep" : "wakes up");
-    // A console's sleep sequence (RequestToPrepareSleep to the applets, sleep locks, psc's
-    // PmModule states, FinishedSleepSequence and Resume on wake) is not established for 23.0.1:
-    // nothing is sent; the frontend only pauses the guest. IsSleepEnabled stays false.
-    LOG_WARNING(Service_AM, "unknown contract: am sleep sequence (no applet messages, no psc "
-                            "notification; the guest is paused)");
     std::scoped_lock lk{m_sleep_lock};
     if (m_sleep_handler) {
         m_sleep_handler(sleeping);

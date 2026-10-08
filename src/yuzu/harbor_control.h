@@ -21,7 +21,7 @@ class InputSubsystem;
  * is created there and line commands are read from it on a background thread:
  *
  *   press <button> [ms]   hold <button>   release <button>   stick <l|r> <x> <y> [ms]
- *   home   home-long   capture   power   terminate
+ *   home   home-long   capture   power   power-tap   terminate
  *   screenshot <png path>   threads   quit   menu <name>
  *   type <text>   type-line <file> <n>   key <name>   detach   attach   dock
  *
