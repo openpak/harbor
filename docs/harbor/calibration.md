@@ -17,10 +17,12 @@ call at all; every run log on this machine (am-*, acc-*, social-*, olsc-*, shop-
 no unimplemented `set:cal` line. The consumers are therefore Harbor's own HLE code, through the
 C++ API (`Harbor::Calibration::Get()`), and `set:cal` itself is answered for completeness.
 
-qlaunch's System Settings never calls `set:sys GetSerialNumber` in a 23.0.1 HOME session here: the
-System page shows no "Serial Information" entry and the Support page's diagnostic line ① is
-empty. Where qlaunch takes the serial from is an open item (strings `SceneSetSerial`,
-`SetCntHardware_BtnSerial`, `SetCntSupportErrInfo_LblSerialNum` in 0100000000001000).
+qlaunch's System Settings shows the serial under System → Serial Information (between Zoom and
+Important Information), with the battery lot: the scene calls `set:sys` GetSerialNumber (68) and
+GetBatteryLot (67) when it opens, and both answer from the calibration. In 23.0.1 qlaunch the
+`set:sys` proxy for command 68 is the vtable slot at +0x220 (thunk 0x31dbe0); the aborting wrapper
+`nn::settings::system::GetSerialNumber` (0x31b1b0) is called from the Serial Information scene
+(0x99c0e0) and from two other places (0x499368, 0x665288) not reached in a plain HOME session.
 
 ## The binary
 
