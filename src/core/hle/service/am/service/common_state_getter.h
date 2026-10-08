@@ -36,6 +36,12 @@ private:
     Result ReleaseSleepLock();
     Result ReleaseSleepLockTransiently();
     Result GetAcquiredSleepLockEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetWakeupCount(Out<u64> out_count);
+    Result GetSleepSequenceIdleEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result DisableSleepTillShutdown();
+    Result SuppressDisablingSleepTemporarily(s64 duration_ns);
+    Result IsSleepEnabled(Out<bool> out_is_enabled);
+    Result IsDisablingSleepSuppressed(Out<bool> out_is_suppressed);
     Result GetReaderLockAccessorEx(Out<SharedPointer<ILockAccessor>> out_lock_accessor,
                                    u32 button_type);
     Result GetWriterLockAccessorEx(Out<SharedPointer<ILockAccessor>> out_lock_accessor,
