@@ -28,6 +28,7 @@ object HarborSleep {
 
     private val main = Handler(Looper.getMainLooper())
     private var screen: View? = null
+    private var dimScreen: View? = null
 
     /** From am, on any thread and with am's locks held: only queued. */
     @JvmStatic
@@ -35,13 +36,44 @@ object HarborSleep {
         main.post { apply(asleep) }
     }
 
-    /** A new or stopped session: awake, with no black screen left behind. */
+    /**
+     * From idle:sys (AppletManager::OnDimChanged), on any thread and with its lock held: the screen
+     * dims after the dimming time and comes back on input. A translucent black layer that lets
+     * touches through, so a touch both undims and reaches the console.
+     */
+    @JvmStatic
+    fun onDimChanged(dimmed: Boolean) {
+        main.post { applyDim(dimmed) }
+    }
+
+    /** A new or stopped session: awake, with no black or dim layer left behind. */
     fun reset() {
         main.post {
             screen?.let { (it.parent as? ViewGroup)?.removeView(it) }
             screen = null
             sleeping = false
+            applyDim(false)
         }
+    }
+
+    private fun applyDim(dimmed: Boolean) {
+        if (!dimmed) {
+            dimScreen?.let { (it.parent as? ViewGroup)?.removeView(it) }
+            dimScreen = null
+            return
+        }
+        if (dimScreen != null) {
+            return
+        }
+        val activity = EmulationActivity.foreground ?: return
+        val decor = activity.window?.decorView as? ViewGroup ?: return
+        dimScreen = View(activity).apply {
+            // The console dims its LCD by about half (backlight down and luma -0.1).
+            setBackgroundColor(Color.argb(128, 0, 0, 0))
+            isClickable = false
+            isFocusable = false
+        }
+        decor.addView(dimScreen, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     /** Wakes a sleeping console (a button, back or a tap). */
@@ -60,6 +92,7 @@ object HarborSleep {
         val activity = EmulationActivity.foreground
         if (asleep) {
             Log.info("[Harbor] the console sleeps")
+            applyDim(false)
             NativeLibrary.pauseEmulation()
             HarborAudioFocus.release()
             val decor = activity?.window?.decorView as? ViewGroup ?: return
