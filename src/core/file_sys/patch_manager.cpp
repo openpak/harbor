@@ -157,6 +157,56 @@ std::string GetUpdateVersionStringFromSlot(const ContentProvider* provider, u64 
     NACP nacp{nacp_file};
     return nacp.GetVersionString();
 }
+// A title's updates in the user's folders: the external content folders and the frontend's game
+// folders together, newest first (external first for the same version). A title whose update is
+// in both runs the newest one, wherever it is.
+struct FolderUpdate {
+    u32 version;
+    ExternalUpdateEntry entry;
+    bool external;
+};
+
+std::vector<FolderUpdate> ListFolderUpdates(const ContentProviderUnion* content_union,
+                                            u64 update_tid) {
+    std::vector<FolderUpdate> out;
+    if (content_union == nullptr) {
+        return out;
+    }
+    if (const auto* external = content_union->GetExternalProvider(); external != nullptr) {
+        for (auto& entry : external->ListUpdateVersions(update_tid)) {
+            out.push_back({entry.version, std::move(entry), true});
+        }
+    }
+    if (const auto* manual = static_cast<const ManualContentProvider*>(
+            content_union->GetSlotProvider(ContentProviderUnionSlot::FrontendManual));
+        manual != nullptr) {
+        for (auto& entry : manual->ListUpdateVersions(update_tid)) {
+            const bool known = std::any_of(out.begin(), out.end(), [&](const FolderUpdate& u) {
+                return u.version == entry.version;
+            });
+            if (!known) {
+                out.push_back({entry.version, std::move(entry), false});
+            }
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const FolderUpdate& lhs, const FolderUpdate& rhs) {
+        return lhs.version > rhs.version;
+    });
+    return out;
+}
+
+VirtualFile GetFolderUpdateFile(const ContentProviderUnion* content_union,
+                                const FolderUpdate& update, u64 update_tid,
+                                ContentRecordType type) {
+    if (update.external) {
+        return content_union->GetExternalProvider()->GetEntryForVersion(update_tid, type,
+                                                                        update.version);
+    }
+    return static_cast<const ManualContentProvider*>(
+               content_union->GetSlotProvider(ContentProviderUnionSlot::FrontendManual))
+        ->GetEntryForVersion(update_tid, type, update.version);
+}
+
 YUZU_NO_INLINE std::optional<u64> GetParentApplicationId(const ContentProvider* provider, u64 title_id) {
     return provider == nullptr ? std::nullopt : provider->GetParentApplicationId(title_id);
 }
@@ -212,40 +262,14 @@ VirtualDir PatchManager::PatchExeFS(VirtualDir exefs) const {
     const auto update_tid = GetUpdateTitleID(title_id);
 
     if (content_union) {
-        // First, check ExternalContentProvider
-        const auto* external_provider = content_union->GetExternalProvider();
-        if (external_provider) {
-            const auto update_versions = external_provider->ListUpdateVersions(update_tid);
-
-            if (!update_versions.empty()) {
-                checked_external = true;
-                for (const auto& update_entry : update_versions) {
-                    if (!IsVersionedExternalUpdateDisabled(disabled, update_entry.version)) {
-                        update_disabled = false;
-                        enabled_version = update_entry.version;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Also check ManualContentProvider (for Android)
-        if (!checked_external) {
-            const auto* manual_provider = static_cast<const ManualContentProvider*>(
-                content_union->GetSlotProvider(ContentProviderUnionSlot::FrontendManual));
-            if (manual_provider) {
-                const auto manual_update_versions = manual_provider->ListUpdateVersions(update_tid);
-
-                if (!manual_update_versions.empty()) {
-                    checked_manual = true;
-                    for (const auto& update_entry : manual_update_versions) {
-                        if (!IsVersionedExternalUpdateDisabled(disabled, update_entry.version)) {
-                            update_disabled = false;
-                            enabled_version = update_entry.version;
-                            break;
-                        }
-                    }
-                }
+        // The newest enabled update in the user's folders (external and game folders).
+        const auto folder_updates = ListFolderUpdates(content_union, update_tid);
+        checked_external = !folder_updates.empty();
+        for (const auto& update : folder_updates) {
+            if (!IsVersionedExternalUpdateDisabled(disabled, update.version)) {
+                update_disabled = false;
+                enabled_version = update.version;
+                break;
             }
         }
     }
@@ -324,7 +348,9 @@ VirtualDir PatchManager::PatchExeFS(VirtualDir exefs) const {
 
     if (!update_disabled && update != nullptr && update->GetExeFS() != nullptr) {
         LOG_INFO(Loader, "    ExeFS: Update ({}) applied successfully",
-                 FormatTitleVersion(content_provider.GetEntryVersion(update_tid).value_or(0)));
+                 FormatTitleVersion(enabled_version.has_value()
+                                        ? *enabled_version
+                                        : content_provider.GetEntryVersion(update_tid).value_or(0)));
         exefs = update->GetExeFS();
     }
 
@@ -626,41 +652,15 @@ VirtualFile PatchManager::PatchRomFS(const NCA* base_nca, VirtualFile base_romfs
 
     const auto* content_union = static_cast<const ContentProviderUnion*>(&content_provider);
     if (content_union) {
-        // First, check ExternalContentProvider
-        const auto* external_provider = content_union->GetExternalProvider();
-        if (external_provider) {
-            const auto update_versions = external_provider->ListUpdateVersions(update_tid);
-
-            if (!update_versions.empty()) {
-                checked_external = true;
-                for (const auto& update_entry : update_versions) {
-                    if (!IsVersionedExternalUpdateDisabled(disabled, update_entry.version)) {
-                        update_disabled = false;
-                        enabled_version = update_entry.version;
-                        update_raw = external_provider->GetEntryForVersion(update_tid, type, update_entry.version);
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (!checked_external) {
-            const auto* manual_provider = static_cast<const ManualContentProvider*>(
-                content_union->GetSlotProvider(ContentProviderUnionSlot::FrontendManual));
-            if (manual_provider) {
-                const auto manual_update_versions = manual_provider->ListUpdateVersions(update_tid);
-
-                if (!manual_update_versions.empty()) {
-                    checked_manual = true;
-                    for (const auto& update_entry : manual_update_versions) {
-                        if (!IsVersionedExternalUpdateDisabled(disabled, update_entry.version)) {
-                            update_disabled = false;
-                            enabled_version = update_entry.version;
-                            update_raw = manual_provider->GetEntryForVersion(update_tid, type, update_entry.version);
-                            break;
-                        }
-                    }
-                }
+        // The newest enabled update in the user's folders (external and game folders).
+        const auto folder_updates = ListFolderUpdates(content_union, update_tid);
+        checked_external = !folder_updates.empty();
+        for (const auto& update : folder_updates) {
+            if (!IsVersionedExternalUpdateDisabled(disabled, update.version)) {
+                update_disabled = false;
+                enabled_version = update.version;
+                update_raw = GetFolderUpdateFile(content_union, update, update_tid, type);
+                break;
             }
         }
     }
@@ -745,59 +745,25 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
     const auto* content_union = static_cast<const ContentProviderUnion*>(&content_provider);
 
     if (content_union) {
-        // First, check ExternalContentProvider for updates
-        const auto* external_provider = content_union->GetExternalProvider();
-        if (external_provider) {
-            const auto update_versions = external_provider->ListUpdateVersions(update_tid);
-
-            for (const auto& update_entry : update_versions) {
-                std::string version_str = update_entry.version_string;
-                if (version_str.empty()) {
-                    version_str = FormatTitleVersion(update_entry.version);
-                }
-
-                const auto update_disabled =
-                    IsVersionedExternalUpdateDisabled(disabled, update_entry.version);
-
-                Patch update_patch = {.enabled = !update_disabled,
-                                      .name = "Update",
-                                      .version = version_str,
-                                      .type = PatchType::Update,
-                                      .program_id = title_id,
-                                      .title_id = update_tid,
-                                      .source = PatchSource::External,
-                                      .numeric_version = update_entry.version};
-
-                external_update_patches.push_back(update_patch);
+        // The updates in the user's folders (external and game folders), newest first.
+        for (const auto& update : ListFolderUpdates(content_union, update_tid)) {
+            std::string version_str = update.entry.version_string;
+            if (version_str.empty()) {
+                version_str = FormatTitleVersion(update.version);
             }
-        }
 
-        const auto* manual_provider = static_cast<const ManualContentProvider*>(
-            content_union->GetSlotProvider(ContentProviderUnionSlot::FrontendManual));
-        if (manual_provider && external_update_patches.empty()) {
-            const auto manual_update_versions = manual_provider->ListUpdateVersions(update_tid);
+            const auto update_disabled = IsVersionedExternalUpdateDisabled(disabled, update.version);
 
-            for (const auto& update_entry : manual_update_versions) {
-                std::string version_str = update_entry.version_string;
-                if (version_str.empty()) {
-                    version_str = FormatTitleVersion(update_entry.version);
-                }
+            Patch update_patch = {.enabled = !update_disabled,
+                                  .name = "Update",
+                                  .version = version_str,
+                                  .type = PatchType::Update,
+                                  .program_id = title_id,
+                                  .title_id = update_tid,
+                                  .source = PatchSource::External,
+                                  .numeric_version = update.version};
 
-                const auto update_disabled =
-                    IsVersionedExternalUpdateDisabled(disabled, update_entry.version);
-
-
-                Patch update_patch = {.enabled = !update_disabled,
-                                      .name = "Update",
-                                      .version = version_str,
-                                      .type = PatchType::Update,
-                                      .program_id = title_id,
-                                      .title_id = update_tid,
-                                      .source = PatchSource::External,
-                                      .numeric_version = update_entry.version};
-
-                external_update_patches.push_back(update_patch);
-            }
+            external_update_patches.push_back(update_patch);
         }
 
         if (external_update_patches.size() > 1) {
@@ -1096,6 +1062,15 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
 
 std::optional<u32> PatchManager::GetGameVersion() const {
     const auto update_tid = GetUpdateTitleID(title_id);
+    // The version that runs: the update PatchExeFS applies from the user's folders (the newest
+    // enabled one), else the installed update or the base title.
+    const auto disabled = GetDisabledAddons();
+    for (const auto& update :
+         ListFolderUpdates(static_cast<const ContentProviderUnion*>(&content_provider), update_tid)) {
+        if (!IsVersionedExternalUpdateDisabled(disabled, update.version)) {
+            return update.version;
+        }
+    }
     if (content_provider.HasEntry(update_tid, ContentRecordType::Program)) {
         const auto version = content_provider.GetEntryVersion(update_tid);
         return version || !parent_title_id ? version : content_provider.GetEntryVersion(GetUpdateTitleID(*parent_title_id));
@@ -1186,6 +1161,25 @@ PatchManager::Metadata PatchManager::ParseControlNCA(const NCA& nca) const {
     // The update's control data is the one that runs (name, icon and NACP of the installed
     // version); a disabled update leaves the base title's.
     const auto& disabled = Settings::values.disabled_addons[application_id];
+    // The update from the user's folders that runs (the newest enabled one, wherever it was
+    // found), as PatchExeFS and PatchRomFS pick it.
+    const auto* content_union = &system.GetContentProviderUnion();
+    const auto update_tid = FileSys::GetUpdateTitleID(application_id);
+    for (const auto& update : ListFolderUpdates(content_union, update_tid)) {
+        if (IsVersionedExternalUpdateDisabled(disabled, update.version)) {
+            continue;
+        }
+        if (const auto control =
+                GetFolderUpdateFile(content_union, update, update_tid, ContentRecordType::Control)) {
+            const FileSys::PatchManager pm{application_id, system.GetFileSystemController(),
+                                           system.GetContentProvider()};
+            auto metadata = pm.ParseControlNCA(NCA{control});
+            if (metadata.first != nullptr) {
+                return metadata;
+            }
+        }
+        break;
+    }
     if (std::find(disabled.begin(), disabled.end(), "Update") == disabled.end()) {
         const FileSys::PatchManager pm_update{FileSys::GetUpdateTitleID(application_id), system.GetFileSystemController(), system.GetContentProvider()};
         auto metadata = pm_update.GetControlMetadata();
