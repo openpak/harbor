@@ -6,60 +6,66 @@
 
 #pragma once
 
-#include "common/container/unordered_map.h"
+#include <cstddef>
+#include <memory>
 
+#include "common/common_funcs.h"
 #include "common/uuid.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/olsc/stopper_object.h"
 #include "core/hle/service/service.h"
 
+namespace OpenPak::Olsc {
+class DaemonSettings;
+}
+
 namespace Service::OLSC {
+
+// The setters' input: the bool first, then the Uid at +8 (nn::account::Uid is 8-aligned; the
+// 23.0.1 sysmodule reads 0x18 bytes for 3 and 6, 0x20 for 1 with the application id at +0x18).
+// Common::UUID has an alignment of 1, so a plain (bool, UUID) argument list reads the Uid at +1.
+struct SetGlobalSettingParameters {
+    bool is_enabled;
+    INSERT_PADDING_BYTES(7);
+    Common::UUID user_id;
+};
+static_assert(sizeof(SetGlobalSettingParameters) == 0x18);
+static_assert(offsetof(SetGlobalSettingParameters, user_id) == 0x8);
+
+struct SetApplicationSettingParameters {
+    bool is_enabled;
+    INSERT_PADDING_BYTES(7);
+    Common::UUID user_id;
+    u64 application_id;
+};
+static_assert(sizeof(SetApplicationSettingParameters) == 0x20);
+static_assert(offsetof(SetApplicationSettingParameters, application_id) == 0x18);
 
 class IDaemonController final : public ServiceFramework<IDaemonController> {
 public:
-    explicit IDaemonController(Core::System& system_);
+    explicit IDaemonController(Core::System& system_,
+                               std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings_);
     ~IDaemonController() override;
 
 private:
     Result GetApplicationAutoTransferSetting(Out<bool> out_is_enabled, Common::UUID user_id,
                                              u64 application_id);
-    Result SetApplicationAutoTransferSetting(bool is_enabled, Common::UUID user_id,
-                                             u64 application_id);
+    Result SetApplicationAutoTransferSetting(SetApplicationSettingParameters params);
 
     Result GetGlobalAutoUploadSetting(Out<bool> out_is_enabled, Common::UUID user_id);
-    Result SetGlobalAutoUploadSetting(bool is_enabled, Common::UUID user_id);
+    Result SetGlobalAutoUploadSetting(SetGlobalSettingParameters params);
 
     Result RunTransferTaskAutonomyRegistration(Common::UUID user_id, u64 application_id);
 
     Result GetGlobalAutoDownloadSetting(Out<bool> out_is_enabled, Common::UUID user_id);
-    Result SetGlobalAutoDownloadSetting(bool is_enabled, Common::UUID user_id);
+    Result SetGlobalAutoDownloadSetting(SetGlobalSettingParameters params);
 
     Result StopAutonomyTaskExecution(Out<SharedPointer<IStopperObject>> out_stopper);
 
     Result GetAutonomyTaskStatus(Out<u8> out_status, Common::UUID user_id);
 
-    // Internal in-memory state to back the above APIs
-    struct AppKey {
-        Common::UUID user_id;
-        u64 application_id{};
-        friend constexpr bool operator==(const AppKey& a, const AppKey& b) {
-            return a.user_id == b.user_id && a.application_id == b.application_id;
-        }
-    };
-    struct AppKeyHash {
-        size_t operator()(const AppKey& k) const noexcept {
-            // Combine UUID hash and application_id
-            size_t h1 = std::hash<Common::UUID>{}(k.user_id);
-            size_t h2 = std::hash<u64>{}(k.application_id);
-            // Simple hash combine
-            return h1 ^ (h2 + 0x9e3779b97f4a7c15ULL + (h1 << 6) + (h1 >> 2));
-        }
-    };
-
-    ::Common::unordered_map<AppKey, bool, AppKeyHash> app_auto_transfer_{};
-    ::Common::unordered_map<Common::UUID, bool> global_auto_upload_{};
-    ::Common::unordered_map<Common::UUID, bool> global_auto_download_{};
-    ::Common::unordered_map<AppKey, u8, AppKeyHash> autonomy_task_status_{};
+    // Kept across restarts, as the sysmodule keeps them in its system save.
+    std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings;
 };
 
 } // namespace Service::OLSC

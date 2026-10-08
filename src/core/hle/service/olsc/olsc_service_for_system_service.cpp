@@ -4,12 +4,17 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/fs/path_util.h"
 #include "common/redact.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/daemon_controller.h"
 #include "core/hle/service/olsc/olsc_service_for_system_service.h"
 #include "core/hle/service/olsc/remote_storage_controller.h"
 #include "core/hle/service/olsc/transfer_task_list_controller.h"
+#include "core/openpak/async_worker.h"
+#include "core/openpak/olsc.h"
 
 namespace Service::OLSC {
 
@@ -31,12 +36,13 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
         {104, nullptr, "GetLastErrorEventHolder"},
         {105, D<&IOlscServiceForSystemService::GetTransferTaskErrorInfo>, "GetTransferTaskErrorInfo"},
         {200, D<&IOlscServiceForSystemService::GetDataTransferPolicy>, "GetDataTransferPolicy"},
-        {201, nullptr, "DeleteDataTransferPolicyCache"},
+        {201, D<&IOlscServiceForSystemService::DeleteDataTransferPolicyCache>, "DeleteDataTransferPolicyCache"},
         {202, nullptr, "Unknown202"},
         {203, nullptr, "RequestUpdateDataTransferPolicyCacheAsync"},
-        {204, nullptr, "ClearDataTransferPolicyCache"},
+        {204, D<&IOlscServiceForSystemService::ClearDataTransferPolicyCache>, "ClearDataTransferPolicyCache"},
         {205, nullptr, "RequestGetDataTransferPolicyAsync"},
         {206, nullptr, "Unknown206"}, //21.0.0+
+        {209, D<&IOlscServiceForSystemService::GetDataTransferPolicy209>, "Unknown209"}, //22.0.0+
         {300, nullptr, "GetUserSaveDataProperty"},
         {301, nullptr, "SetUserSaveDataProperty"},
         {302, nullptr, "Unknown302"}, //21.0.0+
@@ -56,6 +62,7 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
         {913, nullptr, "GetSeriesInfoForSaveDataBackup"},
         {914, nullptr, "Unknown914"}, //20.2.0+
         {1000, nullptr, "UpdateIssueOld"},
+        {1001, D<&IOlscServiceForSystemService::RequestLatestVersionPlayablePlatforms>, "RequestLatestVersionPlayablePlatforms"}, //23.0.0+
         {1010, nullptr, "Unknown1010"},
         {1011, nullptr, "Unknown1011"},
         {1012, nullptr, "Unknown1012"},
@@ -82,6 +89,8 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
     // clang-format on
 
     RegisterHandlers(functions);
+
+    worker = std::make_shared<OpenPak::AsyncWorker>(system, "olsc:OpenPak");
 }
 
 IOlscServiceForSystemService::~IOlscServiceForSystemService() = default;
@@ -94,16 +103,24 @@ Result IOlscServiceForSystemService::GetTransferTaskListController(
 }
 
 Result IOlscServiceForSystemService::GetRemoteStorageController(
-    Out<SharedPointer<IRemoteStorageController>> out_interface) {
+    Out<SharedPointer<IRemoteStorageController>> out_interface, Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called");
-    *out_interface = std::make_shared<IRemoteStorageController>(system);
+    // The controller speaks for one user (the sysmodule's takes the Uid here, 0x10 bytes in).
+    *out_interface = std::make_shared<IRemoteStorageController>(system, user_id, worker);
     R_SUCCEED();
 }
 
 Result IOlscServiceForSystemService::GetDaemonController(
     Out<SharedPointer<IDaemonController>> out_interface) {
     LOG_INFO(Service_OLSC, "called");
-    *out_interface = std::make_shared<IDaemonController>(system);
+    if (!settings) {
+        // A console keeps these in olsc's system save; Harbor keeps them beside the NAND saves.
+        // Read on first use, once the data directory is the session's.
+        settings = std::make_shared<OpenPak::Olsc::DaemonSettings>(
+            Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
+            "olsc-settings.json");
+    }
+    *out_interface = std::make_shared<IDaemonController>(system, settings);
     R_SUCCEED();
 }
 
@@ -114,6 +131,37 @@ Result IOlscServiceForSystemService::GetDataTransferPolicy(
     policy.upload_policy = 0;
     policy.download_policy = 0;
     *out_policy = policy;
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::DeleteDataTransferPolicyCache(u64 application_id) {
+    // 0x21d1e0 case 201: u64 in, nothing out. Harbor keeps no policy cache (200 answers zeros).
+    LOG_DEBUG(Service_OLSC, "called, app={:016X}", application_id);
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::ClearDataTransferPolicyCache() {
+    // 0x21d1e0 case 204: nothing in or out. "Update List" sends it first.
+    LOG_DEBUG(Service_OLSC, "called");
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::GetDataTransferPolicy209(Out<DataTransferPolicy> out_policy,
+                                                              u64 application_id) {
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): the tile's Options menu
+    // calls it right after 200. The 23.0.1 sysmodule unpacks it as 200 (u64 in, 2 bytes out,
+    // 0x21fd30 against 0x21f210); what the bytes mean is not established.
+    LOG_UNKNOWN_CONTRACT(Service_OLSC, "olsc:s 209 answered like 200 (two zero bytes), app={:016X}",
+                         application_id);
+    *out_policy = DataTransferPolicy{};
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::RequestLatestVersionPlayablePlatforms(
+    Out<SharedPointer<IAsyncLatestVersionPlayablePlatformsRequest>> out_request,
+    u64 application_id) {
+    LOG_DEBUG(Service_OLSC, "called, app={:016X}", application_id);
+    *out_request = std::make_shared<IAsyncLatestVersionPlayablePlatformsRequest>(system);
     R_SUCCEED();
 }
 
@@ -139,6 +187,59 @@ Result IOlscServiceForSystemService::GetOlscServiceForSystemService(
     Out<SharedPointer<IOlscServiceForSystemService>> out_interface) {
     LOG_INFO(Service_OLSC, "called");
     *out_interface = std::static_pointer_cast<IOlscServiceForSystemService>(shared_from_this());
+    R_SUCCEED();
+}
+
+// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base). Commands 0-3 are the
+// sysmodule's async base (0x21df40: 0 and 1 no data, 2 one byte, 3 a copy handle).
+IAsyncLatestVersionPlayablePlatformsRequest::IAsyncLatestVersionPlayablePlatformsRequest(
+    Core::System& system_)
+    : ServiceFramework{system_, "IAsyncLatestVersionPlayablePlatformsRequest"},
+      service_context{system_, "OLSC"} {
+    // clang-format off
+    static const FunctionInfo functions[] = {
+        {0, D<&IAsyncLatestVersionPlayablePlatformsRequest::GetResult>, "GetResult"},
+        {1, D<&IAsyncLatestVersionPlayablePlatformsRequest::Cancel>, "Cancel"},
+        {2, D<&IAsyncLatestVersionPlayablePlatformsRequest::HasDone>, "HasDone"},
+        {3, D<&IAsyncLatestVersionPlayablePlatformsRequest::GetSystemEvent>, "GetSystemEvent"},
+        {100, D<&IAsyncLatestVersionPlayablePlatformsRequest::GetPlayablePlatforms>, "GetPlayablePlatforms"},
+    };
+    // clang-format on
+    RegisterHandlers(functions);
+
+    // Done when made: the event is signalled before the guest first waits on it.
+    event = service_context.CreateEvent("OLSC::LatestVersionPlayablePlatforms");
+    event->Signal(system.Kernel());
+}
+
+IAsyncLatestVersionPlayablePlatformsRequest::~IAsyncLatestVersionPlayablePlatformsRequest() {
+    service_context.CloseEvent(event);
+}
+
+Result IAsyncLatestVersionPlayablePlatformsRequest::GetResult() {
+    R_SUCCEED();
+}
+
+Result IAsyncLatestVersionPlayablePlatformsRequest::Cancel() {
+    R_SUCCEED();
+}
+
+Result IAsyncLatestVersionPlayablePlatformsRequest::HasDone(Out<bool> out_done) {
+    *out_done = true;
+    R_SUCCEED();
+}
+
+Result IAsyncLatestVersionPlayablePlatformsRequest::GetSystemEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    *out_event = std::addressof(event->GetReadableEvent());
+    R_SUCCEED();
+}
+
+Result IAsyncLatestVersionPlayablePlatformsRequest::GetPlayablePlatforms(Out<u32> out_platforms) {
+    // Four bytes out (0x2289f0). What pegasus /v1/apps/<id>/latest/platforms -> ["NX"] would
+    // give, as the Ryujinx Harbor answers; the bit meaning is not established.
+    LOG_UNKNOWN_CONTRACT(Service_OLSC, "olsc 1001 request 100 answered u32 1 (NX only)");
+    *out_platforms = 1;
     R_SUCCEED();
 }
 

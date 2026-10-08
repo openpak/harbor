@@ -6,21 +6,73 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <string>
+
+#include "common/uuid.h"
 #include "core/hle/service/cmif_types.h"
+#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
+
+namespace Kernel {
+class KEvent;
+class KReadableEvent;
+} // namespace Kernel
+
+namespace OpenPak {
+class AsyncTask;
+class AsyncWorker;
+} // namespace OpenPak
 
 namespace Service::OLSC {
 
+/// The sysmodule's IAsyncResult (0x21df40): 0 GetResult, 1 Cancel, 2 HasDone, 3 GetSystemEvent,
+/// answered by work on an OpenPak::AsyncWorker.
+class IAsyncResult final : public ServiceFramework<IAsyncResult> {
+public:
+    IAsyncResult(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                 std::function<Result()> work);
+    ~IAsyncResult() override;
+
+private:
+    Result GetResult();
+    Result Cancel();
+    Result HasDone(Out<bool> out_done);
+    Result GetSystemEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* event{};
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::shared_ptr<OpenPak::AsyncTask> task;
+};
+
 class IRemoteStorageController final : public ServiceFramework<IRemoteStorageController> {
 public:
-    explicit IRemoteStorageController(Core::System& system_);
+    IRemoteStorageController(Core::System& system_, Common::UUID user_id_,
+                             std::shared_ptr<OpenPak::AsyncWorker> worker_);
     ~IRemoteStorageController() override;
 
 private:
     Result GetSecondarySave(Out<bool> out_has_secondary_save, Out<std::array<u64, 3>> out_unknown,
                             u64 application_id);
     Result GetDataNewnessByApplicationId(Out<u8> out_newness, u64 application_id);
+    Result CreateSaveDataArchiveCacheUpdationTask(Out<SharedPointer<IAsyncResult>> out_task);
+    Result CreateSaveDataArchiveCacheUpdationForSpecifiedApplicationTask(
+        Out<SharedPointer<IAsyncResult>> out_task, u64 application_id);
+    Result CreateRegisterNotificationTokenTask(Out<SharedPointer<IAsyncResult>> out_task);
+    Result ListDataInfo(Out<s32> out_count,
+                        OutArray<std::array<u8, 0x38>, BufferAttr_HipcMapAlias> out_infos,
+                        s32 count, s32 offset);
+    Result ListDataInfoV2(Out<s32> out_count,
+                          OutArray<std::array<u8, 0x38>, BufferAttr_HipcMapAlias> out_infos,
+                          s32 count, s32 offset);
+    Result GetDataInfoV1(Out<std::array<u8, 0x30>> out_data, u64 application_id);
     Result GetDataInfo(Out<std::array<u8, 0x38>> out_data, u64 application_id);
+
+    /// The user this controller speaks for, as the 32 hex digits the OpenPak layer names it by.
+    std::string uid;
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
 } // namespace Service::OLSC

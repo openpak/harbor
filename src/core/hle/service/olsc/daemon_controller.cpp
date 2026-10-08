@@ -7,11 +7,13 @@
 #include "common/redact.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/daemon_controller.h"
+#include "core/openpak/olsc.h"
 
 namespace Service::OLSC {
 
-IDaemonController::IDaemonController(Core::System& system_)
-    : ServiceFramework{system_, "IDaemonController"} {
+IDaemonController::IDaemonController(Core::System& system_,
+                                     std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings_)
+    : ServiceFramework{system_, "IDaemonController"}, settings{std::move(settings_)} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IDaemonController::GetApplicationAutoTransferSetting>, "GetApplicationAutoTransferSetting"},
@@ -38,32 +40,31 @@ Result IDaemonController::GetApplicationAutoTransferSetting(Out<bool> out_is_ena
                                                             u64 application_id) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", Common::Redact(user_id),
              application_id);
-    AppKey key{user_id, application_id};
-    const auto it = app_auto_transfer_.find(key);
-    *out_is_enabled = (it != app_auto_transfer_.end()) ? it->second : false;
+    *out_is_enabled = settings->ApplicationAutoTransfer(user_id.RawString(), application_id);
     R_SUCCEED();
 }
 
-Result IDaemonController::SetApplicationAutoTransferSetting(bool is_enabled, Common::UUID user_id,
-                                                            u64 application_id) {
+Result IDaemonController::SetApplicationAutoTransferSetting(
+    SetApplicationSettingParameters params) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X} is_enabled={}",
-             Common::Redact(user_id), application_id, is_enabled);
-    AppKey key{user_id, application_id};
-    app_auto_transfer_[key] = is_enabled;
+             Common::Redact(params.user_id), params.application_id, params.is_enabled);
+    settings->SetApplicationAutoTransfer(params.user_id.RawString(), params.application_id,
+                                         params.is_enabled);
     R_SUCCEED();
 }
 
 Result IDaemonController::GetGlobalAutoUploadSetting(Out<bool> out_is_enabled,
                                                      Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
-    const auto it = global_auto_upload_.find(user_id);
-    *out_is_enabled = (it != global_auto_upload_.end()) ? it->second : false;
+    *out_is_enabled = settings->GlobalAutoUpload(user_id.RawString());
+    LOG_DEBUG(Service_OLSC, "global auto upload is {}", *out_is_enabled);
     R_SUCCEED();
 }
 
-Result IDaemonController::SetGlobalAutoUploadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
-    global_auto_upload_[user_id] = is_enabled;
+Result IDaemonController::SetGlobalAutoUploadSetting(SetGlobalSettingParameters params) {
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
+             params.is_enabled);
+    settings->SetGlobalAutoUpload(params.user_id.RawString(), params.is_enabled);
     R_SUCCEED();
 }
 
@@ -71,25 +72,22 @@ Result IDaemonController::RunTransferTaskAutonomyRegistration(Common::UUID user_
                                                               u64 application_id) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", Common::Redact(user_id),
              application_id);
-    // Simulate starting an autonomy task: set status to 1 (running) then back to 0 (idle)
-    AppKey key{user_id, application_id};
-    autonomy_task_status_[key] = 1; // running
-    // TODO: In a real implementation this would be asynchronous. We'll immediately set to idle.
-    autonomy_task_status_[key] = 0; // idle
+    // No transfer tasks run (Save Data Cloud transfers are not implemented): nothing to register.
     R_SUCCEED();
 }
 
 Result IDaemonController::GetGlobalAutoDownloadSetting(Out<bool> out_is_enabled,
                                                        Common::UUID user_id) {
     LOG_INFO(Service_OLSC, "called, user_id={}", Common::Redact(user_id));
-    const auto it = global_auto_download_.find(user_id);
-    *out_is_enabled = (it != global_auto_download_.end()) ? it->second : false;
+    *out_is_enabled = settings->GlobalAutoDownload(user_id.RawString());
+    LOG_DEBUG(Service_OLSC, "global auto download is {}", *out_is_enabled);
     R_SUCCEED();
 }
 
-Result IDaemonController::SetGlobalAutoDownloadSetting(bool is_enabled, Common::UUID user_id) {
-    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(user_id), is_enabled);
-    global_auto_download_[user_id] = is_enabled;
+Result IDaemonController::SetGlobalAutoDownloadSetting(SetGlobalSettingParameters params) {
+    LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
+             params.is_enabled);
+    settings->SetGlobalAutoDownload(params.user_id.RawString(), params.is_enabled);
     R_SUCCEED();
 }
 

@@ -26,6 +26,8 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/network_ceiling.cpp
     openpak/network_profile.cpp
     openpak/network_profile.h
+    openpak/olsc.cpp
+    openpak/olsc.h
     openpak/platform.cpp
     openpak/platform.h
     openpak/presence_state.cpp

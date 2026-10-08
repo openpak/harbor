@@ -1379,11 +1379,17 @@ void DismissInvitation(const std::string& invitation_id) {
 Response SendAs(const std::string& method, const std::string& host,
                 const std::string& path_and_query, const std::string& content_type,
                 const std::string& body) {
+    return SendAsUser({}, method, host, path_and_query, content_type, body);
+}
+
+Response SendAsUser(const std::string& uid, const std::string& method, const std::string& host,
+                    const std::string& path_and_query, const std::string& content_type,
+                    const std::string& body) {
     try {
-        Ensure({});
+        Ensure(uid);
 
         State& state = Get();
-        const auto identity = ActiveIdentity(state);
+        const auto identity = uid.empty() ? ActiveIdentity(state) : IdentityOf(state, uid);
         if (!identity) {
             return {};
         }
