@@ -45,7 +45,7 @@ is ticked: an item passes only once it has run on every device in its tag and to
 - The desktop harness now has `power`, `terminate` and `dock` commands, types in the guest's keyboard layout (US/UK)
   and has a handheld-only controller template (`d7875d2087`, `9ad618a600`); the PC evidence for G2.AM.11, G2.AM.12,
   G2.HOME.6 and G2.HID.10 comes through it. Real F5/F10 key presses are not recorded.
-- Count at `e1888f04a6`: 141 done, 108 partial, 27 missing, 7 unproven, 3 not applicable of 286 rows; 114 carry PC evidence, 11 phone evidence. Before: 117 done, 118 partial, 35 missing, 9 unproven, 3 not applicable of 282
+- Count at `e1888f04a6`: 142 done, 107 partial, 27 missing, 7 unproven, 3 not applicable of 286 rows (G3.NET.7 moved to done after the pass); 115 carry PC evidence, 11 phone evidence. Before: 117 done, 118 partial, 35 missing, 9 unproven, 3 not applicable of 282
   (`4515672d94` plus G3.SOC.7/8); 84 done, 138 partial, 40 missing, 10 unproven, 3 not applicable of 275 at
   `1ccd8d1eb2`. Every Android change since the first audit is code only: the phone evidence is still one HOME-session
   cold boot.
@@ -62,24 +62,23 @@ Blockers for retiring the Ryujinx Harbor (it does these, on the phone tobagin us
    screens, the Borealis Harbor menu, touch controls and their power button, sleep, the driver prompt, SAF folders,
    crash-report consent, console backup, battery), all code only on Android (G2.PH.1, G3.PH.1, G4.WIZ.17, G4.CON.*,
    G4.PAD.*, G4.GPU.6, G2.AM.18, G2.AU.4, G5.LIFE.2). M, android frontend.
-2. NAT test in Internet Settings (G3.NET.7, G3.NET.11). M, net (nifm).
-3. Keys and sleep on the real desktop: F5 (tap sleep, hold power menu) and F10 are bound but never pressed; Sleep Mode
+2. Keys and sleep on the real desktop: F5 (tap sleep, hold power menu) and F10 are bound but never pressed; Sleep Mode
    never run on either host (G2.HOME.6, G4.PAD.12). S, qt frontend and am.
-4. HOME library details: the in-game version after an update, DLC enabled flags and a title found twice (G2.HOME.1a,
+3. HOME library details: the in-game version after an update, DLC enabled flags and a title found twice (G2.HOME.1a,
    G2.HOME.10). S, ns/nim.
-5. Command hygiene: the remaining am "(STUBBED)" sites and an Eden-side unknown-contract list (G2.AM.19, G3.PRV.6). S,
+4. Command hygiene: the remaining am "(STUBBED)" sites and an Eden-side unknown-contract list (G2.AM.19, G3.PRV.6). S,
    am.
-6. Small host items: the render scale follows a resize only at the next start (G2.VI.10); Qt has no stopped screen
+5. Small host items: the render scale follows a resize only at the next start (G2.VI.10); Qt has no stopped screen
    (G4.CON.3); the wizard does not scroll new content into view (G4.WIZ.21). S, qt frontend and wizard.
-7. Cut-over: tag-triggered CI for desktop and both APKs, the release id and key, the command-coverage ledger and the
+6. Cut-over: tag-triggered CI for desktop and both APKs, the release id and key, the command-coverage ledger and the
    unknown-contract reconciliation (G5.REL.1, G5.REL.3, G5.CMD.1, G5.CMD.2). M, release.
 
 Closed since `4515672d94` (mostly verified on PC; Android parts wait for item 1): crash reports, letterbox colour,
 console output gain and volume restore, battery and its notices, prepo, set:sys 0/57, the shutdown panics (applets end
 before the services stop), the HOME library scan and records, Delete Software, the Borealis Harbor menu and settings,
 the driver prompt, SAF-only storage, the console theme on Harbor's screens, touch-control editing and haptics, trigger
-hysteresis, the FPS readout, frame generation labelled experimental, console backup, restore and new console. Firmware
-from an .xci is not applicable (owner, 2026-10-08).
+hysteresis, the FPS readout, frame generation labelled experimental, console backup, restore and new console. The NAT test passes on PC
+(G3.NET.7). Firmware from an .xci is not applicable (owner, 2026-10-08).
 
 Owner features in progress (not in the Ryujinx Harbor): enrolment refusing duplicate live console ids (G3.ID.4), no
 client or server code yet. M, openpak client and the server.
@@ -281,7 +280,7 @@ Gate 3 work that is not a retirement blocker (the Ryujinx Harbor never proved it
 - [ ] **G3.NET.4** [D P] DNS resolves in order: nsd substitution (`%`, account names to their BaaS hosts, `accounts.nintendo.com` unchanged), profile redirect, fail-closed for every ceiling family, then host DNS; a ceiling-family name without a redirect fails and never reaches real Nintendo (ban risk 2181-4008). Harbor: redirect verified on PC; fail-closed implemented, no negative test recorded (qlaunch-probe, services.md §3.2). Eden: partial, verified on PC for redirect and fail-closed (`c6cbedf7ea`, `2c4b33569f`; `sockets/sfdnsres.cpp:249,253`; run net-4); nsd `%`/BaaS substitution code only; some runs fail `accounts.nintendo.com` closed, which contradicts "unchanged": check the profile.
 - [ ] **G3.NET.5** [D P] Firmware 23.x resolver commands 16, 100, 102, 104 answer with the layout confirmed against the dnsmitm capture; names resolve through them. Harbor: implemented from the friends marshallers, disagrees with the capture's guess, unverified (services.md §3.2). Eden: partial, code only (`c6cbedf7ea`, `be70dff89b`; `sfdnsres.cpp:125-130`); no run serves 100/102/104.
 - [ ] **G3.NET.6** [D P] A full session capture shows traffic only to the OpenPak edge, the OpenPak site and (on request) the driver catalogue; nothing to Nintendo, Eden or third parties. Harbor: unverified. Eden: missing: no capture.
-- [ ] **G3.NET.7** [D P] The connection test in Internet Settings reports a NAT type; nncs1-% and nncs2-% reach a real resolver, never the redirect. Harbor: desktop NAT check landed in v0.2.2; HOME-session NetConnect test unverified (HANDOVER desktop section). Eden: missing: no NAT-type test in Eden; nncs2 resolves through the profile override, nncs1 never seen.
+- [ ] **G3.NET.7** [D P] The connection test in Internet Settings reports a NAT type; nncs1-% and nncs2-% reach a real resolver, never the redirect. Harbor: desktop NAT check landed in v0.2.2; HOME-session NetConnect test unverified (HANDOVER desktop section). Eden: done, verified on PC: System Settings > Internet > Test Connection reports "Connection test was successful." with NAT Type B; nncs1 and nncs2 resolve through the network profile to OpenPak's NAT test servers, not through a substituted redirect (run svc2-1, evidence kept outside the repository); no code change was needed; phone not run (3rd pass).
 - [ ] **G3.NET.8** [D P] Online titles connect and play against a second endpoint: Stardew, Outbound, Moving Out 2, Risk of Rain 2 (type-0 sockets), Terraria (parked recv). Harbor: Ryujinx fork is the behaviour reference (ledger §6); not recorded on the HOME-session build. Eden: missing: no online title run (bsd `79639040a2`, ssl `0c0a4a3520` in place).
 - [ ] **G3.NET.9** [D P] Several firmware processes online at once do not collide or run out of sockets (per-process fd tables); the bsd rewrite carries a provenance note per function and no source-available-derived code. Harbor: not applicable, its poll code is the tainted lineage (`3ab97fbe7`, `081d5cd88`). Eden: partial, self-check (`79639040a2`, `be70dff89b`; runs bsd-1/2 "self-check: 20 passed"); no per-function provenance notes in `bsd.cpp`; multi-process load not run.
 - [ ] **G3.NET.10** [D] lp2p GetGroupInfo returns InvalidState outside a group and the ldn monitors answer. Harbor: unverified (services.md §3.2). Eden: partial, code only (`5ca668dc18`; `ldn/sf_monitor_service.cpp:33`); `sf_service_monitor.cpp:42` GetGroupInfo still echoes its input; monitors are stubs.
