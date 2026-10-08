@@ -157,3 +157,7 @@ std::optional<HarborSetup::KeyboardDefaults> HarborMenu::DefaultKeyboard() {
 std::string HarborMenu::KeyName(int code) {
     return QKeySequence(code).toString(QKeySequence::NativeText).toStdString();
 }
+
+void HarborMenu::ConsoleAction(const std::string& name) {
+    OnGui([this, name] { hooks.console_action(name); });
+}

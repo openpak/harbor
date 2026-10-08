@@ -203,6 +203,18 @@ object HarborMenuBridge {
                 ""
             }
 
+            // Harbor: the console's backup, restore and new identity (the console stops for each).
+            "consoleAction" -> {
+                onUi { activity ->
+                    when (argument) {
+                        "backup" -> HarborConsole.askBackupPassphrase(activity)
+                        "restore" -> HarborConsole.confirmRestore(activity)
+                        "new-console" -> HarborConsole.confirmNewConsole(activity)
+                    }
+                }
+                ""
+            }
+
             else -> {
                 Log.warning("[Harbor] the menu asked for an unknown action: $what")
                 ""

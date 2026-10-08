@@ -882,13 +882,22 @@ void MenuActivity::TouchPane(brls::Box* pane) {
 void MenuActivity::HarborPane(brls::Box* pane) {
     pane->addView(Row("setup", "Set up again", "", [this] { Close([this] { host.SetupAgain(); }); }, true, true));
     pane->addView(Note("The setup runs again on the saved choices: keys, firmware, folders and drivers."));
-    if (const auto consent = host.CrashReportConsent()) {
-        pane->addView(Toggle("crash-reports", "Send crash reports", *consent,
-                             [this](bool on) { host.SetCrashReportConsent(on); }));
-    } else {
-        pane->addView(Toggle("crash-reports", "Send crash reports", false, [](bool) {}, false));
-        pane->addView(Note("Crash reports come with a later Harbor."));
-    }
+    pane->addView(Heading("This console"));
+    pane->addView(Row("console:backup", "Back up console…", "", [this] {
+        Close([this] { host.ConsoleAction("backup"); });
+    }, true, true));
+    pane->addView(Row("console:restore", "Restore console…", "", [this] {
+        Close([this] { host.ConsoleAction("restore"); });
+    }, true, true));
+    pane->addView(Row("console:new", "Make this a new console…", "", [this] {
+        Close([this] { host.ConsoleAction("new-console"); });
+    }, true, true));
+    pane->addView(Note("A backup holds the console's system memory and its device key, locked with a "
+                       "passphrase. The console stops while it is written or restored."));
+    pane->addView(Toggle("crash-reports", "Send crash reports", host.CrashReportConsent().value_or(false),
+                         [this](bool on) { host.SetCrashReportConsent(on); }));
+    pane->addView(Note("When Harbor crashes it keeps a report with the end of its log, so the fault can be "
+                       "found. Turning this off deletes the reports kept so far."));
     pane->addView(Heading("About"));
     pane->addView(Info("about:version", "Version", Common::g_build_version));
     pane->addView(Info("about:licence", "Licence", "AGPL-3.0-only"));

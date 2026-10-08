@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "common/harbor_crash.h"
 #include "common/settings_input.h"
 
 namespace Core {
@@ -135,11 +136,16 @@ public:
     virtual void ResetTouchLayout() {}
 
     // Harbor.
-    /// Consent to send crash reports, once crash reporting exists (nullopt: not yet).
+    /// The console's backup, restore and new identity ("backup", "restore", "new-console"): the
+    /// console stops, the platform asks for the file and the passphrase, the console starts again.
+    virtual void ConsoleAction(const std::string& name) {}
+    /// Consent to send crash reports (common/harbor_crash.h; nullopt: not asked yet).
     virtual std::optional<bool> CrashReportConsent() {
-        return std::nullopt;
+        return Common::HarborCrash::CrashReportConsent();
     }
-    virtual void SetCrashReportConsent(bool consent) {}
+    virtual void SetCrashReportConsent(bool consent) {
+        Common::HarborCrash::SetCrashReportConsent(consent);
+    }
 };
 
 /// Where the menu opens.

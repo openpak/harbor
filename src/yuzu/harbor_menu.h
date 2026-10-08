@@ -27,6 +27,7 @@ public:
         std::function<void(bool)> show_fps;       ///< turn it on or off
         std::function<void(bool)> joycons;        ///< detach (true) or attach the Joy-Cons
         std::function<void(std::function<void()>)> change_dll; ///< a Lossless.dll change, console stopped
+        std::function<void(const std::string&)> console_action; ///< backup, restore, new-console
     };
 
     HarborMenu(QWidget* window, InputCommon::InputSubsystem& input, Hooks hooks);
@@ -57,6 +58,7 @@ public:
 
     std::optional<HarborSetup::KeyboardDefaults> DefaultKeyboard() override;
     std::string KeyName(int code) override;
+    void ConsoleAction(const std::string& name) override;
 
 private:
     void OnGui(std::function<void()> work);

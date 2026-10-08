@@ -180,6 +180,10 @@ public:
     void ResetTouchLayout() override {
         Call("resetTouchLayout");
     }
+
+    void ConsoleAction(const std::string& name) override {
+        Call("consoleAction", name);
+    }
 };
 
 } // namespace
