@@ -27,8 +27,24 @@ Wizard* active_wizard = nullptr; // only touched on the wizard's own thread
 
 void RequestBack() {
     brls::sync([] {
+        if (!active_wizard) {
+            return;
+        }
+        if (active_wizard->OnWelcome()) {
+            // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): back on the first
+            // page leaves the app; the setup is not completed.
+            LOG_INFO(Frontend, "harbor: back on Welcome: leaving the setup");
+            brls::Application::quit();
+            return;
+        }
+        active_wizard->Back();
+    });
+}
+
+void ReportPickerFailure(const std::string& message) {
+    brls::sync([message] {
         if (active_wizard) {
-            active_wizard->Back();
+            active_wizard->PickerFailed(message);
         }
     });
 }
