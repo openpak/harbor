@@ -124,45 +124,6 @@ json GetFullDataAuto(const std::string& timestamp, u64 title_id, Core::System& s
     return out;
 }
 
-template <bool read_value, typename DescriptorType>
-json GetHLEBufferDescriptorData(const boost::container::static_vector<DescriptorType, IPC::MAX_BUFFER_DESCRIPTORS>& buffer, Core::Memory::Memory& memory) {
-    auto buffer_out = json::array();
-    for (const auto& desc : buffer) {
-        auto entry = json{
-            {"address", fmt::format("{:016X}", desc.Address())},
-            {"size", fmt::format("{:016X}", desc.Size())},
-        };
-
-        if constexpr (read_value) {
-            std::vector<u8> data(desc.Size());
-            memory.ReadBlock(desc.Address(), data.data(), desc.Size());
-            entry["data"] = Common::HexToString(data);
-        }
-
-        buffer_out.push_back(std::move(entry));
-    }
-
-    return buffer_out;
-}
-
-json GetHLERequestContextData(Service::HLERequestContext& ctx, Core::Memory::Memory& memory) {
-    json out;
-
-    auto cmd_buf = json::array();
-    for (std::size_t i = 0; i < IPC::COMMAND_BUFFER_LENGTH; ++i) {
-        cmd_buf.push_back(fmt::format("{:08X}", ctx.CommandBuffer()[i]));
-    }
-
-    out["command_buffer"] = std::move(cmd_buf);
-
-    out["buffer_descriptor_a"] = GetHLEBufferDescriptorData<true>(ctx.BufferDescriptorA(), memory);
-    out["buffer_descriptor_b"] = GetHLEBufferDescriptorData<false>(ctx.BufferDescriptorB(), memory);
-    out["buffer_descriptor_c"] = GetHLEBufferDescriptorData<false>(ctx.BufferDescriptorC(), memory);
-    out["buffer_descriptor_x"] = GetHLEBufferDescriptorData<true>(ctx.BufferDescriptorX(), memory);
-
-    return out;
-}
-
 } // Anonymous namespace
 
 namespace Core {
@@ -228,7 +189,7 @@ void Reporter::SaveSvcBreakReport(u32 type, bool signal_debugger, u64 info1, u64
     SaveToFile(out, GetPath("svc_break_report", title_id, timestamp));
 }
 
-void Reporter::SaveUnimplementedFunctionReport(Service::HLERequestContext& ctx, u32 command_id,
+void Reporter::SaveUnimplementedFunctionReport(Service::HLERequestContext& /*ctx*/, u32 command_id,
                                                const std::string& name,
                                                const std::string& service_name) const {
     if (!IsReportingEnabled()) {
@@ -239,7 +200,8 @@ void Reporter::SaveUnimplementedFunctionReport(Service::HLERequestContext& ctx, 
     const auto title_id = system.GetApplicationProcessProgramID();
     auto out = GetFullDataAuto(timestamp, title_id, system);
 
-    auto function_out = GetHLERequestContextData(ctx, ctx.GetMemory());
+    // No command words or buffer contents: they can hold user ids and typed text.
+    json function_out;
     function_out["command_id"] = command_id;
     function_out["function_name"] = name;
     function_out["service_name"] = service_name;
