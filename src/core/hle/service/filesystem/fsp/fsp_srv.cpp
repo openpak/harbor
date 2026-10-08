@@ -249,9 +249,9 @@ Result FSP_SRV::OpenSdCardFileSystem(OutInterface<IFileSystem> out_interface) {
 }
 
 Result FSP_SRV::CreateSaveDataFileSystem(FileSys::SaveDataCreationInfo save_create_struct,
-                                         FileSys::SaveDataAttribute save_struct, u128 uid) {
-    LOG_DEBUG(Service_FS, "called save_struct = {}, uid = {:016X}{:016X}", save_struct.DebugInfo(),
-              uid[1], uid[0]);
+                                         FileSys::SaveDataAttribute save_struct,
+                                         [[maybe_unused]] u128 uid) {
+    LOG_DEBUG(Service_FS, "called save_struct = {}", save_struct.DebugInfo());
 
     R_RETURN(CreateSaveDataUnlessExists(FileSys::SaveDataSpaceId::User, save_struct));
 }
@@ -547,10 +547,10 @@ Result FSP_SRV::WriteSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
     FileSys::SaveDataSpaceId space_id, FileSys::SaveDataAttribute attribute) {
     LOG_WARNING(Service_FS,
                 "(STUBBED) called, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
+                "attribute.save_id={:016X}\n"
                 "attribute.type={}, attribute.rank={}, attribute.index={}",
-                space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
+                space_id, attribute.program_id, attribute.system_save_data_id, attribute.type,
+                attribute.rank, attribute.index);
     R_SUCCEED();
 }
 
@@ -564,10 +564,10 @@ Result FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
 
     LOG_WARNING(Service_FS,
                 "(STUBBED) called, flags={}, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
+                "attribute.save_id={:016X}\n"
                 "attribute.type={}, attribute.rank={}, attribute.index={}",
-                flags, space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
+                flags, space_id, attribute.program_id, attribute.system_save_data_id,
+                attribute.type, attribute.rank, attribute.index);
 
     R_SUCCEED();
 }
@@ -586,10 +586,10 @@ Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataAttribute(
     // Stub, backend needs an impl to read/write the SaveDataExtraData
     LOG_WARNING(Service_FS,
                 "(STUBBED) called, space_id={}, attribute.program_id={:016X}\n"
-                "attribute.user_id={:016X}{:016X}, attribute.save_id={:016X}\n"
+                "attribute.save_id={:016X}\n"
                 "attribute.type={}, attribute.rank={}, attribute.index={}",
-                space_id, attribute.program_id, attribute.user_id[1], attribute.user_id[0],
-                attribute.system_save_data_id, attribute.type, attribute.rank, attribute.index);
+                space_id, attribute.program_id, attribute.system_save_data_id, attribute.type,
+                attribute.rank, attribute.index);
     std::memset(out_buffer.data(), 0, out_buffer.size());
     R_SUCCEED();
 }

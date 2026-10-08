@@ -134,10 +134,9 @@ struct SaveDataAttribute {
 
     std::string DebugInfo() const {
         return fmt::format(
-            "[title_id={:016X}, user_id={:016X}{:016X}, save_id={:016X}, type={:02X}, "
-            "rank={}, index={}]",
-            program_id, user_id[1], user_id[0], system_save_data_id, static_cast<u8>(type),
-            static_cast<u8>(rank), index);
+            "[title_id={:016X}, user={}, save_id={:016X}, type={:02X}, rank={}, index={}]",
+            program_id, user_id == InvalidUserId ? "none" : "set", system_save_data_id,
+            static_cast<u8>(type), static_cast<u8>(rank), index);
     }
 };
 static_assert(sizeof(SaveDataAttribute) == 0x40);
