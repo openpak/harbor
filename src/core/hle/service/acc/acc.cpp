@@ -1086,6 +1086,9 @@ public:
                                     std::shared_ptr<OpenPak::AsyncWorker> worker_)
         : ServiceFramework{system_, "IManagerForApplication"}, user_id{user_id_},
           worker{std::move(worker_)} {
+        // nn::account::OpenUser (OpenPreselectedUser included) holds this object for as long as
+        // the user is open, so the user it names is an open user (ListOpenUsers) meanwhile.
+        system.GetProfileManager().OpenUserForApplication(user_id);
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IManagerForApplication::CheckAvailability, "CheckAvailability"},
@@ -1221,6 +1224,11 @@ private:
 
     Common::UUID user_id; ///< The user the title asked about.
     std::shared_ptr<OpenPak::AsyncWorker> worker;
+
+public:
+    ~IManagerForApplication() override {
+        system.GetProfileManager().CloseUserForApplication(user_id);
+    }
 };
 
 class DAUTH_O final : public ServiceFramework<DAUTH_O> {
@@ -1291,8 +1299,16 @@ void Module::Interface::ListAllUsers(HLERequestContext& ctx) {
 }
 
 void Module::Interface::ListOpenUsers(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
-    ctx.WriteBuffer(profile_manager->GetOpenUsers());
+    const auto open_users = profile_manager->GetOpenUsers();
+    std::string positions;
+    for (const auto& uuid : open_users) {
+        if (const auto index =
+                uuid.IsValid() ? profile_manager->GetUserIndex(uuid) : std::nullopt) {
+            positions += fmt::format(" #{}", *index);
+        }
+    }
+    LOG_DEBUG(Service_ACC, "called, open users:{}", positions.empty() ? " none" : positions);
+    ctx.WriteBuffer(open_users);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
