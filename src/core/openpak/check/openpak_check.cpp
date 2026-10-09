@@ -352,6 +352,9 @@ void OlscChecks(const std::filesystem::path& dir) {
         settings.SetGlobalAutoUpload(uid, false);
         settings.SetApplicationAutoTransfer(uid, 0x0100A00000BB0000, true);
         settings.SetSeries(uid, 0x0100A00000BB0000, {7, 9});
+        settings.SetLastError(uid, 0x0100A00000BB0000, {1, 1700000000, 0x1234});
+        settings.SetLastError(uid, 0x0100000000000002, {0, 1, 2});
+        settings.RemoveLastError(uid, 0x0100000000000002);
     }
     olsc::DaemonSettings reread{file};
     const auto series = reread.Series(uid, 0x0100A00000BB0000);
@@ -361,6 +364,10 @@ void OlscChecks(const std::filesystem::path& dir) {
               series->series_id == 7 && series->commit_id == 9 &&
               !reread.Series(uid, 0x0100000000000001),
           "the olsc daemon settings and SeriesInfo survive a restart");
+    const auto last_error = reread.LastErrorOf(uid, 0x0100A00000BB0000);
+    Check(last_error && last_error->task_type == 1 && last_error->time == 1700000000 &&
+              last_error->result == 0x1234 && !reread.LastErrorOf(uid, 0x0100000000000002),
+          "the last transfer error survives a restart and a removed one stays gone");
 
     // Newness (olsc-autonomy.md §4.1).
     olsc::ArchiveInfo cloud;
