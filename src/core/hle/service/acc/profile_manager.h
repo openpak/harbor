@@ -50,6 +50,13 @@ struct ProfileInfo {
     u64 creation_time{};
     UserData data{}; // TODO(ognik): Work out what this is
     bool is_open{};
+    /// Live application handles on the user (acc IManagerForApplication); the user is open while
+    /// any is held.
+    u32 application_open_count{};
+
+    bool IsOpen() const {
+        return is_open || application_open_count > 0;
+    }
 };
 
 struct ProfileBase {
@@ -105,6 +112,10 @@ public:
     bool UserExistsIndex(std::size_t index) const;
     void OpenUser(Common::UUID uuid);
     void CloseUser(Common::UUID uuid);
+    /// An application opened or closed the user (nn::account::OpenUser holds an
+    /// IManagerForApplication for it).
+    void OpenUserForApplication(Common::UUID uuid);
+    void CloseUserForApplication(Common::UUID uuid);
     UserIDArray GetOpenUsers() const;
     UserIDArray GetAllUsers() const;
     Common::UUID GetLastOpenedUser() const;
@@ -132,7 +143,7 @@ public:
 
 private:
     void ParseUserSaveFile();
-    void OpenCurrentUser();
+    void OpenCurrentUser(bool open = true);
     std::optional<std::size_t> AddToProfiles(const ProfileInfo& profile);
     void RemoveAllProfiles();
 

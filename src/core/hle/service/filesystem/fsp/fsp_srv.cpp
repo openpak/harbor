@@ -32,6 +32,7 @@
 #include "core/file_sys/system_archive/system_archive.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/result.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/filesystem/fsp/fs_i_filesystem.h"
@@ -385,10 +386,22 @@ Result FSP_SRV::IsExFatSupported(Out<bool> out_is_supported) {
     R_SUCCEED();
 }
 
+// Which console user a save belongs to, by position, for logs (never the id itself).
+std::string FSP_SRV::DescribeUser(const FileSys::UserId& user_id) const {
+    if (user_id == FileSys::InvalidUserId) {
+        return "";
+    }
+    Common::UUID uuid{};
+    std::memcpy(uuid.uuid.data(), user_id.data(), sizeof(user_id));
+    const auto index = system.GetProfileManager().GetUserIndex(uuid);
+    return index ? fmt::format(", user #{}", *index) : ", an unknown user";
+}
+
 Result FSP_SRV::OpenSaveDataFileSystem(OutInterface<IFileSystem> out_interface,
                                        FileSys::SaveDataSpaceId space_id,
                                        FileSys::SaveDataAttribute attribute) {
-    LOG_INFO(Service_FS, "called.");
+    LOG_INFO(Service_FS, "program {:016X} opens save {} in space {}{}", program_id,
+             attribute.DebugInfo(), space_id, DescribeUser(attribute.user_id));
 
     FileSys::VirtualDir dir{};
     R_TRY(save_data_controller->OpenSaveData(&dir, space_id, attribute));
