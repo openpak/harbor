@@ -74,10 +74,15 @@ public:
     static std::chrono::nanoseconds DimTime(const Settings& settings,
                                             const IdleHandlingContext& context, bool docked);
 
+    // Harness runs: no dimming or auto-sleep while suppressed (the default under HARBOR_CONTROL).
+    static void SetHarnessSuppressed(bool suppressed);
+
 private:
     void Tick();
     bool PollInput();
     void OnActivityLocked();
+    IdleHandlingContext EffectiveContextLocked(const IdleHandlingContext& incoming,
+                                               std::chrono::steady_clock::time_point now);
 
     Core::System& m_system;
     KernelHelpers::ServiceContext m_context;
@@ -92,6 +97,12 @@ private:
     u64 m_input_signature{};
     bool m_dimmed{};
     bool m_auto_power_down{};
+    // The context in force, and a looser one waiting out its grace time.
+    IdleHandlingContext m_effective{};
+    bool m_effective_valid{};
+    IdleHandlingContext m_pending{};
+    bool m_pending_valid{};
+    std::chrono::steady_clock::time_point m_pending_at{};
     std::chrono::nanoseconds m_logged_sleep_time{-1};
     std::chrono::nanoseconds m_logged_dim_time{-1};
 };
