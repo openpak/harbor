@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 
 #include <borealis.hpp>
@@ -129,8 +130,41 @@ int RunWizard(Host& host) {
         };
         brls::Application::pushActivity(new WizardActivity(wizard), brls::TransitionAnimation::NONE);
 
+        // Test hook: HARBOR_SETUP_AUTO=1 walks the wizard by itself (with HARBOR_SETUP_PICKS and
+        // HARBOR_SETUP_TEXT answering its pickers and fields), as a person pressing A would: a
+        // scripted run reaches "Start Harbor" without a keyboard.
+        const bool automatic = std::getenv("HARBOR_SETUP_AUTO") != nullptr;
+        auto next_step_at = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        Step acted_on = Step::Welcome;
+        bool acted = false;
+        int actions = 0;
+
         bool first = true;
         while (brls::Application::mainLoop()) {
+            if (automatic && !wizard.Busy() && actions < 80 &&
+                std::chrono::steady_clock::now() >= next_step_at) {
+                next_step_at = std::chrono::steady_clock::now() + std::chrono::milliseconds(700);
+                actions++;
+                const Step step = wizard.step();
+                if (step != acted_on) {
+                    acted_on = step;
+                    acted = false;
+                }
+                const bool pick = !wizard.CanGoNext() && !acted &&
+                                  (step == Step::Keys || step == Step::Firmware || step == Step::Games);
+                LOG_INFO(Frontend, "harbor: setup auto: page {}, {}", static_cast<int>(step),
+                         pick ? "choosing" : wizard.CanGoNext() ? "next" : "skip");
+                if (pick) {
+                    acted = true;
+                    step == Step::Keys       ? wizard.ChooseProdKeys()
+                    : step == Step::Firmware ? wizard.ChooseFirmwareFile()
+                                             : wizard.AddFolder();
+                } else if (wizard.CanGoNext()) {
+                    wizard.Next();
+                } else if (wizard.CanSkip()) {
+                    wizard.Skip();
+                }
+            }
             if (first) {
                 first = false;
                 LOG_INFO(Frontend, "harbor: setup window up after {} ms",

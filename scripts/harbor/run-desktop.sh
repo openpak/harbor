@@ -166,6 +166,10 @@ LAUNCH="$RUN/launch.sh"
     # (the Borealis setup wizard) through SDL_APP_ID.
     echo "export SDL_APP_ID='org.openpak.harbor.harness'"
     [ "$AUTO_SLEEP" = 1 ] && echo "export HARBOR_AUTO_SLEEP=1"
+    # The setup wizard's scripted answers (test-harness.md), passed on from this shell.
+    for v in HARBOR_SETUP_PICKS HARBOR_SETUP_TEXT HARBOR_SETUP_AUTO; do
+        [ -n "${!v:-}" ] && printf 'export %s=%q\n' "$v" "${!v}"
+    done
     echo "echo \$\$ > '$RUN/pid'"
     # Console mode (--console) is the owner's: the setup wizard when the setup is not complete,
     # then HOME, whose Restart and Turn Off restart and close Harbor. Otherwise --qlaunch boots

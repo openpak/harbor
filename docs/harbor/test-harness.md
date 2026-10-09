@@ -105,6 +105,17 @@ variables answer its pickers and text fields without a dialog or a keyboard, in 
 |---|---|
 | `HARBOR_SETUP_PICKS="<path>\|<path>\|..."` | the next file and folder pickers (prod.keys, the firmware zip, the game/DLC/update folders) |
 | `HARBOR_SETUP_TEXT="<file>\|<n>\|=<text>\|..."` | the next text fields (the OpenPak account page): `<n>` is line `n` of `<file>`, only the value of a `key=value` line; `=<text>` is the text itself |
+| `HARBOR_SETUP_AUTO=1` | walks the wizard by itself: Next where it can, the next picker where a page needs a file or folder, Skip (Later) on the driver and account pages, then Start Harbor |
+
+`run-desktop.sh` passes these three on from its own environment. A first run end to end:
+
+```
+HARBOR_SETUP_AUTO=1 HARBOR_SETUP_PICKS="$SCR/run/<name>/games" scripts/harbor/run-desktop.sh <name> --fresh --console
+```
+
+(the keys and firmware are already in place, so the only picker is the games folder); the log shows
+`harbor: setup closed, completed`, `harbor: setup completed; starting the console in a fresh process`, then
+HOME booting in console mode.
 
 `HARBOR_SETUP_TEXT` is for the test account: point it at the secrets file and give line numbers, so the
 values never appear on a command line, in the log (only `harbor: scripted text`) or in this repo. The

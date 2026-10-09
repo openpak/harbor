@@ -223,7 +223,12 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
         // its own platform, once per process. The console starts in a fresh process (same pid).
         LOG_INFO(Frontend, "harbor: setup completed; starting the console in a fresh process");
         Common::Log::Stop();
+        // The fresh process boots the console: --harbor-console says so (TakeFlag removed the flags
+        // this one was started with, and a test-harness run would otherwise boot what its other
+        // flags ask).
         std::vector<char*> args(argv, argv + argc);
+        static char console_flag[] = "--harbor-console";
+        args.push_back(console_flag);
         args.push_back(nullptr);
         execv("/proc/self/exe", args.data());
         // execv failed: go on in this process.
