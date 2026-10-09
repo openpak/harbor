@@ -99,6 +99,7 @@ IAudioController::IAudioController(Core::System& system_)
 
     m_set_sys =
         system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", true);
+    HARBOR_CRUMB_ONCE("audctl: set:sys reached");
     notification_event = service_context.CreateEvent("IAudioController:NotificationEvent");
 
     // Probably shouldn't do this in constructor?
@@ -132,6 +133,7 @@ IAudioController::IAudioController(Core::System& system_)
     } catch (...) {
         // Catch if something fails, since this is constructor
     }
+    HARBOR_CRUMB_ONCE("audctl: IAudioController constructed");
 }
 
 IAudioController::~IAudioController() {
@@ -253,6 +255,7 @@ Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_au
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), AudioController.cs.
 bool IAudioController::UseConsoleGain() {
     if (!m_console_gain) {
+        HARBOR_CRUMB_ONCE("audctl: console volume decided");
         m_console_gain = system.GetAppletManager().IsHomeSession();
         if (*m_console_gain) {
             // The constructor seeded the targets and the sink from the host's volume: a console
@@ -270,6 +273,7 @@ bool IAudioController::UseConsoleGain() {
                 LOG_WARNING(Audio, "Failed to reset the sink volume for the console volume");
             }
             ApplyConsoleGain();
+            HARBOR_CRUMB_ONCE("audctl: console volume applied");
         }
     }
     return *m_console_gain;

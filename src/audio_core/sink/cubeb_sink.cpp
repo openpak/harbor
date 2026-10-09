@@ -261,6 +261,7 @@ SinkStream* CubebSink::AcquireSinkStream(Core::System& system, u32 system_channe
                                          const std::string& name, StreamType type) {
     HARBOR_CRUMB("audio: cubeb stream creation");
     system_channels = system_channels_;
+    std::scoped_lock lk{sink_streams_mutex};
     SinkStreamPtr& stream = sink_streams.emplace_back(std::make_unique<CubebSinkStream>(
         ctx, device_channels, system_channels, output_device, input_device, name, type, system));
     stream->SetDeviceVolume(device_volume);
@@ -270,6 +271,7 @@ SinkStream* CubebSink::AcquireSinkStream(Core::System& system, u32 system_channe
 }
 
 void CubebSink::CloseStream(SinkStream* stream) {
+    std::scoped_lock lk{sink_streams_mutex};
     for (size_t i = 0; i < sink_streams.size(); i++) {
         if (sink_streams[i].get() == stream) {
             sink_streams[i].reset();
@@ -280,6 +282,7 @@ void CubebSink::CloseStream(SinkStream* stream) {
 }
 
 void CubebSink::CloseStreams() {
+    std::scoped_lock lk{sink_streams_mutex};
     sink_streams.clear();
 }
 
@@ -288,6 +291,7 @@ f32 CubebSink::GetDeviceVolume() const {
 }
 
 void CubebSink::SetDeviceVolume(f32 volume) {
+    std::scoped_lock lk{sink_streams_mutex};
     device_volume = volume;
     for (auto& stream : sink_streams) {
         stream->SetDeviceVolume(volume);
@@ -295,6 +299,7 @@ void CubebSink::SetDeviceVolume(f32 volume) {
 }
 
 void CubebSink::SetSystemVolume(f32 volume) {
+    std::scoped_lock lk{sink_streams_mutex};
     for (auto& stream : sink_streams) {
         stream->SetSystemVolume(volume);
     }

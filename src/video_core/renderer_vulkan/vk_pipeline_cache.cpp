@@ -14,6 +14,7 @@
 #include <vector>
 #include <bit>
 #include <numeric>
+#include "common/harbor_crash.h"
 #include "common/cityhash.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
