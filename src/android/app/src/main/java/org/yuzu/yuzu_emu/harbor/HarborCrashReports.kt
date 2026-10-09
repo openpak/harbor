@@ -52,6 +52,8 @@ object HarborCrashReports {
      * the last crash left. `next` runs when the user is done (at once when there is nothing to ask).
      */
     fun onLaunch(activity: Activity, next: () -> Unit) {
+        // Why the last processes ended (a native crash's tombstone decoded), into eden_log.txt.
+        HarborExitReasons.logRecent(activity)
         install()
         when {
             consent() == CONSENT_UNASKED -> askConsent(activity, next)
