@@ -263,8 +263,9 @@ endif()
 
 create_target_directory_groups(common)
 
-if (NOT ANDROID AND NOT WIN32)
-    # harbor_crash_selftest: crash-report scrubbing, consent, offer, pruning and a real native crash.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID)
+    # harbor_crash_selftest: crash-report scrubbing, consent, offer, pruning and a real native crash
+    # (Linux: it uses prctl and fork).
     add_executable(harbor_crash_selftest harbor_crash_selftest.cpp)
     target_link_libraries(harbor_crash_selftest PRIVATE common)
 endif()

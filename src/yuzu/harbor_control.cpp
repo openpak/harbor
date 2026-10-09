@@ -14,10 +14,12 @@
 #include <string_view>
 #include <vector>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -224,6 +226,11 @@ HarborControl::HarborControl(std::string fifo_path_, QObject* gui_context_,
                              InputCommon::InputSubsystem& input_subsystem_, Hooks hooks_)
     : fifo_path{std::move(fifo_path_)}, gui_context{gui_context_},
       input_subsystem{input_subsystem_}, hooks{std::move(hooks_)} {
+#ifdef _WIN32
+    // The harness is for Linux and macOS (a FIFO); Windows has no named pipe at a plain path.
+    LOG_ERROR(Frontend, "harbor-control: not available on Windows");
+    return;
+#else
     std::error_code ec;
     std::filesystem::remove(fifo_path, ec);
     if (mkfifo(fifo_path.c_str(), 0600) != 0) {
@@ -238,6 +245,7 @@ HarborControl::HarborControl(std::string fifo_path_, QObject* gui_context_,
     }
     LOG_INFO(Frontend, "harbor-control: listening on \"{}\"", fifo_path);
     reader = std::thread([this] { ReadLoop(); });
+#endif
 }
 
 HarborControl::~HarborControl() {
@@ -245,14 +253,17 @@ HarborControl::~HarborControl() {
     if (reader.joinable()) {
         reader.join();
     }
+#ifndef _WIN32
     if (fifo_fd >= 0) {
         close(fifo_fd);
         std::error_code ec;
         std::filesystem::remove(fifo_path, ec);
     }
+#endif
 }
 
 void HarborControl::ReadLoop() {
+#ifndef _WIN32
     Common::SetCurrentThreadName("HarborControl");
 
     std::string pending;
@@ -273,6 +284,7 @@ void HarborControl::ReadLoop() {
             Execute(line);
         }
     }
+#endif
 }
 
 void HarborControl::SetButton(int button, bool pressed) {

@@ -22,11 +22,18 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/utsname.h>
-#include <ucontext.h>
 #include <unistd.h>
 #include <unwind.h>
+#ifdef __APPLE__
+// <ucontext.h> wants _XOPEN_SOURCE there; the type alone is enough.
+#include <sys/ucontext.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#else
+#include <ucontext.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#endif
 #endif
 
 #include "common/demangle.h"
@@ -745,10 +752,28 @@ void WriteRegister(RawOut& out, const char* name, u64 value) {
 
 /// Reads `size` bytes of this process's memory without faulting (false when unreadable).
 bool SafeRead(uintptr_t address, void* to, std::size_t size) {
+#ifdef __APPLE__
+    mach_vm_size_t read = 0;
+    return mach_vm_read_overwrite(mach_task_self(), address, size,
+                                  reinterpret_cast<mach_vm_address_t>(to), &read) == KERN_SUCCESS &&
+           read == size;
+#else
     iovec local{to, size};
     iovec remote{reinterpret_cast<void*>(address), size};
     return syscall(SYS_process_vm_readv, getpid(), &local, 1, &remote, 1, 0) ==
            static_cast<ssize_t>(size);
+#endif
+}
+
+/// The calling thread's id as the system shows it (async-signal-safe).
+u64 ThreadId() {
+#ifdef __APPLE__
+    std::uint64_t tid = 0;
+    pthread_threadid_np(nullptr, &tid);
+    return tid;
+#else
+    return static_cast<u64>(syscall(SYS_gettid));
+#endif
 }
 
 long DumpFaultImpl(int sig, siginfo_t* info, void* raw_context, const char* who) {
@@ -765,7 +790,7 @@ long DumpFaultImpl(int sig, siginfo_t* info, void* raw_context, const char* who)
     out.Str(") epoch ");
     out.Dec(static_cast<u64>(now.tv_sec));
     out.Str(" tid ");
-    out.Dec(static_cast<u64>(syscall(SYS_gettid)));
+    out.Dec(ThreadId());
     out.Str("\nsignal ");
     out.Dec(static_cast<u64>(sig));
     out.Str(" (");
@@ -1268,7 +1293,7 @@ void Breadcrumb(std::string_view what) {
     long tid = 0;
 #ifndef _WIN32
     pthread_getname_np(pthread_self(), name, sizeof(name));
-    tid = static_cast<long>(syscall(SYS_gettid));
+    tid = static_cast<long>(ThreadId());
     if (const int fd = CrumbFd().load(); fd >= 0) {
         timespec now{};
         clock_gettime(CLOCK_REALTIME, &now);
