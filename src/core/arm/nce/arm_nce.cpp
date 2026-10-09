@@ -174,12 +174,39 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
     return HandleFailedGuestFault(guest_ctx, raw_info, raw_context);
 }
 
+// A host fault NCE does not own goes to whatever handled the signal before NCE. A previous action
+// with no handler (the default, or one never recorded) is the default: the process ends with the
+// signal instead of calling a null pointer.
+static void ChainToPreviousAction(const struct sigaction& previous, int sig, void* raw_info,
+                                  void* raw_context) {
+    auto* info = static_cast<siginfo_t*>(raw_info);
+    if ((previous.sa_flags & SA_SIGINFO) != 0) {
+        if (previous.sa_sigaction != nullptr) {
+            previous.sa_sigaction(sig, info, raw_context);
+            return;
+        }
+    } else if (previous.sa_handler == SIG_IGN) {
+        return;
+    } else if (previous.sa_handler != SIG_DFL && previous.sa_handler != nullptr) {
+        previous.sa_handler(sig);
+        return;
+    }
+    struct sigaction default_action {};
+    default_action.sa_handler = SIG_DFL;
+    sigemptyset(&default_action.sa_mask);
+    Common::SigAction(sig, &default_action, nullptr);
+    // A fault happens again on return, now with the default action; a sent signal is re-raised.
+    if (info == nullptr || info->si_code <= 0) {
+        raise(sig);
+    }
+}
+
 void ArmNce::HandleHostAlignmentFault(int sig, void* raw_info, void* raw_context) {
-    return g_orig_bus_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
+    ChainToPreviousAction(g_orig_bus_action, sig, raw_info, raw_context);
 }
 
 void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
-    return g_orig_segv_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
+    ChainToPreviousAction(g_orig_segv_action, sig, raw_info, raw_context);
 }
 
 void ArmNce::LockThread(Kernel::KThread* thread) {
@@ -323,7 +350,7 @@ void ArmNce::Initialize() {
         alignment_fault_action.sa_sigaction =
             reinterpret_cast<HandlerType>(&ArmNce::GuestAlignmentFaultSignalHandler);
         alignment_fault_action.sa_mask = signal_mask;
-        Common::SigAction(GuestAlignmentFaultSignal, &alignment_fault_action, nullptr);
+        Common::SigAction(GuestAlignmentFaultSignal, &alignment_fault_action, &g_orig_bus_action);
 
         struct sigaction access_fault_action {};
         access_fault_action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
