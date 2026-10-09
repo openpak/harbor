@@ -240,6 +240,16 @@ void IdlePolicy::LoadAndApplySettings() {
              m_settings.sleeps_while_playing_media, m_settings.prevents_screen_burn_in);
 }
 
+void IdlePolicy::LoadSettingsOnce() {
+    {
+        std::scoped_lock lk{m_lock};
+        if (m_settings_loaded) {
+            return;
+        }
+    }
+    this->LoadAndApplySettings();
+}
+
 void IdlePolicy::ReportUserIsActive() {
     std::scoped_lock lk{m_lock};
     this->OnActivityLocked();
@@ -299,9 +309,10 @@ void IdlePolicy::Tick() {
     if (!applet_manager.IsHomeSession() || window_system == nullptr) {
         return;
     }
-    if (!m_settings_loaded) {
-        this->LoadAndApplySettings();
-    }
+    // This runs on the HostTiming thread. Nothing here calls another service: the settings are
+    // loaded on am's thread (LoadSettingsOnce, IGlobalStateController 10), and until they are,
+    // and until HOME and its overlay are up (am's context), the timer only stands still, without
+    // touching the input devices.
     IdleHandlingContext context{};
     window_system->GetIdleHandlingContext(context);
 
@@ -309,13 +320,19 @@ void IdlePolicy::Tick() {
     bool dim = false;
     {
         std::scoped_lock lk{m_lock};
+        const auto now = std::chrono::steady_clock::now();
+        if (!m_settings_loaded || !context.valid || context.sequence_running ||
+            g_harness_off.load()) {
+            m_last_tick = now;
+            this->OnActivityLocked();
+            return;
+        }
+        HARBOR_CRUMB_ONCE("omm: first full idle pass");
         const bool input = this->PollInput();
         // A host pause (the tick stood still) does not count as idle time.
-        const auto now = std::chrono::steady_clock::now();
         const bool resumed = now - m_last_tick > 4 * TickPeriod;
         m_last_tick = now;
-        if (input || resumed || context.sequence_running || !context.valid ||
-            g_harness_off.load()) {
+        if (input || resumed) {
             this->OnActivityLocked();
             return;
         }

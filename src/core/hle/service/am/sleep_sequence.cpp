@@ -259,7 +259,10 @@ void WindowSystem::GetIdleHandlingContext(OMM::IdleHandlingContext& out_context)
     out_context.sequence_running =
         m_sleep->IsActive() || m_shutdown_stage != ShutdownStage::None;
     Applet* const front = m_foreground_requested_applet;
-    if (!m_system.GetAppletManager().IsHomeSession() || front == nullptr) {
+    // The timer starts once HOME and its overlay are up (as a console's idle has nothing to do
+    // before HOME's first SetHandlingContext).
+    if (!m_system.GetAppletManager().IsHomeSession() || front == nullptr ||
+        m_home_menu == nullptr || m_overlay_display == nullptr) {
         return;
     }
     std::scoped_lock lk2{front->lock};
@@ -271,6 +274,25 @@ void WindowSystem::GetIdleHandlingContext(OMM::IdleHandlingContext& out_context)
     out_context.extension = static_cast<u32>(front->idle_time_detection_extension);
     out_context.auto_sleep_disabled = front->auto_sleep_disabled;
     out_context.media_playing = front->media_playback_state;
+}
+
+// On am's thread (WindowSystem::Update), outside its lock: idle:sys loads its settings once HOME
+// and its overlay are up, from here rather than from its timer's host thread.
+void WindowSystem::LoadIdleSettingsIfReady() {
+    if (m_idle_settings_requested.load()) {
+        return;
+    }
+    {
+        std::scoped_lock lk{m_lock};
+        if (!m_system.GetAppletManager().IsHomeSession() || m_home_menu == nullptr ||
+            m_overlay_display == nullptr) {
+            return;
+        }
+    }
+    if (auto* idle = OMM::GetIdlePolicy()) {
+        m_idle_settings_requested = true;
+        idle->LoadSettingsOnce();
+    }
 }
 
 // idle's auto-sleep time: on a console omm's idle signals it, spsm notifies am (notification 3,

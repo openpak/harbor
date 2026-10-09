@@ -60,6 +60,8 @@ public:
     bool IsAutoPowerDownRequested();
     bool IsDimmed();
     void LoadAndApplySettings();
+    // From am's thread once HOME is up: the first settings load (never from the timer's thread).
+    void LoadSettingsOnce();
     void ReportUserIsActive();
 
     // The times for a context and the current settings, 0 for never (exposed for the self-check).

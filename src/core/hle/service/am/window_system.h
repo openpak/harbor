@@ -126,6 +126,7 @@ public:
     // idle:sys: the context of the applet in front, and its auto-sleep time being reached.
     void GetIdleHandlingContext(OMM::IdleHandlingContext& out_context);
     void OnAutoPowerDown();
+    void LoadIdleSettingsIfReady();
 
 private:
     void UpdateCurrentApplicationLocked();
@@ -204,6 +205,7 @@ private:
 
     // Sleep state (under m_lock).
     std::unique_ptr<SleepSequence> m_sleep;
+    std::atomic<bool> m_idle_settings_requested{};
 };
 
 } // namespace Service::AM
