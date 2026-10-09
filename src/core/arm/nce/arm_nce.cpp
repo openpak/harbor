@@ -7,6 +7,7 @@
 #include <cinttypes>
 #include <memory>
 
+#include "common/harbor_crash.h"
 #include "common/signal_chain.h"
 #include "core/arm/nce/arm_nce.h"
 #include "core/arm/nce/interpreter_visitor.h"
@@ -177,18 +178,34 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
 // A host fault NCE does not own goes to whatever handled the signal before NCE. A previous action
 // with no handler (the default, or one never recorded) is the default: the process ends with the
 // signal instead of calling a null pointer.
+// Harbor: every such fault is dumped first (crash-reports/native-fault.txt, logged at the next
+// start), and the dump dropped again when the previous handler handled it after all.
+static bool ActionIsDefault(int sig) {
+    struct sigaction current {};
+    Common::SigAction(sig, nullptr, &current);
+    return (current.sa_flags & SA_SIGINFO) == 0 && current.sa_handler == SIG_DFL;
+}
+
 static void ChainToPreviousAction(const struct sigaction& previous, int sig, void* raw_info,
                                   void* raw_context) {
     auto* info = static_cast<siginfo_t*>(raw_info);
+    const long dump = Common::HarborCrash::DumpFault(sig, raw_info, raw_context, "nce host fault");
     if ((previous.sa_flags & SA_SIGINFO) != 0) {
         if (previous.sa_sigaction != nullptr) {
             previous.sa_sigaction(sig, info, raw_context);
+            if (!ActionIsDefault(sig)) {
+                Common::HarborCrash::DiscardFaultDump(dump);
+            }
             return;
         }
     } else if (previous.sa_handler == SIG_IGN) {
+        Common::HarborCrash::DiscardFaultDump(dump);
         return;
     } else if (previous.sa_handler != SIG_DFL && previous.sa_handler != nullptr) {
         previous.sa_handler(sig);
+        if (!ActionIsDefault(sig)) {
+            Common::HarborCrash::DiscardFaultDump(dump);
+        }
         return;
     }
     struct sigaction default_action {};
@@ -321,6 +338,7 @@ void ArmNce::Initialize() {
     // Set up signals.
     static std::once_flag flag;
     std::call_once(flag, [] {
+        Common::HarborCrash::PrepareFaultDump();
         using HandlerType = decltype(sigaction::sa_sigaction);
 
         sigset_t signal_mask;

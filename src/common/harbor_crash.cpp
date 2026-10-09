@@ -25,6 +25,8 @@
 #include <ucontext.h>
 #include <unistd.h>
 #include <unwind.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
 #endif
 
 #include "common/demangle.h"
@@ -706,11 +708,137 @@ void WritePartial(int sig, siginfo_t* info, void* raw_context) {
     ::close(fd);
 }
 
+// ---- native fault dumps ----
+// Diagnostics for a process a signal is about to end, written whatever the crash-report consent:
+// only the signal, registers and code addresses with their module file names, nothing the user
+// typed or owns. The file is opened at start-up so a handler only writes; the next start logs it.
+
+constexpr const char* FaultDumpName = "native-fault.txt";
+std::atomic<int> g_fault_fd{-1};
+
+void WriteRegister(RawOut& out, const char* name, u64 value) {
+    out.Str(name);
+    out.Str("=");
+    out.Hex(value);
+    out.Str(" ");
+}
+
+/// Reads `size` bytes of this process's memory without faulting (false when unreadable).
+bool SafeRead(uintptr_t address, void* to, std::size_t size) {
+    iovec local{to, size};
+    iovec remote{reinterpret_cast<void*>(address), size};
+    return syscall(SYS_process_vm_readv, getpid(), &local, 1, &remote, 1, 0) ==
+           static_cast<ssize_t>(size);
+}
+
+long DumpFaultImpl(int sig, siginfo_t* info, void* raw_context, const char* who) {
+    const int fd = g_fault_fd.load();
+    if (fd < 0) {
+        return -1;
+    }
+    const long start = static_cast<long>(::lseek(fd, 0, SEEK_END));
+    RawOut out{fd};
+    timespec now{};
+    clock_gettime(CLOCK_REALTIME, &now);
+    out.Str("==== native fault (");
+    out.Str(who);
+    out.Str(") epoch ");
+    out.Dec(static_cast<u64>(now.tv_sec));
+    out.Str(" tid ");
+    out.Dec(static_cast<u64>(syscall(SYS_gettid)));
+    out.Str("\nsignal ");
+    out.Dec(static_cast<u64>(sig));
+    out.Str(" (");
+    out.Str(SignalName(sig));
+    out.Str(") code ");
+    out.Dec(static_cast<u64>(static_cast<u32>(info != nullptr ? info->si_code : 0)));
+    out.Str(" fault address ");
+    out.Hex(reinterpret_cast<uintptr_t>(info != nullptr ? info->si_addr : nullptr));
+    out.Str("\n");
+
+    uintptr_t pc = 0, lr = 0, fp = 0, sp = 0;
+    [[maybe_unused]] auto* uc = static_cast<ucontext_t*>(raw_context);
+#if defined(__linux__) && defined(__aarch64__)
+    if (uc != nullptr) {
+        const auto& m = uc->uc_mcontext;
+        pc = m.pc;
+        lr = m.regs[30];
+        fp = m.regs[29];
+        sp = m.sp;
+        WriteRegister(out, "pc", m.pc);
+        WriteRegister(out, "lr", m.regs[30]);
+        WriteRegister(out, "sp", m.sp);
+        WriteRegister(out, "fp", m.regs[29]);
+        WriteRegister(out, "pstate", m.pstate);
+        out.Str("\n");
+        static constexpr const char* names[29] = {
+            "x0",  "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",  "x8",  "x9",
+            "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "x18", "x19",
+            "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28"};
+        for (int i = 0; i < 29; ++i) {
+            WriteRegister(out, names[i], m.regs[i]);
+            if (i % 4 == 3) {
+                out.Str("\n");
+            }
+        }
+        out.Str("\n");
+    }
+#elif defined(__linux__) && defined(__x86_64__)
+    if (uc != nullptr) {
+        const auto* g = uc->uc_mcontext.gregs;
+        pc = static_cast<uintptr_t>(g[REG_RIP]);
+        fp = static_cast<uintptr_t>(g[REG_RBP]);
+        sp = static_cast<uintptr_t>(g[REG_RSP]);
+        static constexpr std::pair<const char*, int> regs[] = {
+            {"rip", REG_RIP}, {"rsp", REG_RSP}, {"rbp", REG_RBP}, {"rax", REG_RAX},
+            {"rbx", REG_RBX}, {"rcx", REG_RCX}, {"rdx", REG_RDX}, {"rsi", REG_RSI},
+            {"rdi", REG_RDI}, {"r8", REG_R8},   {"r9", REG_R9},   {"r10", REG_R10},
+            {"r11", REG_R11}, {"r12", REG_R12}, {"r13", REG_R13}, {"r14", REG_R14},
+            {"r15", REG_R15}};
+        int n = 0;
+        for (const auto& [name, index] : regs) {
+            WriteRegister(out, name, static_cast<u64>(g[index]));
+            if (++n % 4 == 0) {
+                out.Str("\n");
+            }
+        }
+        out.Str("\n");
+    }
+#endif
+
+    // The frame-pointer chain, every read checked: [fp] is the caller's fp, [fp + 8] its return.
+    out.Str("backtrace (frame pointers):\n");
+    if (pc != 0) {
+        WriteFrame(out, pc);
+    }
+    if (lr != 0) {
+        WriteFrame(out, lr);
+    }
+    for (int depth = 0; depth < 64 && fp != 0 && (fp & 7) == 0; ++depth) {
+        if (sp != 0 && (fp < sp || fp - sp > 8 * 1024 * 1024)) {
+            break;
+        }
+        uintptr_t frame[2]{};
+        if (!SafeRead(fp, frame, sizeof(frame)) || frame[1] == 0) {
+            break;
+        }
+        WriteFrame(out, frame[1]);
+        if (frame[0] <= fp) {
+            break;
+        }
+        fp = frame[0];
+    }
+    out.Str("\n");
+    ::fsync(fd);
+    return start;
+}
+
 void FatalSignalHandler(int sig, siginfo_t* info, void* raw_context) {
     std::size_t index = 0;
     while (index < FatalSignals.size() && FatalSignals[index] != sig) {
         ++index;
     }
+    DumpFaultImpl(sig, info, raw_context, "harbor fatal-signal handler");
     if (!g_in_handler.exchange(true) && g_recording.load()) {
         WritePartial(sig, info, raw_context);
     }
@@ -818,6 +946,42 @@ void StartRecordingLocked() {
     g_recording.store(true);
 }
 
+/// The last process's fault dumps go to the log; then the file is opened, empty, for this one.
+void PrepareFaultDumpLocked() {
+#ifndef _WIN32
+    if (g_fault_fd.load() >= 0) {
+        return;
+    }
+    if (g_dir.empty()) {
+        g_dir = DefaultDirectory();
+    }
+    std::error_code ec;
+    fs::create_directories(g_dir, ec);
+    const fs::path path = g_dir / FaultDumpName;
+    const std::string previous = ReadFile(path, 256 * 1024);
+    if (!previous.empty()) {
+        std::size_t at = 0;
+        while (at < previous.size()) {
+            std::size_t end = previous.find('\n', at);
+            if (end == std::string::npos) {
+                end = previous.size();
+            }
+            if (end > at) {
+                LOG_INFO(Common, "harbor: native fault: {}",
+                         Scrub(std::string_view{previous}.substr(at, end - at)));
+            }
+            at = end + 1;
+        }
+    }
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        LOG_WARNING(Common, "harbor: the native fault dump file could not be opened");
+        return;
+    }
+    g_fault_fd = fd;
+#endif
+}
+
 } // namespace
 
 fs::path DefaultDirectory() {
@@ -834,6 +998,7 @@ void Install(fs::path dir) {
     g_dir = dir.empty() ? DefaultDirectory() : std::move(dir);
     g_consent = ReadConsentLocked();
     FinishPartialLocked();
+    PrepareFaultDumpLocked();
     if (g_consent == Consent::Declined) {
         return;
     }
@@ -991,6 +1156,28 @@ std::string Scrub(std::string_view text) {
     out = Common::RedactPath(out);
     out = RedactOpaqueRuns(std::move(out));
     return out;
+}
+
+void PrepareFaultDump() {
+    std::scoped_lock lk{g_state_mutex};
+    PrepareFaultDumpLocked();
+}
+
+long DumpFault(int sig, void* info, void* ucontext, const char* who) {
+#ifndef _WIN32
+    return DumpFaultImpl(sig, static_cast<siginfo_t*>(info), ucontext, who);
+#else
+    return -1;
+#endif
+}
+
+void DiscardFaultDump(long start) {
+#ifndef _WIN32
+    const int fd = g_fault_fd.load();
+    if (fd >= 0 && start >= 0) {
+        [[maybe_unused]] const int result = ::ftruncate(fd, static_cast<off_t>(start));
+    }
+#endif
 }
 
 void SetHostIdentityForTest(std::string home, std::string user) {
