@@ -18,6 +18,14 @@ G2.AM.19, G3.PRV.6).
 - am has no "(STUBBED)" log left (2026-10-08): every former stub either answers as a console does
   (state kept per applet and answered back; no such hardware here, such as GPU time slices or a
   CPU boost) and logs at debug, or logs as an unknown contract with its reason.
+- acc and ns, established from 23.0.1 and no longer unknown (2026-10-09): acc IAdministrator 141
+  (0x0859F2B0: refuses 2124-0200 without a BAAS registration, then 2124-0220 without a linked
+  Nintendo Account, before the refresh); IManagerForApplication 130/136 (0x1fa5c0:
+  NasUserBaseForApplication 0x68 as an auto-select buffer, a work buffer of at least 0x800, the
+  Nintendo Account id out); acc:su 112 (0x19ac70: 395 when the save's thumbnail header is not one
+  110 wrote, which on Harbor is always). Still unknown: acc 142 (answered as 141, the seconds
+  threshold ignored); ns ROACD 4 (the candidates' layout is established, the output type is
+  inferred); ns 936 (logged once, then at debug: qlaunch polls it every second).
 
 ## Reconciliation with the Ryujinx Harbor
 
@@ -60,11 +68,12 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | Area | Site | What is logged (answer and reason) |
 |---|---|---|
 | common | `src/common/redact.h:14` | ns:am2 4042 answered success with no data |
-| acc | `src/core/hle/service/acc/acc.cpp:291` | acc IAdministrator 111, nothing to invalidate |
-| acc | `src/core/hle/service/acc/acc.cpp:297` | acc IAdministrator 113, answering 0 |
-| acc | `src/core/hle/service/acc/acc.cpp:304` | acc IAdministrator 400, answering false |
-| acc | `src/core/hle/service/acc/acc.cpp:311` | acc IAdministrator 401, an async context already done |
-| acc | `src/core/hle/service/acc/acc.cpp:1620` | acc:su 230 dauth failure answered as InternetRequestDenied |
+| acc | `src/core/hle/service/acc/acc.cpp:305` | acc IAdministrator 111, nothing to invalidate |
+| acc | `src/core/hle/service/acc/acc.cpp:311` | acc IAdministrator 113, answering 0 |
+| acc | `src/core/hle/service/acc/acc.cpp:318` | acc IAdministrator 400, answering false |
+| acc | `src/core/hle/service/acc/acc.cpp:325` | acc IAdministrator 401, an async context already done |
+| acc | `src/core/hle/service/acc/acc.cpp:450` | acc IAdministrator 142 ({} s), answered as 141 |
+| acc | `src/core/hle/service/acc/acc.cpp:1719` | acc:su 230 dauth failure answered as InternetRequestDenied |
 | acc | `src/core/hle/service/acc/oauth_procedure.cpp:129` | acc GetRequest: one receive-list entry, URL and callback written back to back |
 | acc | `src/core/hle/service/acc/oauth_procedure.cpp:156` | acc resume of an unknown procedure session, refused with InvalidArgument |
 | am | `src/core/hle/service/am/frontend/applet_general.cpp:222` | library applet {} has no host frontend; it answers 0x1000 zero bytes and exits |
@@ -176,12 +185,12 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | ns | `src/core/hle/service/ns/read_only_application_control_data_interface.cpp:241` | IReadOnlyApplicationControlDataInterface 4, {} candidate(s) |
 | ns | `src/core/hle/service/ns/read_only_application_control_data_interface.cpp:358` | IReadOnlyApplicationControlDataInterface 28 for {:016X}, flag {}: answered success, no control-data download queued (the flag's meaning is not established) |
 | ns | `src/core/hle/service/ns/read_only_application_control_data_interface.cpp:372` | IReadOnlyApplicationControlDataInterface 20 for {:016X} (source {}, flags {}/{}, extra {:#x}); answered as 19 |
-| olsc | `src/core/hle/service/olsc/olsc_service_for_system_service.cpp:161` | olsc:s 209 answered like 200 (two zero bytes), app={:016X} |
-| olsc | `src/core/hle/service/olsc/olsc_service_for_system_service.cpp:248` | olsc 1001 request 100 answered u32 1 (NX only) |
-| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:61` | olsc IAsyncResult 0 asked before done, answered 2179-1 |
-| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:179` | olsc RSC 12 first byte {} not read |
-| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:192` | olsc cache update: no list fetched, answered success |
-| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:215` | olsc RSC 13 notification token: no npns token, answered success |
+| olsc | `src/core/hle/service/olsc/olsc_service_for_system_service.cpp:154` | olsc:s 209 answered like 200 (two zero bytes), app={:016X} |
+| olsc | `src/core/hle/service/olsc/olsc_service_for_system_service.cpp:241` | olsc 1001 request 100 answered u32 1 (NX only) |
+| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:67` | olsc IAsyncResult 0 asked before done, answered 2179-1 |
+| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:181` | olsc RSC 12 first byte {} not read |
+| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:197` | olsc cache update: no list fetched, answered success |
+| olsc | `src/core/hle/service/olsc/remote_storage_controller.cpp:220` | olsc RSC 13 notification token: no npns token, answered success |
 | olsc | `src/core/hle/service/olsc/transfer_task_list_controller.cpp:200` | olsc TTLC 25 query not read, answered not found |
 | omm | `src/core/hle/service/omm/policy_manager_system.cpp:51` | idle:sys 3 SetHandlingContext from a guest; ignored |
 | pctl | `src/core/hle/service/pctl/parental_control_service.cpp:490` | pctl 1004: SNS posting restricted, answered 2142-0101 as before |
@@ -222,7 +231,6 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | ssl | `src/core/hle/service/ssl/ssl.cpp:726` | ssl ISslContext 13 GeneratePrivateKeyAndCert |
 | ssl | `src/core/hle/service/ssl/ssl.cpp:732` | ssl ISslContextForSystem 14 CreateConnectionEx, answered as CreateConnection |
 | ssl | `src/core/hle/service/ssl/ssl.cpp:941` | ssl:s 103 VerifySignature, answered success |
-| core | `src/core/openpak/olsc_transfer.cpp:257` | olsc delta upload not built, uploading the save whole |
 
 46 Ryujinx Harbor sites; 16 have no Eden-side site with the same interface and command (see the notes above for each):
 
