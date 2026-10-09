@@ -6,10 +6,13 @@
 
 namespace Service::OLSC {
 
-IStopperObject::IStopperObject(Core::System& system_) : ServiceFramework{system_, "IStopperObject"} {
-    // TODO(Maufeat): If ever needed, add cmds
-}
+IStopperObject::IStopperObject(Core::System& system_, std::function<void()> release_)
+    : ServiceFramework{system_, "IStopperObject"}, release{std::move(release_)} {}
 
-IStopperObject::~IStopperObject() = default;
+IStopperObject::~IStopperObject() {
+    if (release) {
+        release();
+    }
+}
 
 } // namespace Service::OLSC
