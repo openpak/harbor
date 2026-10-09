@@ -49,13 +49,15 @@ struct PlayTimerSettings {
 };
 static_assert(sizeof(PlayTimerSettings) == 0x44, "PlayTimerSettings has incorrect size.");
 
+// pctl 23.0.1 1460 (research/g3pctl-mii/notes.md section 5): qlaunch shows 0 and 3 as "Time's
+// up", 4 is a pending timestamp (not reproduced), 5 temporarily unlocked.
 enum class PlayTimerDisplayState : u8 {
-    TimesUp = 0,
-    BedtimeAlarm = 1,
+    NoLimitToday = 0,
+    Bedtime = 1,
     RemainingTime = 2,
-    Unknown3 = 3,
-    Unknown4 = 4,
-    Unknown5 = 5,
+    TimeOver = 3,
+    Pending = 4,
+    TemporarilyUnlocked = 5,
     TimerDisabled = 6,
     NotConfigured = 7,
 };
@@ -64,8 +66,8 @@ enum class PlayTimerDisplayState : u8 {
 struct PlayTimerRemainingTimeDisplayInfo {
     PlayTimerDisplayState state;
     INSERT_PADDING_BYTES(0x7);
-    u64 unknown_08;
-    u64 remaining_time;
+    s64 bedtime;        ///< POSIX seconds, state 1 only
+    s64 remaining_time; ///< nanoseconds
 };
 static_assert(sizeof(PlayTimerRemainingTimeDisplayInfo) == 0x18,
               "PlayTimerRemainingTimeDisplayInfo has incorrect size.");

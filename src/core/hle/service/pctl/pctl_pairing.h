@@ -53,8 +53,9 @@ public:
     static void SetWorker(std::weak_ptr<OpenPak::AsyncWorker> worker);
 
     /// Called (on the worker's signalling thread) whenever the setting in force changes: a sync
-    /// brought a new one, the PIN changed, or the pairing went. Returns an id for RemoveListener.
-    static int AddListener(std::function<void()> listener);
+    /// brought a new one, the PIN changed, or the pairing went (then with true). Returns an id for
+    /// RemoveListener.
+    static int AddListener(std::function<void(bool pairing_gone)> listener);
     static void RemoveListener(int id);
 
     /// What the restriction commands read: one consistent copy.
@@ -83,7 +84,10 @@ public:
     std::uint64_t FoundDevice() const;
     std::vector<Moon::Owner> Owners() const;
     std::optional<Moon::Owner> FirstOwner() const;
-    std::pair<std::vector<std::uint8_t>, std::string> Mii() const;
+    /// An owner's picture as pctl caches it (its NA id), with the HTTP media type: what the last
+    /// fetch for the owner's current picture URL brought, or nothing when that is not fetched yet.
+    std::optional<std::pair<std::vector<std::uint8_t>, std::string>> Mii(
+        std::uint64_t nintendo_account_id) const;
 
     void SetPin(std::string pin);
 
@@ -120,7 +124,8 @@ public:
     Moon::Description Retrieve();
     Moon::Description Unlink(bool force);
     Moon::Description Synchronize(bool* changed = nullptr);
-    Moon::Description FetchMii();
+    /// Fetch an owner's picture into the cache unless its current URL is cached already.
+    Moon::Description FetchMii(std::uint64_t nintendo_account_id);
 
     /// What pctl does on an unlink, or when a retrieve finds no owner left (.text 0x30004).
     void ForgetPairing();

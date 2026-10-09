@@ -140,7 +140,12 @@ private:
     void StartAsync(HLERequestContext& ctx, const char* what, Work work, u32 extra_word = 0,
                     bool extra = false);
     /// Nothing to do (not paired): AsyncData zero and handle zero, success.
-    void AnswerNothing(HLERequestContext& ctx, bool extra = false);
+    void AnswerNothing(HLERequestContext& ctx, bool extra = false, u32 extra_word = 0);
+    /// 2009/2011: the owner's picture (or its media type) from the cache at once, else async.
+    void PushDisplayInfo(HLERequestContext& ctx, bool ignore_temporary_unlock, bool for_1459);
+    void StartMii(HLERequestContext& ctx, const char* what, bool content_type);
+    /// The picture into the output buffer, min(buffer, picture); answers the picture's full size.
+    u32 WriteMii(HLERequestContext& ctx, const std::vector<u8>& image);
     /// Take the work `data` names back: its result, or 2142-0221.
     Result FinishAsync(const AsyncData& data);
     void PushEvent(HLERequestContext& ctx, Kernel::KEvent* event);
@@ -155,6 +160,8 @@ private:
     KernelHelpers::ServiceContext service_context;
 
     AsyncSlots slots;
+    /// The owner the last 2009/2011 asked about, for its Finish (2010/2012).
+    u64 mii_account{};
     std::array<std::shared_ptr<OpenPak::AsyncTask>, AsyncSlots::Count> tasks{};
     std::array<Kernel::KEvent*, AsyncSlots::Count> slot_events{};
 
@@ -166,6 +173,7 @@ private:
     Kernel::KEvent* pairing_account_changed_event{};
     std::shared_ptr<OpenPak::HostEvent> synchronization_host_event;
     std::shared_ptr<OpenPak::HostEvent> pin_code_changed_host_event;
+    std::shared_ptr<OpenPak::HostEvent> unlinked_host_event;
     int listener_id{};
 };
 

@@ -104,6 +104,33 @@ bool RatingPermits(std::uint8_t allowed_age, int organization, std::span<const s
 /// to 6.
 std::optional<int> TodaysLimit(const PlayTimerBlock& timer, int day_of_week);
 
+/// pctl 1459/1460's answer (nn::pctl::PlayTimerRemainingTimeDisplayInfo, 0x18 bytes): u8 state,
+/// u64 bedtime as POSIX seconds (state 1 only), u64 remaining nanoseconds (to bedtime in state 1,
+/// to the day's limit in state 2). 23.0.1 impl 0x0852F0A0 and 0x08559040
+/// (research/g3pctl-mii/notes.md section 5). qlaunch draws state 0 and 3 as "Time's up", 2 as the
+/// time left, 1 as the bedtime, 6 as the bare icon and hides the pill on 7.
+struct PlayTimerDisplay {
+    std::uint8_t state = 0;
+    std::int64_t bedtime = 0;
+    std::int64_t remaining_ns = 0;
+};
+
+/// What the clock says now: local time (for the day's regulation and bedtime), POSIX seconds and
+/// the time played today.
+struct PlayTimerNow {
+    int day_of_week = 0; ///< 0 Sunday
+    int hour = 0;
+    int minute = 0;
+    int second = 0;
+    std::int64_t posix = 0;
+    std::int64_t played_ns = 0;
+};
+
+/// 1460 (`for_1459` false) or 1459 (true: only 0, 1 or 2, a used-up day reads 0 and state 1
+/// carries no remaining time).
+PlayTimerDisplay DisplayInfo(const PlayTimerBlock& timer, bool pin_set, bool temporarily_unlocked,
+                             bool ignore_temporary_unlock, const PlayTimerNow& now, bool for_1459);
+
 } // namespace Rules
 
 // The diff bits of pctl's settings diff (0x425c0, play timer 0x52ef0).

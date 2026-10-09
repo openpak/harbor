@@ -363,10 +363,17 @@ IParentalControlService::IParentalControlService(Core::System& system_, Capabili
     // parental-controls state then (IsRestrictionEnabled, the temporary unlock, the play timer).
     synchronization_host_event = worker->MakeHostEvent(synchronization_event);
     pin_code_changed_host_event = worker->MakeHostEvent(pin_code_changed_event);
+    // The unlinked event (GetUnlinkedEvent) fires when the pairing goes, from this console or the
+    // parent's side; Settings > Parental Controls redraws as unpaired on it.
+    unlinked_host_event = worker->MakeHostEvent(unlinked_event);
     listener_id = Pairing::AddListener(
-        [sync = synchronization_host_event, pin = pin_code_changed_host_event] {
+        [sync = synchronization_host_event, pin = pin_code_changed_host_event,
+         unlinked = unlinked_host_event](bool pairing_gone) {
             sync->Raise();
             pin->Raise();
+            if (pairing_gone) {
+                unlinked->Raise();
+            }
         });
 }
 
@@ -374,6 +381,7 @@ IParentalControlService::~IParentalControlService() {
     Pairing::RemoveListener(listener_id);
     synchronization_host_event->Detach();
     pin_code_changed_host_event->Detach();
+    unlinked_host_event->Detach();
     for (std::size_t i = 0; i < tasks.size(); ++i) {
         if (tasks[i]) {
             tasks[i]->Detach();
@@ -1061,42 +1069,38 @@ void IParentalControlService::IsPlayTimerAlarmDisabled(HLERequestContext& ctx) {
 }
 
 void IParentalControlService::GetPlayTimerRemainingTimeDisplayInfo(HLERequestContext& ctx) {
-    // 0x18 bytes, layout undocumented; zero means nothing to display.
-    IPC::ResponseBuilder rb{ctx, 2 + sizeof(PlayTimerRemainingTimeDisplayInfo) / 4};
-    rb.Push(ResultSuccess);
-    rb.PushRaw(PlayTimerRemainingTimeDisplayInfo{});
+    PushDisplayInfo(ctx, false, true);
 }
 
 void IParentalControlService::GetWatcherStatusDisplayInfo(HLERequestContext& ctx) {
-    // 23.0.1 (impl 0x12f0a0), (bool ignore_temporary_unlock) -> {u8 status, pad, u64, u64}: 7 with
-    // no PIN, 5 while temporarily unlocked (unless the argument is set), 6 when the play timer is
-    // not running, 3 when the time is up, otherwise 1459's (zero). Needs bits 0x8 and 0x100.
+    // 23.0.1 (impl 0x12f0a0), (bool ignore_temporary_unlock). Needs bits 0x8 and 0x100.
     if ((static_cast<u32>(capability) & 0x108) != 0x108) {
         PushResult(ctx, ResultPermissionDenied);
         return;
     }
     IPC::RequestParser rp{ctx};
-    const bool ignore_temporary_unlock = rp.Pop<u8>() != 0;
+    PushDisplayInfo(ctx, rp.Pop<u8>() != 0, false);
+}
+
+void IParentalControlService::PushDisplayInfo(HLERequestContext& ctx, bool ignore_temporary_unlock,
+                                              bool for_1459) {
     const auto restrictions = Pairing::Current().InForce();
-    const auto limit = TodaysLimit(restrictions.play_timer);
-    bool running;
-    {
-        auto& clock = Clock();
-        std::lock_guard lock{clock.mutex};
-        running = clock.running;
-    }
+    const std::tm local = LocalNow();
+    const Rules::PlayTimerNow now{
+        .day_of_week = local.tm_wday,
+        .hour = local.tm_hour,
+        .minute = local.tm_min,
+        .second = local.tm_sec,
+        .posix = static_cast<std::int64_t>(std::time(nullptr)),
+        .played_ns = PlayedToday().count(),
+    };
+    const auto display =
+        Rules::DisplayInfo(restrictions.play_timer, restrictions.Enabled(),
+                           restrictions.temporarily_unlocked, ignore_temporary_unlock, now, for_1459);
     PlayTimerRemainingTimeDisplayInfo info{};
-    if (!restrictions.Enabled()) {
-        info.state = PlayTimerDisplayState::NotConfigured;
-    } else if (restrictions.temporarily_unlocked && !ignore_temporary_unlock) {
-        info.state = PlayTimerDisplayState::Unknown5;
-    } else if (!running) {
-        info.state = PlayTimerDisplayState::TimerDisabled;
-    } else if (limit && PlayedToday() >= std::chrono::minutes{*limit}) {
-        info.state = PlayTimerDisplayState::Unknown3;
-    } else {
-        info.state = PlayTimerDisplayState::TimesUp;
-    }
+    info.state = static_cast<PlayTimerDisplayState>(display.state);
+    info.bedtime = display.bedtime;
+    info.remaining_time = display.remaining_ns;
     IPC::ResponseBuilder rb{ctx, 2 + sizeof(PlayTimerRemainingTimeDisplayInfo) / 4};
     rb.Push(ResultSuccess);
     rb.PushRaw(info);
@@ -1137,14 +1141,14 @@ void IParentalControlService::StartAsync(HLERequestContext& ctx, const char* wha
     rb.PushCopyObjects(ctx, event->GetReadableEvent());
 }
 
-void IParentalControlService::AnswerNothing(HLERequestContext& ctx, bool extra) {
+void IParentalControlService::AnswerNothing(HLERequestContext& ctx, bool extra, u32 extra_word) {
     // qlaunch's wrappers read handle zero as "done, no Finish" (RetrievePairingInfo 0x855c8e4,
     // UnlinkPairing 0x855ca18, Synchronize 0x855cb8c).
     IPC::ResponseBuilder rb{ctx, extra ? 5u : 4u, 1};
     rb.Push(ResultSuccess);
     rb.PushRaw(AsyncData{});
     if (extra) {
-        rb.Push(0u);
+        rb.Push(extra_word);
     }
     rb.PushCopyObjects(ctx, static_cast<Kernel::KReadableEvent*>(nullptr));
 }
@@ -1306,10 +1310,23 @@ void IParentalControlService::FinishUnlinkPairing(HLERequestContext& ctx) {
     PushResult(ctx, FinishAsync(rp.PopRaw<AsyncData>()));
 }
 
+// 2009-2012, as pctl 23.0.1 answers them (impl 0x08531180/0x08531370, 0x085314F0/0x085316E0;
+// research/g3pctl-mii/notes.md): a picture already in the icon cache is answered at once (AsyncData
+// zero, no event, the full size whatever the buffer, min(buffer, size) bytes copied); otherwise the
+// download is async work and Finish answers the same way from the cache. qlaunch's setup page asks
+// with an empty buffer first for the size, then again with a buffer of that size.
 void IParentalControlService::GetAccountMiiImageAsync(HLERequestContext& ctx) {
-    // (PairingAccountInfoBase, buffer<bytes, 6>) -> (AsyncData, u32 size, handle<copy>). The
-    // picture is fetched as async work; the size answered now is zero and Finish answers the real
-    // one. pctl answers a cached picture at once instead (.text 0x304c4).
+    // (PairingAccountInfoBase, buffer<bytes, 6>) -> (AsyncData, u32 size, handle<copy>).
+    StartMii(ctx, "GetAccountMiiImage", false);
+}
+
+void IParentalControlService::GetAccountMiiImageContentTypeAsync(HLERequestContext& ctx) {
+    // (PairingAccountInfoBase, buffer<char, 0xa>) -> (AsyncData, u32 length, handle<copy>).
+    StartMii(ctx, "GetAccountMiiImageContentType", true);
+}
+
+void IParentalControlService::StartMii(HLERequestContext& ctx, const char* what,
+                                       bool content_type) {
     if (!CanPair()) {
         PushResult(ctx, ResultPermissionDenied);
         return;
@@ -1317,12 +1334,31 @@ void IParentalControlService::GetAccountMiiImageAsync(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto account = rp.PopRaw<PairingAccountInfoBase>();
     auto& pairing = Pairing::Current();
-    if (!pairing.FirstOwner() || account.device_id != pairing.FoundDevice()) {
+    const auto owners = pairing.Owners();
+    const bool known = std::any_of(owners.begin(), owners.end(), [&](const Moon::Owner& o) {
+        return o.nintendo_account_id == account.nintendo_account_id;
+    });
+    if (account.device_id != pairing.FoundDevice() || !known) {
         PushResult(ctx, ResultPairingAccountMismatch);
         return;
     }
-    StartAsync(ctx, "GetAccountMiiImage",
-               [] { return PctlResult(Pairing::Current().FetchMii()); }, 0, true);
+    mii_account = account.nintendo_account_id;
+    if (const auto cached = pairing.Mii(account.nintendo_account_id)) {
+        const u32 size = content_type ? WriteString(ctx, cached->second)
+                                      : WriteMii(ctx, cached->first);
+        AnswerNothing(ctx, true, size);
+        return;
+    }
+    const u64 id = account.nintendo_account_id;
+    StartAsync(ctx, what, [id] { return PctlResult(Pairing::Current().FetchMii(id)); }, 0, true);
+}
+
+u32 IParentalControlService::WriteMii(HLERequestContext& ctx, const std::vector<u8>& image) {
+    const std::size_t room = ctx.CanWriteBuffer() ? ctx.GetWriteBufferSize() : 0;
+    if (const std::size_t copied = std::min(image.size(), room); copied > 0) {
+        ctx.WriteBuffer(image.data(), copied);
+    }
+    return static_cast<u32>(image.size());
 }
 
 void IParentalControlService::FinishGetAccountMiiImage(HLERequestContext& ctx) {
@@ -1332,23 +1368,11 @@ void IParentalControlService::FinishGetAccountMiiImage(HLERequestContext& ctx) {
         PushResult(ctx, result);
         return;
     }
-    const auto image = Pairing::Current().Mii().first;
-    const std::size_t size = ctx.CanWriteBuffer() ? ctx.GetWriteBufferSize() : 0;
-    const std::size_t written = std::min(image.size(), size);
-    if (written < image.size()) {
-        LOG_UNKNOWN_CONTRACT(Service_PCTL, "pctl 2010: a {}-byte picture in a {}-byte buffer; cut",
-                             image.size(), size);
-    }
-    if (written > 0) {
-        ctx.WriteBuffer(image.data(), written);
-    }
+    const auto cached = Pairing::Current().Mii(mii_account);
+    const u32 size = WriteMii(ctx, cached ? cached->first : std::vector<u8>{});
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(static_cast<u32>(written));
-}
-
-void IParentalControlService::GetAccountMiiImageContentTypeAsync(HLERequestContext& ctx) {
-    GetAccountMiiImageAsync(ctx);
+    rb.Push(size);
 }
 
 void IParentalControlService::FinishGetAccountMiiImageContentType(HLERequestContext& ctx) {
@@ -1358,11 +1382,9 @@ void IParentalControlService::FinishGetAccountMiiImageContentType(HLERequestCont
         PushResult(ctx, result);
         return;
     }
-    // The type's text and length are taken to work like the nickname's (the HTTP media type,
-    // NUL-terminated when it fits, the length without the NUL). Not traced in pctl.
-    LOG_UNKNOWN_CONTRACT(Service_PCTL,
-                         "pctl 2012 answers the picture's HTTP media type, nickname-style");
-    const u32 length = WriteString(ctx, Pairing::Current().Mii().second);
+    // The stored HTTP Content-Type: u32 its length, the text in the type-C buffer (at most 0x20).
+    const auto cached = Pairing::Current().Mii(mii_account);
+    const u32 length = WriteString(ctx, cached ? cached->second : std::string{});
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
     rb.Push(length);
@@ -1402,8 +1424,8 @@ void IParentalControlService::FinishSynchronizeParentalControlSettingsWithLastUp
 
 void IParentalControlService::DownloadAllAccountMiiImagesAsync(HLERequestContext& ctx) {
     // 23.0.1 (impl 0x130e60): each entry must be an owner of the paired device; one icon download
-    // is queued per owner whose cached icon changed, and with nothing to download AsyncData zero
-    // and no event. Harbor keeps no icon cache (2009/2010 fetch when asked), so nothing is queued.
+    // is queued per owner whose cached icon is not current, and with nothing to download AsyncData
+    // zero and no event. qlaunch's setup page runs it before asking for a picture (2009).
     if (!CanPair()) {
         PushResult(ctx, ResultPermissionDenied);
         return;
@@ -1416,6 +1438,7 @@ void IParentalControlService::DownloadAllAccountMiiImagesAsync(HLERequestContext
     }
     auto& pairing = Pairing::Current();
     const auto owners = pairing.Owners();
+    std::vector<u64> missing;
     for (std::size_t i = 0; i < count; ++i) {
         PairingAccountInfoBase account;
         std::memcpy(&account, buffer.data() + i * sizeof(account), sizeof(account));
@@ -1426,8 +1449,23 @@ void IParentalControlService::DownloadAllAccountMiiImagesAsync(HLERequestContext
             PushResult(ctx, ResultPairingAccountMismatch);
             return;
         }
+        if (!pairing.Mii(account.nintendo_account_id)) {
+            missing.push_back(account.nintendo_account_id);
+        }
     }
-    AnswerNothing(ctx);
+    if (missing.empty()) {
+        AnswerNothing(ctx);
+        return;
+    }
+    StartAsync(ctx, "DownloadAllAccountMiiImages", [missing] {
+        Moon::Description result = Moon::Success;
+        for (const u64 id : missing) {
+            if (const auto fetched = Pairing::Current().FetchMii(id); fetched != Moon::Success) {
+                result = fetched;
+            }
+        }
+        return PctlResult(result);
+    });
 }
 
 void IParentalControlService::FinishDownloadAllAccountMiiImages(HLERequestContext& ctx) {

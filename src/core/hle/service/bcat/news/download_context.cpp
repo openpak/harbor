@@ -109,8 +109,22 @@ IDownloadContext::~IDownloadContext() {
 
     if (transfer_memory != nullptr) {
         transfer_memory->Close(system.Kernel());
+        transfer_memory = nullptr;
     }
     service_context.CloseEvent(completed);
+}
+
+void IDownloadContext::ReleaseMemory() {
+    if (transfer_memory == nullptr || !task->IsDone()) {
+        return;
+    }
+    // The work has returned, so it writes nothing more; `alive` keeps a late one out regardless.
+    {
+        std::scoped_lock lock{state->mutex};
+        state->alive = false;
+    }
+    transfer_memory->Close(system.Kernel());
+    transfer_memory = nullptr;
 }
 
 Result IDownloadContext::GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent> out_event) {
@@ -119,10 +133,12 @@ Result IDownloadContext::GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent
 }
 
 Result IDownloadContext::GetResult() {
+    ReleaseMemory();
     R_RETURN(task->GetResult());
 }
 
 Result IDownloadContext::GetSize(Out<u64> out_size) {
+    ReleaseMemory();
     std::scoped_lock lock{state->mutex};
     *out_size = state->size;
     R_SUCCEED();
