@@ -215,10 +215,14 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
 
     // Harbor: the host screen (the Harbor menu) is presented in place of the console's picture,
     // with the same scaling and letterboxing. Screenshots show what is on the screen.
-    const auto host_frame = VideoCore::HostScreen::Current();
+    // Nothing of Harbor's is shown (always so on Android until the Harbor menu opens): the
+    // console's layers go through untouched.
+    const bool host_layers = VideoCore::HostScreen::AnyLayer();
+    const auto host_frame = host_layers ? VideoCore::HostScreen::Current() : nullptr;
     std::array<Tegra::FramebufferConfig, 1> host_layer{};
     std::vector<Tegra::FramebufferConfig> composed;
-    if (VideoCore::HostScreen::Blackout()) {
+    if (!host_layers) {
+    } else if (VideoCore::HostScreen::Blackout()) {
         // Harbor's sleep: black, the console's picture not shown.
         host_layer[0] = VideoCore::HostScreen::MakeShadeLayer();
         framebuffers = host_layer;

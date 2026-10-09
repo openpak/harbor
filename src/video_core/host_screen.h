@@ -38,6 +38,10 @@ void Hide();
 /// Whether the host screen replaces the console's picture now.
 bool Active();
 
+/// Whether any host layer (screen, overlay, sleep or dim shade) is in use: while not, presenting
+/// does nothing of Harbor's (one atomic read per frame).
+bool AnyLayer();
+
 /// A new picture from the frontend (any thread).
 void Publish(std::shared_ptr<const Frame> frame);
 /// The picture to present, or null while there is none.

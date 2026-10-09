@@ -35,6 +35,14 @@ bool Active() {
     return active.load();
 }
 
+namespace {
+std::atomic_bool has_overlay{false};
+} // namespace
+
+bool AnyLayer() {
+    return active.load() || has_overlay.load() || blackout.load() || dim_level.load() > 0.0f;
+}
+
 void Publish(std::shared_ptr<const Frame> frame) {
     {
         std::scoped_lock lk{mutex};
@@ -72,6 +80,7 @@ Tegra::FramebufferConfig MakeLayer(const Frame& frame) {
 void PublishOverlay(std::shared_ptr<const Frame> frame) {
     {
         std::scoped_lock lk{mutex};
+        has_overlay = frame != nullptr;
         overlay = std::move(frame);
     }
     changed = true;
