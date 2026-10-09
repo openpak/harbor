@@ -40,6 +40,7 @@
 #include "core/openpak/secret_store.h"
 #include "core/openpak/session.h"
 #include "core/openpak/session_detail.h"
+#include "common/harbor_crash.h"
 
 namespace OpenPak::Session {
 
@@ -739,6 +740,7 @@ bool RunChain(const Endpoint& endpoint, const std::string& uid, const std::strin
 /// Sign `uid` in (or link it), committing the result. True when there is a fresh token after.
 bool SignIn(State& state, const std::string& uid, const std::string& account_id_token,
             std::string& error) {
+    HARBOR_CRUMB("openpak: SignIn");
     if (uid.empty()) {
         error = "no firmware user is open";
         return false;
@@ -964,6 +966,7 @@ std::string SenderName(State& state, const std::string& sender_id, const std::st
 /// active-user caches go, and the one arriving is attached (or signed in by the caller). True
 /// when there was a switch.
 bool FollowProfile(State& state) {
+    HARBOR_CRUMB("openpak: FollowProfile");
     const std::string profile = Platform::ProfileId();
 
     {

@@ -6,6 +6,7 @@
 
 #include "video_core/framebuffer_config.h"
 #include "video_core/host_screen.h"
+#include "common/harbor_crash.h"
 
 namespace VideoCore::HostScreen {
 
@@ -20,6 +21,7 @@ std::atomic<float> dim_level{0.0f};
 } // namespace
 
 void Show() {
+    HARBOR_CRUMB_ONCE("host screen: first Show");
     active = true;
     changed = true;
 }
@@ -44,6 +46,7 @@ bool AnyLayer() {
 }
 
 void Publish(std::shared_ptr<const Frame> frame) {
+    HARBOR_CRUMB_ONCE("host screen: first Publish");
     {
         std::scoped_lock lk{mutex};
         current = std::move(frame);

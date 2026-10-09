@@ -23,6 +23,7 @@
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/psc/ovln/ovln_types.h"
 #include "core/hle/service/ptm/psm.h"
+#include "common/harbor_crash.h"
 
 namespace Service::PTM {
 
@@ -215,6 +216,7 @@ BatteryState PSM::ReadBattery() const {
 }
 
 void PSM::PollBattery() {
+    HARBOR_CRUMB_ONCE("psm: first battery poll");
     const BatteryState now = ReadBattery();
 
     BatteryNotices notices{};

@@ -17,6 +17,7 @@
 #include "core/openpak/secret_store.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
+#include "common/harbor_crash.h"
 
 namespace Harbor {
 
@@ -201,6 +202,7 @@ Current& CurrentState() {
 } // namespace
 
 const Calibration& Calibration::Get() {
+    HARBOR_CRUMB_ONCE("calibration: first Get (MAC, device id, serial)");
     Current& state = CurrentState();
     std::scoped_lock lock{state.mutex};
     const std::filesystem::path path = CalibrationDir() / "prodinfo.bin";

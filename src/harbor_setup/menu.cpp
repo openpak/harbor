@@ -44,6 +44,7 @@
 #include "hid_core/hid_core.h"
 #include "input_common/main.h"
 #include "video_core/host_screen.h"
+#include "common/harbor_crash.h"
 
 // The text font (Noto Sans, OFL-1.1), embedded by CMake.
 extern const unsigned char harbor_setup_font[];
@@ -95,6 +96,7 @@ bool CreateGlContext() {
         return false;
     }
     const auto get_display = EglFunction<PFNEGLGETDISPLAYPROC>("eglGetDisplay");
+    HARBOR_CRUMB("menu: EGL setup");
     const auto initialize = EglFunction<PFNEGLINITIALIZEPROC>("eglInitialize");
     const auto bind_api = EglFunction<PFNEGLBINDAPIPROC>("eglBindAPI");
     const auto choose_config = EglFunction<PFNEGLCHOOSECONFIGPROC>("eglChooseConfig");
@@ -604,6 +606,7 @@ void DrawHud() {
 }
 
 void Run() {
+    HARBOR_CRUMB("menu: thread runs");
     Common::SetCurrentThreadName("HarborMenu");
     // No GL is retried at the next open; Borealis that would not start is not (it starts once).
     const bool gl = CreateGlContext();
@@ -664,6 +667,7 @@ void Run() {
 } // namespace
 
 void MenuSetHost(MenuHost& host) {
+    HARBOR_CRUMB("menu: MenuSetHost");
     menu_host = &host;
     StartPowerKey(host.System());
     if (host.HasHud()) {

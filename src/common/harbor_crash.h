@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -104,7 +105,25 @@ long DumpFault(int sig, void* info, void* ucontext, const char* who);
 /// Async-signal-safe: the fault was handled after all; its dump is dropped.
 void DiscardFaultDump(long start);
 
+/// Diagnostics (temporary): an INFO line "harbor: crumb: <what> [thread <name>]".
+void Breadcrumb(std::string_view what);
+
+/// Diagnostics: logs, for each fatal signal, which handler would take it now: the one the kernel
+/// calls (libc's view, past ART's wrapper) and the one ART's signal chain forwards to.
+void LogSignalHandlers(std::string_view when);
+
 /// Tests: point the module at another directory and home/user without touching the real ones.
 void SetHostIdentityForTest(std::string home, std::string user);
 
 } // namespace Common::HarborCrash
+
+/// A breadcrumb, logged every time.
+#define HARBOR_CRUMB(what) ::Common::HarborCrash::Breadcrumb(what)
+/// A breadcrumb, logged the first time this line runs only.
+#define HARBOR_CRUMB_ONCE(what)                                                                    \
+    do {                                                                                           \
+        static std::atomic<bool> harbor_crumb_once_{false};                                        \
+        if (!harbor_crumb_once_.exchange(true)) {                                                  \
+            ::Common::HarborCrash::Breadcrumb(what);                                               \
+        }                                                                                          \
+    } while (0)

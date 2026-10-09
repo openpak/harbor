@@ -26,6 +26,8 @@
 #include <string>
 #include <vector>
 
+#include "common/harbor_crash.h"
+
 namespace Service::ERPT {
 
 /// 16 random UUID bytes and a u32 (0 unless the caller chose the id).
@@ -60,6 +62,7 @@ public:
 
     /// Reads the journal from the save; a missing or damaged journal is an empty store.
     void Load() {
+        HARBOR_CRUMB("erpt: report store load");
         std::scoped_lock lk{mutex};
         records.clear();
         std::ifstream file{directory / "journal", std::ios::binary};

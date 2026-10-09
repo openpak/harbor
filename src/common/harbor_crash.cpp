@@ -35,6 +35,10 @@
 #include "common/logging.h"
 #include "common/redact.h"
 #include "common/scm_rev.h"
+#ifndef _WIN32
+#include <pthread.h>
+#include "common/signal_chain.h"
+#endif
 
 namespace Common::HarborCrash {
 
@@ -1000,6 +1004,7 @@ void Install(fs::path dir) {
     FinishPartialLocked();
     PrepareFaultDumpLocked();
     if (g_consent == Consent::Declined) {
+        LogSignalHandlers("at start-up");
         return;
     }
     // Installed while the answer is still due too, but it writes nothing until consent is given:
@@ -1010,6 +1015,7 @@ void Install(fs::path dir) {
     if (g_consent == Consent::Accepted) {
         StartRecordingLocked();
     }
+    LogSignalHandlers("at start-up");
 }
 
 Consent GetConsent() {
@@ -1176,6 +1182,47 @@ void DiscardFaultDump(long start) {
     const int fd = g_fault_fd.load();
     if (fd >= 0 && start >= 0) {
         [[maybe_unused]] const int result = ::ftruncate(fd, static_cast<off_t>(start));
+    }
+#endif
+}
+
+void Breadcrumb(std::string_view what) {
+    char name[32] = "?";
+#ifndef _WIN32
+    pthread_getname_np(pthread_self(), name, sizeof(name));
+#endif
+    LOG_INFO(Common, "harbor: crumb: {} [thread {}]", what, name);
+}
+
+void LogSignalHandlers(std::string_view when) {
+#ifndef _WIN32
+    const auto describe = [](const struct sigaction& action) -> std::string {
+        const bool siginfo = (action.sa_flags & SA_SIGINFO) != 0;
+        const void* handler = siginfo ? reinterpret_cast<const void*>(action.sa_sigaction)
+                                      : reinterpret_cast<const void*>(action.sa_handler);
+        if (!siginfo && action.sa_handler == SIG_DFL) {
+            return "SIG_DFL";
+        }
+        if (!siginfo && action.sa_handler == SIG_IGN) {
+            return "SIG_IGN";
+        }
+        Dl_info info{};
+        if (handler != nullptr && dladdr(handler, &info) != 0 && info.dli_fname != nullptr) {
+            const char* base = std::strrchr(info.dli_fname, '/');
+            return fmt::format("{}+{:#x} {}", base != nullptr ? base + 1 : info.dli_fname,
+                               reinterpret_cast<uintptr_t>(handler) -
+                                   reinterpret_cast<uintptr_t>(info.dli_fbase),
+                               info.dli_sname != nullptr ? info.dli_sname : "?");
+        }
+        return fmt::format("{} (no module)", handler);
+    };
+    for (const int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP}) {
+        struct sigaction kernel {};
+        struct sigaction chain {};
+        Common::SigAction(sig, nullptr, &kernel);
+        ::sigaction(sig, nullptr, &chain);
+        LOG_INFO(Common, "harbor: signal handlers {}: {} kernel={} chain={}", when, sig,
+                 describe(kernel), describe(chain));
     }
 #endif
 }

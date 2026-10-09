@@ -8,6 +8,7 @@
 
 #include "common/logging.h"
 #include "core/openpak/secret_store.h"
+#include "common/harbor_crash.h"
 
 namespace OpenPak {
 
@@ -168,6 +169,7 @@ void SetSecretNamespace(std::function<std::string()> resolve) {
 }
 
 std::optional<std::string> LoadSecret(std::string_view key, bool* unreadable) {
+    HARBOR_CRUMB("openpak: secret store load");
     const std::string ns = Namespace();
     bool failed = false;
     if (auto secret = LoadHostSecret(Namespaced(ns, key), &failed); secret || failed || ns.empty()) {
