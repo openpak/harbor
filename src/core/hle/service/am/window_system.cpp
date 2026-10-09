@@ -22,6 +22,7 @@
 #include "core/hle/service/am/window_system.h"
 #include "core/hle/service/caps/caps_overlay_screenshot.h"
 #include "core/hle/service/friend/friend_service.h"
+#include "core/hle/service/olsc/transfer_runner.h"
 #include "core/hle/service/psc/ovln/ovln_agent.h"
 #include "core/hle/service/psc/ovln/ovln_types.h"
 
@@ -156,6 +157,8 @@ bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_applicati
 
     if (started_application_id) {
         Service::Friend::OnApplicationStarted(m_system, *started_application_id);
+        // A console's am holds olsc's IForbiddenSaveDataIndication while an application runs.
+        Service::OLSC::TransferQueue::OnApplicationStarted(m_system, *started_application_id);
     }
 
     this->NotifyApplicationChangedIfNeeded();
@@ -723,6 +726,7 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
         if (applet.get() == m_application) {
             m_application = nullptr;
             Service::Friend::OnApplicationExited();
+            Service::OLSC::TransferQueue::OnApplicationExited(m_system, applet->program_id);
             m_foreground_requested_applet = m_home_menu;
 
             // If we have a home menu, send it the application exited message.
