@@ -889,6 +889,8 @@ add_library(core STATIC
     hle/service/ns/system_update_control.h
     hle/service/ns/system_update_interface.cpp
     hle/service/ns/system_update_interface.h
+    hle/service/ns/virtual_game_cards.cpp
+    hle/service/ns/virtual_game_cards.h
     hle/service/nvdrv/core/container.cpp
     hle/service/nvdrv/core/container.h
     hle/service/nvdrv/core/heap_mapper.cpp
