@@ -130,6 +130,8 @@ struct Outcome {
     Error error = Error::None;
     std::uint64_t archive_id = 0;
     std::string detail; ///< for the log (no ids of the user)
+    std::uint64_t series_id = 0; ///< the archive's series, on success
+    std::uint64_t commit_id = 0; ///< the archive's commit id (encoded_digest), on success
 };
 
 /// An upload (olsc-transfer.md §2.2): a delta against the title's fixed archive when the cloud

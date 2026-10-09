@@ -823,25 +823,14 @@ void TransferQueue::Execute(TransferTask& task) {
         LOG_WARNING(Service_OLSC, "save data cloud: task {} failed, 2179-{:04}: {}", task.id,
                     static_cast<u32>(outcome.error), outcome.detail);
     }
-    // The cloud changed: the archive list follows, and a finished transfer is the title's
-    // SeriesInfo, the archive's (series, commit) (olsc-autonomy.md §4.2).
-    OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid);
+    // A finished transfer is the title's SeriesInfo, the archive's (series, commit)
+    // (olsc-autonomy.md §4.2), written before the task ends so qlaunch's dialogs see newness 0;
+    // from the transfer itself, so a list that fails to refresh cannot leave it unwritten. Then
+    // the archive list follows.
     if (outcome.error == tr::Error::None) {
-        bool listed = false;
-        for (const auto& archive :
-             OpenPak::Olsc::ArchiveCache::Instance().Get(uid).value_or(
-                 std::vector<OpenPak::Olsc::ArchiveInfo>{})) {
-            if (archive.id == outcome.archive_id) {
-                Settings()->SetSeries(uid, task.application_id,
-                                      {archive.series_id, archive.commit_id});
-                listed = true;
-            }
-        }
-        if (!listed) {
-            LOG_WARNING(Service_OLSC, "save data cloud: archive {} not listed after the transfer",
-                        outcome.archive_id);
-        }
+        Settings()->SetSeries(uid, task.application_id, {outcome.series_id, outcome.commit_id});
     }
+    OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid);
     Repair(task.user);
 }
 

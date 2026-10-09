@@ -79,6 +79,7 @@ struct Archive {
     std::string status;
     int num_of_partitions = 0;
     std::uint64_t series_id = 0;
+    std::uint64_t commit_id = 0;
     std::vector<Component> components;
 };
 
@@ -99,6 +100,12 @@ std::optional<Archive> ParseArchive(const std::string& body) {
     if (const auto series = archive->find("series_id");
         series != archive->end() && series->is_number_unsigned()) {
         out.series_id = series->get<std::uint64_t>();
+    }
+    if (const auto digest = archive->find("encoded_digest"); digest != archive->end() &&
+                                                            digest->is_string()) {
+        if (const auto bytes = FromBase64Url(digest->get<std::string>()); bytes && bytes->size() >= 8) {
+            std::memcpy(&out.commit_id, bytes->data(), 8);
+        }
     }
     if (const auto list = archive->find("component_files");
         list != archive->end() && list->is_array()) {
@@ -499,7 +506,7 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
     }
     LOG_INFO(Service_OLSC, "save data cloud: uploaded {} chunk(s){}", ids.size(),
              base ? " (delta)" : "");
-    return {Error::None, archive->id, {}};
+    return {Error::None, archive->id, {}, base ? base->series_id : series_id, save.commit_id};
 }
 
 Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t archive_id,
@@ -584,7 +591,7 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
         return Fail(Error::Fs, "the save could not be written", archive_id);
     }
     LOG_INFO(Service_OLSC, "save data cloud: downloaded {} chunk(s)", ids.size());
-    return {Error::None, archive_id, {}};
+    return {Error::None, archive_id, {}, archive->series_id, archive->commit_id};
 }
 
 } // namespace OpenPak::Olsc::Transfer
