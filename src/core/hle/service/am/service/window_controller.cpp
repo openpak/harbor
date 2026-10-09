@@ -74,7 +74,8 @@ Result IWindowController::SetAppletWindowVisibility(bool visible) {
 }
 
 Result IWindowController::SetAppletGpuTimeSlice(s64 time_slice) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, time_slice={}", time_slice);
+    // Accepted: this system has no GPU time slicing.
+    LOG_DEBUG(Service_AM, "called, time_slice={}", time_slice);
     R_SUCCEED();
 }
 

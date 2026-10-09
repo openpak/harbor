@@ -10,9 +10,11 @@
 #include <fmt/chrono.h>
 #include "common/harbor_crash.h"
 #include "common/logging.h"
+#include "common/redact.h"
 #include "common/scm_rev.h"
 #include "common/swap.h"
 #include "core/core.h"
+#include "core/hle/service/erpt/erpt.h"
 #include "core/hle/service/fatal/fatal.h"
 #include "core/hle/service/fatal/fatal_p.h"
 #include "core/hle/service/fatal/fatal_u.h"
@@ -133,11 +135,33 @@ static void RecordHarborCrashReport(Core::System& system, Result error_code, Fat
                                           error_code.raw, details);
 }
 
+// Harbor: the fatal is filed as a Visible erpt report with FatalFlag set, so Settings > Support >
+// Error History lists it as a console's does. Firmware 23.0.1's fatal itself creates no report
+// (it only calls erpt:c 30); which module files a console's fatal is not established.
+static void FileFatalErrorReport(Core::System& system, Result error_code) {
+    const auto code = fmt::format("{:04}-{:04}", 2000 + static_cast<u32>(error_code.GetModule()),
+                                  static_cast<u32>(error_code.GetDescription()));
+    LOG_UNKNOWN_CONTRACT(Service_Fatal,
+                         "fatal {} filed as a visible erpt report with FatalFlag (the module "
+                         "that files it on a console is not established)",
+                         code);
+    Service::ERPT::Context error_info;
+    error_info.category = Service::ERPT::Category_ErrorInfo;
+    error_info.Set(118, true); // FatalFlag
+    std::vector<Service::ERPT::Context> additional;
+    if (const u64 program_id = system.GetApplicationProcessProgramID(); program_id != 0) {
+        additional.push_back(Service::ERPT::MakeApplicationInfo(system, program_id, 1));
+    }
+    Service::ERPT::CreateHostReport(system, Service::ERPT::ReportType_Visible, code, &error_info,
+                                    additional);
+}
+
 static void ThrowFatalError(Core::System& system, Result error_code, FatalType fatal_type,
                             const FatalInfo& info) {
     LOG_ERROR(Service_Fatal, "Threw fatal error type {} with error code {:#x}", fatal_type,
               error_code.raw);
     RecordHarborCrashReport(system, error_code, fatal_type, info);
+    FileFatalErrorReport(system, error_code);
 
     switch (fatal_type) {
     case FatalType::ErrorReportAndScreen:

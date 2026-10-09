@@ -72,28 +72,39 @@ Result IAppletCommonFunctions::GetHomeButtonDoubleClickEnabled(
 }
 
 Result IAppletCommonFunctions::SetDisplayMagnification(f32 x, f32 y, f32 width, f32 height) {
-    LOG_DEBUG(Service_AM, "(STUBBED) called, x={}, y={}, width={}, height={}", x, y, width,
-                height);
+    // The overlay applet's system zoom of everything below it; only none (0,0,1,1) is drawn.
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+    if (x == 0.f && y == 0.f && width == 1.f && height == 1.f) {
+        LOG_DEBUG(Service_AM, "called, none");
+    } else {
+        LOG_UNKNOWN_CONTRACT(Service_AM,
+                             "IAppletCommonFunctions 42 SetDisplayMagnification: not emulated: "
+                             "the system zoom {},{} {}x{} is kept, not composited",
+                             x, y, width, height);
+    }
     std::scoped_lock lk{applet->lock};
     applet->display_magnification = Common::Rectangle<f32>{x, y, x + width, y + height};
     R_SUCCEED();
 }
 
 Result IAppletCommonFunctions::SetCpuBoostRequestPriority(s32 priority) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Kept per applet; this system has no CPU boost to order.
+    LOG_DEBUG(Service_AM, "called, priority={}", priority);
     std::scoped_lock lk{applet->lock};
     applet->cpu_boost_request_priority = priority;
     R_SUCCEED();
 }
 
 Result IAppletCommonFunctions::GetCurrentApplicationId(Out<u64> out_application_id) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // The running application, 0 when none runs.
+    LOG_DEBUG(Service_AM, "called");
     *out_application_id = FileSys::GetBaseTitleID(system.GetApplicationProcessProgramID());
     R_SUCCEED();
 }
 
 Result IAppletCommonFunctions::SetGpuTimeSliceBoost(s64 time_span) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, time_span={}", time_span);
+    // Accepted: this system has no GPU time slicing.
+    LOG_DEBUG(Service_AM, "called, time_span={}", time_span);
     R_SUCCEED();
 }
 

@@ -40,6 +40,7 @@ struct ArchiveInfo {
     std::uint32_t launch_required_version = 0;
     std::uint64_t previous_id = 0;
     std::uint64_t series_id = 0;
+    std::uint64_t commit_id = 0;   ///< encoded_digest's first 8 bytes: the save's commit id
     std::uint64_t saved_at = 0;    ///< saved_at_as_unixtime
     std::uint64_t finished_at = 0; ///< finished_at_as_unixtime
     std::uint8_t platform_key_generation = 0;
@@ -124,8 +125,27 @@ std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view tex
 /// GET save_data_archives for `uid` (blocking; run it off the guest's IPC thread).
 std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid);
 
-/// The olsc daemon's settings, persisted in one JSON file. Unknown users read as off, as the
-/// sysmodule answers before anything was set.
+/// The last archive a title's save was synced with (olsc's SeriesInfo database): the archive's
+/// series id and commit id, written after every upload and download (olsc-autonomy.md §4.2).
+struct SeriesInfo {
+    std::uint64_t series_id = 0;
+    std::uint64_t commit_id = 0;
+};
+
+/// Data newness (0x1d32e0, olsc-autonomy.md §4.1): 0 in sync, 1 the cloud is newer, 2 the local
+/// save is newer, 3 conflict (or neither exists). `local_commit` nullopt: no local save.
+std::uint8_t Newness(const std::optional<SeriesInfo>& synced,
+                     const std::optional<std::uint64_t>& local_commit,
+                     const std::optional<ArchiveInfo>& cloud);
+
+/// The settings defaults, olsc!default_auto_{upload,download}_global_setting in the firmware's
+/// settings data (0100000000000818): automatic backup on, automatic download off.
+inline constexpr bool DefaultAutoUpload = true;
+inline constexpr bool DefaultAutoDownload = false;
+
+/// The olsc daemon's databases, persisted in one JSON file: automatic upload and download per
+/// user (the settings default until set), automatic transfer per user and title (default: either
+/// global setting), and the SeriesInfo per user and title.
 class DaemonSettings {
 public:
     explicit DaemonSettings(std::filesystem::path file);
@@ -137,12 +157,15 @@ public:
     bool ApplicationAutoTransfer(const std::string& uid, std::uint64_t application_id) const;
     void SetApplicationAutoTransfer(const std::string& uid, std::uint64_t application_id,
                                     bool enabled);
+    std::optional<SeriesInfo> Series(const std::string& uid, std::uint64_t application_id) const;
+    void SetSeries(const std::string& uid, std::uint64_t application_id, SeriesInfo info);
 
 private:
     struct User {
-        bool auto_upload = false;
-        bool auto_download = false;
+        std::optional<bool> auto_upload;
+        std::optional<bool> auto_download;
         std::map<std::uint64_t, bool> auto_transfer;
+        std::map<std::uint64_t, SeriesInfo> series;
     };
 
     void Load();

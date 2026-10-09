@@ -120,14 +120,7 @@ Result IOlscServiceForSystemService::GetRemoteStorageController(
 Result IOlscServiceForSystemService::GetDaemonController(
     Out<SharedPointer<IDaemonController>> out_interface) {
     LOG_INFO(Service_OLSC, "called");
-    if (!settings) {
-        // A console keeps these in olsc's system save; Harbor keeps them beside the NAND saves.
-        // Read on first use, once the data directory is the session's.
-        settings = std::make_shared<OpenPak::Olsc::DaemonSettings>(
-            Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system" / "harbor" /
-            "olsc-settings.json");
-    }
-    *out_interface = std::make_shared<IDaemonController>(system, settings);
+    *out_interface = std::make_shared<IDaemonController>(system, queue);
     R_SUCCEED();
 }
 

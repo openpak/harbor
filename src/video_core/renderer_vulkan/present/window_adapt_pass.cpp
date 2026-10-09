@@ -6,6 +6,7 @@
 
 #include "core/frontend/framebuffer_layout.h"
 #include "video_core/framebuffer_config.h"
+#include "video_core/host_screen.h"
 #include "video_core/host_shaders/vulkan_present_vert_spv.h"
 #include "video_core/renderer_vulkan/present/layer.h"
 #include "video_core/renderer_vulkan/present/present_push_constants.h"
@@ -70,9 +71,11 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
     }
 
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
-        const f32 bg_red = Settings::values.bg_red.GetValue() / 255.0f;
-        const f32 bg_green = Settings::values.bg_green.GetValue() / 255.0f;
-        const f32 bg_blue = Settings::values.bg_blue.GetValue() / 255.0f;
+        // Harbor's sleep blacks the letterbox too.
+        const bool black = VideoCore::HostScreen::Blackout();
+        const f32 bg_red = black ? 0.0f : Settings::values.bg_red.GetValue() / 255.0f;
+        const f32 bg_green = black ? 0.0f : Settings::values.bg_green.GetValue() / 255.0f;
+        const f32 bg_blue = black ? 0.0f : Settings::values.bg_blue.GetValue() / 255.0f;
         const VkClearAttachment clear_attachment{
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .colorAttachment = 0,

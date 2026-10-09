@@ -97,6 +97,9 @@ private:
     Result SetKeySeedPackage(InBuffer<BufferAttr_HipcMapAlias> package);
     Result OpenSaveDataFullExporter(Out<SharedPointer<IDivisionExporter>> out_exporter,
                                     FileSys::SaveDataSpaceId space, u64 save_data_id);
+    Result OpenSaveDataDiffExporter(Out<SharedPointer<IDivisionExporter>> out_exporter,
+                                    InBuffer<BufferAttr_HipcMapAlias> initial_data,
+                                    FileSys::SaveDataSpaceId space, u64 save_data_id);
     Result OpenSaveDataImporter(Out<SharedPointer<IDivisionImporter>> out_importer,
                                 InBuffer<BufferAttr_HipcMapAlias> initial_data,
                                 InBuffer<BufferAttr_HipcMapAlias> creation_info,

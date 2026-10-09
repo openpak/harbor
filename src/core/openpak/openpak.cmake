@@ -62,4 +62,14 @@ if (HARBOR_OPENPAK_CHECK)
     target_include_directories(harbor-openpak-check PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(harbor-openpak-check PRIVATE common fmt::fmt nlohmann_json::nlohmann_json
                           httplib::httplib OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+
+    # harbor-ksp-key: the saves server's key seed package body key, derived from a console's keys
+    # and installed firmware with Harbor's own code, and an end-to-end package check.
+    add_executable(harbor-ksp-key
+                   hle/service/filesystem/fsp/save_transfer/check/ksp_key_tool.cpp
+                   hle/service/filesystem/fsp/save_transfer/check/vma_impl.cpp)
+    target_include_directories(harbor-ksp-key PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_source_files_properties(hle/service/filesystem/fsp/save_transfer/check/vma_impl.cpp
+                                PROPERTIES COMPILE_OPTIONS -w)
+    target_link_libraries(harbor-ksp-key PRIVATE core common frontend_common video_core fmt::fmt)
 endif()

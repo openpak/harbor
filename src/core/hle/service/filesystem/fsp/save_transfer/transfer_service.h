@@ -100,6 +100,11 @@ public:
 
     Result OpenFullExporter(std::shared_ptr<Exporter>* out, FileSys::SaveDataSpaceId space,
                             u64 save_data_id);
+    /// OpenSaveDataDiffExporter (manager 33): an export against the previous archive's initial
+    /// data, under that archive's key seed (a key seed package first). Only changed chunks are
+    /// exported; the division count is the previous archive's.
+    Result OpenDiffExporter(std::shared_ptr<Exporter>* out, std::span<const u8> initial_data,
+                            FileSys::SaveDataSpaceId space, u64 save_data_id);
     /// OpenSaveDataImporter: the archive's initial data (the 8 KiB meta chunk), the creation
     /// info's user, the space. Needs a key seed package first.
     Result OpenImporter(std::shared_ptr<Importer>* out, std::span<const u8> initial_data,
@@ -107,6 +112,10 @@ public:
 
 private:
     Result Keys(const Key128& seed, Key128* stream_key, Key128* mac_key) const;
+    /// The exporter of a save, its image as the archive source, keyed by `seed`.
+    Result OpenExporter(std::shared_ptr<Exporter>* out, FileSys::SaveDataSpaceId space,
+                        u64 save_data_id, const Key128& seed, Key128* stream_key,
+                        Key128* mac_key);
 
     Core::System& system;
     std::shared_ptr<SaveDataController> controller;

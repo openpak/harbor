@@ -89,9 +89,9 @@ void Layer::ConfigureDraw(const Device& device, PresentPushConstants* out_push_c
                           VkSampler sampler, size_t image_index,
                           const Tegra::FramebufferConfig& framebuffer,
                           const Layout::FramebufferLayout& layout) {
-    // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
-    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress ||
-                             framebuffer.address == VideoCore::HostScreen::HostOverlayAddress;
+    // Harbor's host layers (the screen, the overlay, the shade) are not in guest memory: they are
+    // always uploaded from their own pixels.
+    const bool host_screen = VideoCore::HostScreen::IsHostAddress(framebuffer.address);
     const auto texture_info =
         host_screen ? std::nullopt
                     : rasterizer.AccelerateDisplay(framebuffer, framebuffer.address + framebuffer.offset,
@@ -345,8 +345,7 @@ void Layer::UpdateRawImage(const Tegra::FramebufferConfig& framebuffer, size_t i
     const u64 image_offset = GetRawImageOffset(framebuffer, image_index);
 
     // Harbor's host screen: linear RGBA rows, copied as they are.
-    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress ||
-                             framebuffer.address == VideoCore::HostScreen::HostOverlayAddress;
+    const bool host_screen = VideoCore::HostScreen::IsHostAddress(framebuffer.address);
     if (host_screen) {
         const auto frame = VideoCore::HostScreen::FrameAt(framebuffer.address);
         const u64 size = u64{framebuffer.width} * framebuffer.height * 4;

@@ -38,6 +38,7 @@ public:
         u64 application_id);
     Result ConvertLanguageCodeToApplicationLanguage(
         Out<ApplicationLanguage> out_application_language, u64 language_code);
+    Result RequestApplicationControlDataDownload(u8 flag, u64 application_id);
     Result GetApplicationControlData4(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                       Out<u32> out_flags_a, Out<u32> out_flags_b,
                                       Out<u32> out_actual_size,

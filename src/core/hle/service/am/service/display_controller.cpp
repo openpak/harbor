@@ -6,6 +6,7 @@
 
 #include <algorithm>
 
+#include "common/redact.h"
 #include "core/hle/result.h"
 #include "core/hle/service/am/applet.h"
 #include "core/hle/service/am/service/display_controller.h"
@@ -56,8 +57,12 @@ IDisplayController::~IDisplayController() = default;
 
 Result IDisplayController::GetLastForegroundCaptureImageEx(
     Out<bool> out_was_written, OutBuffer<BufferAttr_HipcMapAlias> out_image_data) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_was_written = true;
+    // As GetLastApplicationCaptureImageEx: no frame is kept for this copy, so it is "not
+    // written" and left black (it answered "written" over an untouched buffer).
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IDisplayController 5 GetLastForegroundCaptureImageEx: not "
+                                     "emulated: no frame copy kept; answered not written, black");
+    std::fill(out_image_data.begin(), out_image_data.end(), u8{0});
+    *out_was_written = false;
     R_SUCCEED();
 }
 
@@ -77,20 +82,24 @@ Result IDisplayController::ClearAppletTransitionBuffer(u32 color) {
 
 Result IDisplayController::TakeScreenShotOfOwnLayerEx(bool unknown0, bool unknown1,
                                                       s32 fbshare_layer_index) {
-    LOG_DEBUG(Service_AM, "called, unknown0={} unknown1={} fbshare_layer_index={}", unknown0,
-              unknown1, fbshare_layer_index);
+    LOG_UNKNOWN_CONTRACT(Service_AM,
+                         "IDisplayController 28 TakeScreenShotOfOwnLayerEx: not emulated: the own "
+                         "layer is not copied into capture buffer {}",
+                         fbshare_layer_index);
     R_SUCCEED();
 }
 
 Result IDisplayController::GetCallerAppletCaptureImageEx(
     Out<bool> out_was_written, OutBuffer<BufferAttr_HipcMapAlias> out_image_data) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
-    *out_was_written = true;
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IDisplayController 7 GetCallerAppletCaptureImageEx: not "
+                                     "emulated: no frame copy kept; answered not written, black");
+    std::fill(out_image_data.begin(), out_image_data.end(), u8{0});
+    *out_was_written = false;
     R_SUCCEED();
 }
 
 Result IDisplayController::TakeScreenShotOfOwnLayer(bool unknown0, s32 fbshare_layer_index) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "IDisplayController 8 TakeScreenShotOfOwnLayer: not emulated: the own layer is not copied into the capture buffer");
     R_SUCCEED();
 }
 
@@ -108,7 +117,8 @@ Result IDisplayController::AcquireLastForegroundCaptureSharedBuffer(
 }
 
 Result IDisplayController::ReleaseLastForegroundCaptureSharedBuffer() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Nothing is held: the acquire copies the frame without a lock.
+    LOG_DEBUG(Service_AM, "called");
     R_SUCCEED();
 }
 
@@ -120,7 +130,8 @@ Result IDisplayController::AcquireCallerAppletCaptureSharedBuffer(
 }
 
 Result IDisplayController::ReleaseCallerAppletCaptureSharedBuffer() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Nothing is held: the acquire copies the frame without a lock.
+    LOG_DEBUG(Service_AM, "called");
     R_SUCCEED();
 }
 
@@ -132,7 +143,8 @@ Result IDisplayController::AcquireLastApplicationCaptureSharedBuffer(
 }
 
 Result IDisplayController::ReleaseLastApplicationCaptureSharedBuffer() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Nothing is held: the acquire copies the frame without a lock.
+    LOG_DEBUG(Service_AM, "called");
     R_SUCCEED();
 }
 

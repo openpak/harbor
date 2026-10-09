@@ -112,6 +112,20 @@ static u64 NetworkServiceAccountIdOf(const Common::UUID& user) {
     return id != 0 ? id : user.Hash();
 }
 
+/// A user OpenPak signed in whose device account is not linked to an account: on a console that
+/// user has no network service account a title can use (2124-0200), so a title is never handed
+/// its id_token. The token carries no openpak claim, and every title server refuses it with the
+/// title's own error instead of the firmware's link prompt. False while nobody has signed the
+/// user in yet (that is EnsureIdTokenCacheAsync's to find out) and when OpenPak is off.
+static bool SignedInUnlinked(const Common::UUID& user) {
+    if (!OpenPakAccount::Enabled()) {
+        return false;
+    }
+    const std::string uid = OpenPakAccount::UidString(user);
+    OpenPak::WaitForFirmwareUserLink(uid);
+    return OpenPak::Session::NetworkServiceAccountId(uid) != 0 && !OpenPak::Session::Linked(uid);
+}
+
 /// LoadIdTokenCache (3 and 4): the user's OpenPak id_token, size checked against the buffer.
 static void LoadIdTokenCacheFor(HLERequestContext& ctx, const Common::UUID& user) {
     std::string token;
@@ -199,8 +213,8 @@ public:
             // contract on 22.5.0 and stays absent.
             {136, &IManagerForSystemService::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
             {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
-            {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
-            {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
+            {141, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsync, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
+            {142, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
             {143, &IManagerForSystemService::GetNetworkServiceLicenseCacheEx, "GetNetworkServiceLicenseCacheEx"}, // 15.0.0+
             {150, nullptr, "CreateAuthorizationRequest"},
             {160, nullptr, "RequiresUpdateNetworkServiceAccountIdTokenCache"},
@@ -324,9 +338,13 @@ private:
         // PlayerSelect's "Sign In and Link" asks this right after creating the user, while the
         // setup's account is still being linked to it (OnFirmwareUserRegistered).
         OpenPak::WaitForFirmwareUserLink(uid);
-        if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
+        // A user nobody has signed in this session (not the active one): a device account says
+        // nothing about a link, and answering "registered" for it made User Settings show an
+        // unlinked user as linked ("Nintendo Account ()"). The sign-in takes ~1.5 s.
+        if (OpenPakAccount::SignedInWithin(uid, std::chrono::seconds{5})) {
             return OpenPak::Session::Linked(uid);
         }
+        // Offline: what the console last knew of it here.
         return OpenPak::Session::HasDeviceAccount(uid);
     }
 
@@ -405,7 +423,8 @@ private:
         }
 
         const auto user =
-            NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday, account->country);
+            NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday, account->country,
+                                              account->names);
         ctx.WriteBufferC(user.data(), user.size(), 0);
 
         // The account's data stays out of the log: it ends up in crash reports.
@@ -413,6 +432,47 @@ private:
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
         rb.Push(account->id);
+    }
+
+    // 141: () -> IAsyncContext; 142 is the same with a u32 seconds threshold in. 23.0.1
+    // 0x0859F2B0 checks first, synchronously, that the user can use the network service
+    // (0x085F9EE0: a BAAS registration, then a linked Nintendo Account, else 2124-0220), and only
+    // then starts the refresh. PlayerSelect's license check (Save Data Cloud for an unlinked user)
+    // reads 0200/0220 as "link first". OpenPak has no paid tier: the refresh of the cache 143
+    // reads (Subscribed, no expiry) completes at once for a linked user.
+    void RefreshNetworkServiceLicenseCacheAsync(HLERequestContext& ctx) {
+        PushLicenseRefresh(ctx);
+    }
+
+    void RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const u32 seconds = rp.Pop<u32>();
+        LOG_WARNING(Service_ACC,
+                    "unknown contract: acc IAdministrator 142 ({} s), answered as 141", seconds);
+        PushLicenseRefresh(ctx);
+    }
+
+    void PushLicenseRefresh(HLERequestContext& ctx) {
+        Result available = ResultSuccess;
+        if (OpenPakAccount::Enabled()) {
+            // IsActiveLinked only knows the active profile; Session::Linked covers another user
+            // signed in this session (IsRegisteredAtBaas waited for that sign-in).
+            const bool registered = IsRegisteredAtBaas();
+            const bool linked = IsActiveLinked(account_id) ||
+                                OpenPak::Session::Linked(OpenPakAccount::UidString(account_id));
+            available = !registered ? ResultNetworkServiceAccountUnavailable
+                        : !linked   ? ResultNintendoAccountIdUnavailable
+                                    : ResultSuccess;
+        }
+        LOG_DEBUG(Service_ACC, "called, result={:#x}", available.raw);
+        if (available.IsError()) {
+            PushResult(ctx, available);
+            return;
+        }
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker,
+                                                 OpenPakAsyncContext::Done(ResultSuccess));
     }
 
     // 143: (u32 NetworkServiceLicenseKind, u32, u64 expiration). qlaunch 22.5.0 (+0x3173c0)
@@ -1048,8 +1108,9 @@ public:
 
 private:
     void CheckAvailability(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "(STUBBED) called");
-        PushResult(ctx, ResultSuccess);
+        const bool unlinked = SignedInUnlinked(user_id);
+        LOG_DEBUG(Service_ACC, "called, unlinked={}", unlinked);
+        PushResult(ctx, unlinked ? ResultNetworkServiceAccountUnavailable : ResultSuccess);
     }
 
     void GetAccountId(HLERequestContext& ctx) {
@@ -1068,27 +1129,59 @@ private:
 
     void LoadIdTokenCache(HLERequestContext& ctx) {
         LOG_DEBUG(Service_ACC, "called");
+        if (SignedInUnlinked(user_id)) {
+            LOG_INFO(Service_ACC, "acc: the user is not linked; no id_token for the title");
+            PushResult(ctx, ResultNetworkServiceAccountUnavailable);
+            return;
+        }
         LoadIdTokenCacheFor(ctx, user_id);
     }
 
+    // 130/136: (u64 Nintendo Account id, NasUserBaseForApplication 0x68, work buffer >= 0x800).
+    // The account module (23.0.1, 0x1fa5c0) reads the users/me cache into the work buffer
+    // (NasUserBase at its head) and copies birthday, gender, language, country, region and
+    // timezone out of it; MK8D shows the country as the player's flag.
     void GetNintendoAccountUserResourceCacheForApplication(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-
-        // The same account id GetAccountId answers, in the reply and at the head of the buffer.
-        const u64 account_id = NetworkServiceAccountIdOf(user_id);
-
-        std::vector<u8> nas_user_base_for_application(0x68);
-        std::memcpy(nas_user_base_for_application.data(), &account_id, sizeof(account_id));
-        ctx.WriteBuffer(nas_user_base_for_application);
-
-        if (ctx.CanWriteBuffer(1)) {
-            std::vector<u8> unknown_out_buffer(ctx.GetWriteBufferSize(1));
-            ctx.WriteBuffer(unknown_out_buffer, 1);
+        // The 0x68 out is an auto-select (0x1A) buffer: MK8D sends it as a pointer (C) buffer,
+        // which leaves the work buffer as the only mapped (B) one. Sent mapped, it comes first.
+        const bool pointer_out =
+            !ctx.BufferDescriptorC().empty() && ctx.BufferDescriptorC()[0].Size() != 0;
+        const std::size_t work_index = pointer_out ? 0 : 1;
+        const std::size_t work_size = ctx.BufferDescriptorB().size() > work_index
+                                          ? ctx.BufferDescriptorB()[work_index].Size()
+                                          : 0;
+        // The module's answer for a work buffer under 0x800.
+        constexpr Result ResultWorkBufferTooSmall{ErrorModule::Account, 31};
+        if (work_size < 0x800) {
+            PushResult(ctx, ResultWorkBufferTooSmall);
+            return;
+        }
+        std::optional<OpenPakAccount::NintendoAccountInfo> account;
+        if (const Result result = NintendoAccountOf(user_id, account); result.IsError()) {
+            LOG_DEBUG(Service_ACC, "called, not linked");
+            PushResult(ctx, result);
+            return;
         }
 
+        const auto for_application = NintendoAccountOAuth::NasUserBaseForApplication(
+            account->birthday, account->country, account->names);
+        if (pointer_out) {
+            ctx.WriteBufferC(for_application.data(), for_application.size());
+        } else {
+            ctx.WriteBufferB(for_application.data(), for_application.size());
+        }
+        std::vector<u8> work(work_size);
+        const auto base = NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday,
+                                                            account->country, account->names);
+        std::memcpy(work.data(), base.data(), base.size());
+        ctx.WriteBufferB(work.data(), work.size(), work_index);
+
+        // The account's data stays out of the log.
+        LOG_DEBUG(Service_ACC, "called, linked account data written ({} out, work {:#x})",
+                  pointer_out ? "pointer" : "mapped", work_size);
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(account_id);
+        rb.PushRaw<u64>(account->id);
     }
 
     void CreateAuthorizationRequest(HLERequestContext& ctx) {
@@ -1115,11 +1208,14 @@ private:
     }
 
     OpenPak::AsyncWorker::Work EnsureWork() const {
-        return [uid = OpenPakAccount::UidString(user_id)](std::stop_token, std::vector<u8>&) {
-            if (OpenPakAccount::Enabled()) {
-                OpenPakAccount::EnsureAndAdopt(uid);
+        return [user = user_id](std::stop_token, std::vector<u8>&) {
+            if (!OpenPakAccount::Enabled()) {
+                return ResultSuccess;
             }
-            return ResultSuccess;
+            OpenPakAccount::EnsureAndAdopt(OpenPakAccount::UidString(user));
+            // Signed in but not linked: the console's answer for a user without a network service
+            // account, which sends the title to the firmware's link prompt.
+            return SignedInUnlinked(user) ? ResultNetworkServiceAccountUnavailable : ResultSuccess;
         };
     }
 

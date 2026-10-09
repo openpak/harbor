@@ -10,6 +10,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <stop_token>
@@ -19,6 +20,7 @@
 
 #include "common/common_types.h"
 #include "common/uuid.h"
+#include "core/hle/service/acc/nintendo_account_oauth.h"
 #include "core/hle/result.h"
 
 namespace Core {
@@ -85,6 +87,9 @@ struct NintendoAccountInfo {
     std::string nickname;
     std::string birthday;
     std::string country;
+    /// users/me's screenName, email and loginId as of the user's firmware link; empty for a user
+    /// linked another way (Harbor has no users/me for it).
+    NintendoAccountOAuth::NasUserNames names;
 };
 /// Nothing when the user is not signed in and linked here.
 std::optional<NintendoAccountInfo> NintendoAccount(const std::string& uid);
@@ -99,6 +104,10 @@ bool EnsureAndAdopt(const std::string& uid);
 
 /// EnsureAndAdopt on a thread of its own, at most once at a time per user. Never blocks.
 void EnsureAndAdoptInBackground(const std::string& uid);
+
+/// Whether the user is signed in on the console server, starting the background sign-in and
+/// waiting for it up to `max` when it is not yet. False when it is not done by then or failed.
+bool SignedInWithin(const std::string& uid, std::chrono::milliseconds max);
 
 /// Queue a profile change for the IPC thread: the worker never touches ProfileManager itself.
 void QueueAdoption(const Common::UUID& uid, std::string nickname, std::vector<u8> image);

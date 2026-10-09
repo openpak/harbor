@@ -121,9 +121,9 @@ FramebufferTextureInfo Layer::PrepareRenderTarget(const Tegra::FramebufferConfig
 
 FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig& framebuffer) {
     const VAddr framebuffer_addr{framebuffer.address + framebuffer.offset};
-    // Harbor's host screen is not in guest memory: it is always uploaded from its own pixels.
-    const bool host_screen = framebuffer.address == VideoCore::HostScreen::HostAddress ||
-                             framebuffer.address == VideoCore::HostScreen::HostOverlayAddress;
+    // Harbor's host layers (the screen, the overlay, the shade) are not in guest memory: they are
+    // always uploaded from their own pixels.
+    const bool host_screen = VideoCore::HostScreen::IsHostAddress(framebuffer.address);
     const auto accelerated_info =
         host_screen ? std::nullopt
                     : rasterizer.AccelerateDisplay(framebuffer, framebuffer_addr, framebuffer.stride);

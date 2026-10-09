@@ -283,6 +283,14 @@ void OlscChecks(const std::filesystem::path& dir) {
           "archive fields parse as the sysmodule reads them");
     Check(!olsc::ParseArchiveList("{}") && !olsc::ParseArchiveList("not json"),
           "a reply that is not a list is refused");
+    {
+        std::string with_commit = record(11, "fixed", 1, "null", "");
+        with_commit.replace(with_commit.find("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), 43,
+                            "iHdmVUQzIhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        const auto parsed = olsc::ParseArchiveList(wrap(with_commit));
+        Check(parsed && parsed->size() == 1 && (*parsed)[0].commit_id == 0x1122334455667788,
+              "an archive's commit id is read from encoded_digest");
+    }
     Check(olsc::ParseArchiveList(wrap("")) && olsc::ParseArchiveList(wrap(""))->empty(),
           "an empty cloud reads as an empty list");
     // A record the sysmodule's record check refuses fails the whole list (2179-3201), so a
@@ -334,18 +342,38 @@ void OlscChecks(const std::filesystem::path& dir) {
 
     const auto file = dir / "olsc-settings.json";
     const std::string uid = "00112233445566778899aabbccddeeff";
+    std::filesystem::remove(file);
     {
         olsc::DaemonSettings settings{file};
-        Check(!settings.GlobalAutoUpload(uid) && !settings.GlobalAutoDownload(uid),
-              "an unknown user reads as off");
-        settings.SetGlobalAutoUpload(uid, true);
+        Check(settings.GlobalAutoUpload(uid) && !settings.GlobalAutoDownload(uid) &&
+                  settings.ApplicationAutoTransfer(uid, 0x0100000000000001),
+              "an unknown user has the settings defaults (backup on, download off)");
+        settings.SetGlobalAutoUpload(uid, false);
         settings.SetApplicationAutoTransfer(uid, 0x0100A00000BB0000, true);
+        settings.SetSeries(uid, 0x0100A00000BB0000, {7, 9});
     }
     olsc::DaemonSettings reread{file};
-    Check(reread.GlobalAutoUpload(uid) && !reread.GlobalAutoDownload(uid) &&
+    const auto series = reread.Series(uid, 0x0100A00000BB0000);
+    Check(!reread.GlobalAutoUpload(uid) && !reread.GlobalAutoDownload(uid) &&
               reread.ApplicationAutoTransfer(uid, 0x0100A00000BB0000) &&
-              !reread.ApplicationAutoTransfer(uid, 0x0100000000000001),
-          "the olsc daemon settings survive a restart");
+              !reread.ApplicationAutoTransfer(uid, 0x0100000000000001) && series &&
+              series->series_id == 7 && series->commit_id == 9 &&
+              !reread.Series(uid, 0x0100000000000001),
+          "the olsc daemon settings and SeriesInfo survive a restart");
+
+    // Newness (olsc-autonomy.md §4.1).
+    olsc::ArchiveInfo cloud;
+    cloud.series_id = 7;
+    cloud.commit_id = 9;
+    const olsc::SeriesInfo synced{7, 9};
+    Check(olsc::Newness(std::nullopt, 5, std::nullopt) == 2 &&
+              olsc::Newness(std::nullopt, std::nullopt, std::nullopt) == 3 &&
+              olsc::Newness(synced, std::nullopt, cloud) == 1 &&
+              olsc::Newness(synced, 9, cloud) == 0 && olsc::Newness(synced, 10, cloud) == 2 &&
+              olsc::Newness(olsc::SeriesInfo{7, 8}, 8, cloud) == 1 &&
+              olsc::Newness(olsc::SeriesInfo{7, 8}, 10, cloud) == 3 &&
+              olsc::Newness(std::nullopt, 9, cloud) == 3,
+          "newness: in sync, cloud newer, local newer and conflict as the sysmodule decides");
 
     if (list) {
         const auto store = dir / "olsc-archives.json";
@@ -548,21 +576,34 @@ public:
         int partitions;
         std::vector<Part> parts;
         std::string key_seed, mac;
+        std::uint64_t series = 7;
+        std::uint64_t previous = 0;
     };
     std::vector<Version> versions;
     std::vector<std::string> calls;
+    std::vector<tr::Headers> call_headers;
     int partitions = 3;
+    int puts = 0;
+    bool delta_sent_seed = false;
     std::uint64_t next_id = 100;
 
+    std::string DeviceToken() override { return "dtok"; }
+
     tr::HttpResponse Request(const std::string& method, const std::string& host,
-                             const std::string& path, const std::string& body) override {
+                             const std::string& path, const std::string& body,
+                             const tr::Headers& headers) override {
         calls.push_back(method + " " + path);
+        call_headers.push_back(headers);
         const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
         if (host == tr::PolicyHost) {
             return {200, R"({"policy_type":"ALL_OK"})"};
         }
         if (path.find("/save_data_archives?") != std::string::npos) {
-            return {200, R"({"save_data_archives":[]})"};
+            nlohmann::json list = nlohmann::json::array();
+            for (const auto& v : versions) {
+                list.push_back({{"id", v.id}, {"status", v.status}});
+            }
+            return {200, nlohmann::json{{"save_data_archives", list}}.dump()};
         }
         if (path.ends_with("/save_data_archives/start_upload")) {
             versions.push_back({next_id++, "uploading", partitions, {}, {}, {}});
@@ -570,9 +611,22 @@ public:
         }
         const auto v = FindVersion(path);
         const auto p = FindPart(path);
+        if (path.ends_with("/start_upload") && v) {
+            // A delta (saves §6.1): the base's components mirrored, handed over.
+            Version next{next_id++, "uploading", v->partitions, {}, {}, {}, v->series, v->id};
+            for (const auto& part : v->parts) {
+                next.parts.push_back({next_id++, part.index, "hand_over", part.blob});
+            }
+            versions.push_back(next);
+            return {200, Archive(versions.back(), false)};
+        }
         if (path.ends_with("/component_files/create") && v) {
             v->parts.push_back({next_id++, json.value("index", 0u)});
             return {200, Component(v->parts.back(), "")};
+        }
+        if (path.ends_with("/update") && p) {
+            p->status = "uploading";
+            return {200, Component(*p, "put")};
         }
         if (path.ends_with("/signed_uri") && p) {
             const bool write = body.find("write") != std::string::npos;
@@ -589,6 +643,19 @@ public:
             v->status = "fixed";
             v->key_seed = json.value("encoded_key_seed", std::string{});
             v->mac = json.value("encoded_mac", std::string{});
+            if (v->previous != 0) {
+                // The server change saves needs: a handed-over part keeps the base's bytes, and
+                // the delta keeps the base's key seed.
+                delta_sent_seed = delta_sent_seed || !v->key_seed.empty();
+                for (const auto& base : versions) {
+                    if (base.id == v->previous) {
+                        v->key_seed = base.key_seed;
+                    }
+                }
+                for (auto& part : v->parts) {
+                    part.status = "fixed";
+                }
+            }
             return {200, Archive(*v, false)};
         }
         if (path.ends_with("/extend_upload_timeout") && v) {
@@ -621,6 +688,7 @@ public:
             for (auto& p : v.parts) {
                 if (p.id == id) {
                     if (method == "PUT") {
+                        ++puts;
                         p.blob.assign(body.begin(), body.end());
                         return {200, {}};
                     }
@@ -684,7 +752,7 @@ private:
             parts.push_back(c);
         }
         return nlohmann::json{{"save_data_archive",
-                               {{"id", v.id}, {"status", v.status},
+                               {{"id", v.id}, {"status", v.status}, {"series_id", v.series},
                                 {"num_of_partitions", v.partitions}, {"component_files", parts}}}}
             .dump();
     }
@@ -699,6 +767,7 @@ public:
     std::vector<std::uint16_t> ChunkIds() override { return writer.ChunkIds(); }
     std::optional<tr::Bytes> Chunk(std::uint16_t id) override { return writer.Chunk(id); }
     void SetAad(const tr::Aad& aad) override { writer.SetAad(aad); }
+    tr::Aad ImportAad() override { return writer.Aad(); }
     tr::Key KeySeed() override { return seed; }
     std::optional<tr::Key> InitialDataMac() override { return writer.InitialDataMac(); }
     bool Finalize() override { return true; }
@@ -749,6 +818,19 @@ public:
     std::unique_ptr<tr::Exporter> OpenFullExporter() override {
         return std::make_unique<FakeExporter>(source, StreamKey(own_seed), *shared_mac_key,
                                               own_seed);
+    }
+    std::unique_ptr<tr::Exporter> OpenDiffExporter(std::span<const std::uint8_t> meta) override {
+        st::ArchiveReader base;
+        if (!has_package || base.Open(meta, StreamKey(package_seed), *shared_mac_key,
+                                      package_mac) != st::ArchiveReader::Error::None) {
+            return nullptr;
+        }
+        auto exporter = std::make_unique<FakeExporter>(source, StreamKey(package_seed),
+                                                       *shared_mac_key, package_seed);
+        if (!exporter->writer.SetBase(base.Content())) {
+            return nullptr;
+        }
+        return exporter;
     }
     std::unique_ptr<tr::Importer> OpenImporter(std::span<const std::uint8_t> meta) override {
         if (!has_package) {
@@ -807,17 +889,60 @@ void TransferFlowChecks() {
     // Download on a second console of the same account (shares the MAC key: same keys).
     FakeFs harbor_b{st::ArchiveSource{}};
     harbor_b.shared_mac_key = &harbor_a.mac_key;
-    const auto down = tr::Download(server, harbor_b, save.application_id, up.archive_id, nullptr);
+    Check(server.calls[0].ends_with("/application_policy/0100a5a020d5e000/00003?dtoken=dtok"),
+          "the policy request carries the launch version and the device token");
+    bool sda_on_archive_calls = true;
+    bool ignorable_counts = true;
+    unsigned extend = 0;
+    for (std::size_t i = 0; i < server.calls.size(); ++i) {
+        const auto& h = server.call_headers[i];
+        const bool has_sda = std::any_of(h.begin(), h.end(), [&](const auto& kv) {
+            return kv.first == "X-SDA-ID" && kv.second == std::to_string(up.archive_id);
+        });
+        const bool per_archive = server.calls[i].find("/save_data_archives/1") != std::string::npos ||
+                                 server.calls[i].find("/component_files/") != std::string::npos;
+        sda_on_archive_calls = sda_on_archive_calls && has_sda == per_archive;
+        if (server.calls[i].ends_with("/extend_upload_timeout")) {
+            ignorable_counts = ignorable_counts &&
+                               std::any_of(h.begin(), h.end(), [&](const auto& kv) {
+                                   return kv.first == "X-Ignorable" &&
+                                          kv.second == fmt::format("counter={}", extend);
+                               });
+            ++extend;
+        }
+    }
+    Check(sda_on_archive_calls && ignorable_counts && extend == 4,
+          "X-SDA-ID on every request about the archive, X-Ignorable counts the chunks");
+    const auto down = tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr);
     Check(down.error == tr::Error::None && harbor_b.imported == source.stream,
           "the second console downloads the same save image");
+
+    // A changed block: the next upload is a delta of the one chunk that holds it.
+    auto changed = source;
+    changed.stream[3 * 0x4000 + 5] ^= 0xff; // block 3: chunk 1 of 3 (2 + 2 + 3 blocks)
+    FakeFs harbor_e{changed};
+    harbor_e.shared_mac_key = &harbor_a.mac_key;
+    server.puts = 0;
+    const auto delta = tr::Upload(server, harbor_e, save, 0, nullptr);
+    Check(delta.error == tr::Error::None && server.versions.size() == 2 &&
+              server.versions[1].previous == up.archive_id && server.puts == 2 &&
+              !server.delta_sent_seed,
+          "a delta upload sends the changed chunk and the meta, and the MAC without a seed");
+    FakeFs harbor_f{st::ArchiveSource{}};
+    harbor_f.shared_mac_key = &harbor_a.mac_key;
+    const auto down2 = tr::Download(server, harbor_f, save.application_id, delta.archive_id, 3, nullptr);
+    Check(down2.error == tr::Error::None && harbor_f.imported == changed.stream,
+          "the delta archive downloads as the changed save image");
+
     FakeFs harbor_c{st::ArchiveSource{}};
     harbor_c.shared_mac_key = &harbor_a.mac_key;
-    const auto gone = tr::Download(server, harbor_c, save.application_id, 999999, nullptr);
+    const auto gone = tr::Download(server, harbor_c, save.application_id, 999999, 3, nullptr);
     Check(gone.error == tr::Error::ArchiveGone, "a missing archive is 2179-2100");
-    server.partitions = 0;
+    FakeServer empty;
+    empty.partitions = 0;
     FakeFs harbor_d{source};
-    Check(tr::Upload(server, harbor_d, save, 0, nullptr).error == tr::Error::Fs,
-          "num_of_partitions 0 (saves today) fails at SetDivisionCount");
+    Check(tr::Upload(empty, harbor_d, save, 0, nullptr).error == tr::Error::Fs,
+          "num_of_partitions 0 fails at SetDivisionCount");
 }
 
 void RedactChecks() {

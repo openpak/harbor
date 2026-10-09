@@ -4,6 +4,8 @@
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -11,6 +13,7 @@
 #include <thread>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 
 #include "common/fs/file.h"
 #include "common/fs/path_util.h"
@@ -25,6 +28,7 @@
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/openpak/account.h"
 #include "core/openpak/platform.h"
+#include "core/openpak/secret_store.h"
 #include "core/openpak/session.h"
 
 namespace Service::Account::OpenPakAccount {
@@ -48,6 +52,7 @@ struct AdoptionState {
     std::map<std::string, Pending> pending;
     std::set<std::string> adopted;
     std::set<std::string> in_flight;
+    std::condition_variable finished; ///< A background sign-in left in_flight.
 };
 
 AdoptionState& Adoptions() {
@@ -135,6 +140,63 @@ std::filesystem::path ProfileImagePath(const Common::UUID& uid) {
            fmt::format("system/save/8000000000000010/su/avators/{}.jpg", uid.FormattedString());
 }
 
+namespace {
+
+// users/me's names for a user, as the console keeps users/me in its NasUserBase cache: in the
+// secret store (they are account data), with a copy in memory for 136's IPC thread.
+std::string NamesKey(const std::string& uid) {
+    return fmt::format("nas-user-{}", uid);
+}
+
+std::mutex& NamesMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::map<std::string, oauth::NasUserNames>& NamesCache() {
+    static std::map<std::string, oauth::NasUserNames> cache;
+    return cache;
+}
+
+void KeepNames(const std::string& uid, const oauth::User& me) {
+    oauth::NasUserNames names{me.screen_name, me.email, me.login_id, me.gender,
+                              me.language,    me.region, me.timezone};
+    const nlohmann::json doc{{"screenName", names.screen_name}, {"email", names.email},
+                             {"loginId", names.login_id},       {"gender", names.gender},
+                             {"language", names.language},      {"region", names.region},
+                             {"timezone", names.timezone}};
+    if (!OpenPak::StoreSecret(NamesKey(uid), doc.dump())) {
+        LOG_WARNING(Service_ACC, "acc: the Nintendo Account names were not kept");
+    }
+    std::scoped_lock lock{NamesMutex()};
+    NamesCache()[uid] = std::move(names);
+}
+
+oauth::NasUserNames LoadNames(const std::string& uid) {
+    {
+        std::scoped_lock lock{NamesMutex()};
+        if (const auto it = NamesCache().find(uid); it != NamesCache().end()) {
+            return it->second;
+        }
+    }
+    oauth::NasUserNames names;
+    if (const auto kept = OpenPak::LoadSecret(NamesKey(uid)); kept && !kept->empty()) {
+        const auto doc = nlohmann::json::parse(*kept, nullptr, false);
+        const auto text = [&doc](const char* key) {
+            return doc.is_object() && doc.contains(key) && doc.at(key).is_string()
+                       ? doc.at(key).get<std::string>()
+                       : std::string{};
+        };
+        names = {text("screenName"), text("email"),  text("loginId"), text("gender"),
+                 text("language"),   text("region"), text("timezone")};
+    }
+    std::scoped_lock lock{NamesMutex()};
+    NamesCache()[uid] = names;
+    return names;
+}
+
+} // namespace
+
 Result ApplyCode(const std::stop_token& stop, const std::string& code,
                  const std::string& verifier, const std::string& uid,
                  const std::vector<std::string>& others, NintendoAccountLink& out) {
@@ -189,6 +251,7 @@ Result ApplyCode(const std::stop_token& stop, const std::string& code,
         return ResultNetworkServiceAccountFederationFailed;
     }
 
+    KeepNames(uid, *me);
     out.nintendo_account_id = me->id;
     out.network_service_account_id = OpenPak::Session::NetworkServiceAccountId(uid);
     out.nickname = OpenPak::Session::Nickname(uid);
@@ -242,6 +305,7 @@ std::optional<NintendoAccountInfo> NintendoAccount(const std::string& uid) {
         .nickname = OpenPak::Session::Nickname(uid),
         .birthday = OpenPak::Session::Birthday(uid),
         .country = OpenPak::Session::Country(uid),
+        .names = LoadNames(uid),
     };
 }
 
@@ -324,7 +388,23 @@ void EnsureAndAdoptInBackground(const std::string& uid) {
         auto& state = Adoptions();
         std::lock_guard lock{state.mutex};
         state.in_flight.erase(uid);
+        state.finished.notify_all();
     }).detach();
+}
+
+bool SignedInWithin(const std::string& uid, std::chrono::milliseconds max) {
+    if (uid.empty() || !OpenPak::Session::Enabled()) {
+        return false;
+    }
+    if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
+        return true;
+    }
+    EnsureAndAdoptInBackground(uid);
+    auto& state = Adoptions();
+    std::unique_lock lock{state.mutex};
+    state.finished.wait_for(lock, max, [&] { return !state.in_flight.contains(uid); });
+    lock.unlock();
+    return OpenPak::Session::NetworkServiceAccountId(uid) != 0;
 }
 
 void QueueAdoption(const Common::UUID& uid, std::string nickname, std::vector<u8> image) {

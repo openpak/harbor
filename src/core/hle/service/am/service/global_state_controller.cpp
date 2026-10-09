@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/applet_manager.h"
@@ -11,6 +12,7 @@
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/ipc_helpers.h"
+#include "core/hle/service/omm/idle_policy.h"
 
 namespace Service::AM {
 
@@ -31,6 +33,7 @@ IGlobalStateController::IGlobalStateController(Core::System& system_)
         {13, D<&IGlobalStateController::UpdateDefaultDisplayResolution>, "UpdateDefaultDisplayResolution"},
         {14, D<&IGlobalStateController::ShouldSleepOnBoot>, "ShouldSleepOnBoot"},
         {15, D<&IGlobalStateController::GetHdcpAuthenticationFailedEvent>, "GetHdcpAuthenticationFailedEvent"},
+        {16, D<&IGlobalStateController::IsIdleDimmed>, "Unknown16"},
         {30, D<&IGlobalStateController::OpenCradleFirmwareUpdater>, "OpenCradleFirmwareUpdater"},
     };
     // clang-format on
@@ -76,9 +79,18 @@ Result IGlobalStateController::StartRebootSequence() {
     R_SUCCEED();
 }
 
+// 9, 16 and 10 are idle:sys 1, 2 and 4 on 23.0.1 (0x08585c14, 0x08585c50, 0x08585c8c).
 Result IGlobalStateController::IsAutoPowerDownRequested(Out<bool> out_is_requested) {
-    LOG_DEBUG(Service_AM, "called");
-    *out_is_requested = false;
+    auto* const idle = OMM::GetIdlePolicy();
+    *out_is_requested = idle != nullptr && idle->IsAutoPowerDownRequested();
+    LOG_DEBUG(Service_AM, "called, requested={}", *out_is_requested);
+    R_SUCCEED();
+}
+
+Result IGlobalStateController::IsIdleDimmed(Out<bool> out_is_dimmed) {
+    auto* const idle = OMM::GetIdlePolicy();
+    *out_is_dimmed = idle != nullptr && idle->IsDimmed();
+    LOG_DEBUG(Service_AM, "called, dimmed={}", *out_is_dimmed);
     R_SUCCEED();
 }
 
@@ -107,7 +119,10 @@ Result IGlobalStateController::UpdateDefaultDisplayResolution() {
 IGlobalStateController::~IGlobalStateController() = default;
 
 Result IGlobalStateController::LoadAndApplyIdlePolicySettings() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_INFO(Service_AM, "called");
+    if (auto* const idle = OMM::GetIdlePolicy()) {
+        idle->LoadAndApplySettings();
+    }
     R_SUCCEED();
 }
 

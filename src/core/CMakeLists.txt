@@ -645,6 +645,10 @@ add_library(core STATIC
     hle/service/cmif_types.h
     hle/service/erpt/erpt.cpp
     hle/service/erpt/erpt.h
+    hle/service/erpt/erpt_fields.h
+    hle/service/erpt/msgpack_writer.h
+    hle/service/erpt/report_builder.h
+    hle/service/erpt/report_store.h
     hle/service/es/es.cpp
     hle/service/es/es.h
     hle/service/eupld/eupld.cpp
@@ -975,6 +979,8 @@ add_library(core STATIC
     hle/service/olsc/transfer_runner.h
     hle/service/olsc/transfer_task_list_controller.cpp
     hle/service/olsc/transfer_task_list_controller.h
+    hle/service/omm/idle_policy.cpp
+    hle/service/omm/idle_policy.h
     hle/service/omm/omm.cpp
     hle/service/omm/omm.h
     hle/service/omm/operation_mode_manager.cpp

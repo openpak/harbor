@@ -15,8 +15,7 @@
 
 namespace Service::NS {
 
-IQueryService::IQueryService(Core::System& system_) : ServiceFramework{system_, "pdm:qry"},
-    play_time_manager{std::make_unique<PlayTime::PlayTimeManager>()} {
+IQueryService::IQueryService(Core::System& system_) : ServiceFramework{system_, "pdm:qry"} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, nullptr, "QueryAppletEvent"},
@@ -79,13 +78,16 @@ Result IQueryService::QueryApplicationPlayStatisticsForSystem(
     Out<s32> out_entries, u8 flag,
     OutArray<ApplicationPlayStatistics, BufferAttr_HipcMapAlias> out_stats,
     InArray<u64, BufferAttr_HipcMapAlias> application_ids) {
+    // The frontend's PlayTimeManager owns the play time file; pdm reads what it last saved.
+    const auto play_times = PlayTime::PlayTimeManager::ReadSaved();
     const size_t count = std::min(out_stats.size(), application_ids.size());
     s32 written = 0;
     for (size_t i = 0; i < count; ++i) {
         const u64 app_id = application_ids[i];
         ApplicationPlayStatistics stats{};
         stats.application_id = app_id;
-        stats.play_time_ns = play_time_manager->GetPlayTime(app_id) * 1'000'000'000ULL;
+        const auto it = play_times.find(app_id);
+        stats.play_time_ns = (it != play_times.end() ? it->second : 0) * 1'000'000'000ULL;
         stats.launch_count = Core::LaunchTimestampCache::GetLaunchCount(app_id);
         out_stats[i] = stats;
         ++written;

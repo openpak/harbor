@@ -3,18 +3,18 @@
 
 #include <QCoreApplication>
 #include <QKeyEvent>
-#include <QPalette>
 #include <QTimer>
-#include <QWidget>
 
 #include "core/core.h"
 #include "common/logging.h"
+#include "common/settings.h"
 #include "core/hle/service/am/applet_manager.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/main.h"
 #include "qt_common/qt_common.h"
+#include "video_core/host_screen.h"
 #include "yuzu/harbor_system_keys.h"
 
 namespace {
@@ -23,6 +23,9 @@ using VirtualButton = InputCommon::VirtualGamepad::VirtualButton;
 
 // The power button's hold that opens the power menu, the same on every power input.
 constexpr int PowerHoldMs = 1000;
+
+// How long the black frame gets to reach the screen before the guest pauses.
+constexpr int PauseDelayMs = 150;
 
 // Player 1 and Handheld; the firmware's button poller listens on both.
 constexpr std::size_t PlayerPorts[] = {0, 8};
@@ -50,39 +53,51 @@ HarborSystemKeys::HarborSystemKeys(InputCommon::InputSubsystem& input_subsystem_
         QMetaObject::invokeMethod(this, [this, sleeping] { ApplySleep(sleeping); },
                                   Qt::QueuedConnection);
     });
+    QtCommon::system->GetAppletManager().SetDimHandler([this](bool dimmed) {
+        QMetaObject::invokeMethod(this, [this, dimmed] { ApplyDim(dimmed); },
+                                  Qt::QueuedConnection);
+    });
 }
 
+// idle's dimming, drawn by the presenter over the console's picture (video_core/host_screen):
+// the LCD at half (omm dims its backlight; not traced how far), the TV at omm's 70 %.
+void HarborSystemKeys::ApplyDim(bool dimmed) {
+    const bool docked =
+        Settings::values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
+    VideoCore::HostScreen::SetDim(dimmed ? (docked ? 0.7f : 0.5f) : 0.0f);
+}
+
+// The presenter blacks the whole surface (video_core/host_screen); the guest pauses a moment
+// later, once the black frame has been composed.
 void HarborSystemKeys::ApplySleep(bool sleeping) {
-    auto* const window = qobject_cast<QWidget*>(parent());
     if (sleeping) {
-        if (sleep_screen != nullptr || window == nullptr) {
+        if (asleep) {
             return;
         }
         LOG_INFO(Frontend, "harbor: the console sleeps");
-        paused_for_sleep = !QtCommon::system->IsPaused();
-        if (paused_for_sleep) {
-            QtCommon::system->Pause();
-        }
-        sleep_screen = new QWidget(window);
-        sleep_screen->setAutoFillBackground(true);
-        QPalette palette = sleep_screen->palette();
-        palette.setColor(QPalette::Window, Qt::black);
-        sleep_screen->setPalette(palette);
-        sleep_screen->setGeometry(window->rect());
-        sleep_screen->show();
-        sleep_screen->raise();
+        asleep = true;
+        VideoCore::HostScreen::SetBlackout(true);
+        QTimer::singleShot(PauseDelayMs, this, [this] {
+            if (!asleep) {
+                return;
+            }
+            paused_for_sleep = !QtCommon::system->IsPaused();
+            if (paused_for_sleep) {
+                QtCommon::system->Pause();
+            }
+        });
         wake_armed = false;
         waking = false;
         wake_poll->start();
         return;
     }
-    if (sleep_screen == nullptr) {
+    if (!asleep) {
         return;
     }
     LOG_INFO(Frontend, "harbor: the console is awake");
+    asleep = false;
     wake_poll->stop();
-    sleep_screen->deleteLater();
-    sleep_screen = nullptr;
+    VideoCore::HostScreen::SetBlackout(false);
     if (paused_for_sleep) {
         QtCommon::system->Run();
     }
@@ -122,7 +137,7 @@ bool HarborSystemKeys::eventFilter(QObject* watched, QEvent* event) {
     }
     const auto* key = static_cast<QKeyEvent*>(event);
     // A sleeping console wakes on any key; the key goes no further.
-    if (sleep_screen != nullptr && QtCommon::system) {
+    if (asleep && QtCommon::system) {
         if (event->type() == QEvent::KeyPress && !key->isAutoRepeat() && !waking) {
             waking = true;
             LOG_INFO(Frontend, "harbor: wake from sleep (key)");

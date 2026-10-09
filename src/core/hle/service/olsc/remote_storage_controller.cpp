@@ -5,7 +5,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 
+
+#include "core/file_sys/fs_save_data_types.h"
+#include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/save_data_controller.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "common/redact.h"
 #include "core/hle/kernel/k_event.h"
@@ -143,14 +149,10 @@ Result IRemoteStorageController::GetSecondarySave(Out<bool> out_has_secondary_sa
 
 Result IRemoteStorageController::GetDataNewnessByApplicationId(Out<u8> out_newness,
                                                               u64 application_id) {
-    // The sysmodule (0x1d32e0) answers 0 when the cloud and the local save agree and 1 when they
-    // differ. Harbor cannot compare digests without the transfer exporter, so an archive in the
-    // cloud reads as different.
-    const auto archives = OpenPak::Olsc::ArchiveCache::Instance().Get(uid);
-    const bool in_cloud =
-        archives && OpenPak::Olsc::LatestFor(*archives, application_id).has_value();
-    LOG_DEBUG(Service_OLSC, "called, app={:016X} in_cloud={}", application_id, in_cloud);
-    *out_newness = in_cloud ? 1 : 0;
+    // 0x1d32e0 against the title's SeriesInfo (olsc-autonomy.md §4.1): 0 in sync, 1 cloud newer,
+    // 2 local newer, 3 conflict.
+    *out_newness = queue->Newness(user, application_id);
+    LOG_DEBUG(Service_OLSC, "called, app={:016X} newness={}", application_id, *out_newness);
     R_SUCCEED();
 }
 
@@ -185,8 +187,11 @@ Result IRemoteStorageController::CreateSaveDataArchiveCacheUpdationTask(
     Out<SharedPointer<IAsyncResult>> out_task) {
     // 0x224760: no input, an IAsyncResult out. "Update List" on the Save Data Cloud page.
     LOG_INFO(Service_OLSC, "called");
-    *out_task = std::make_shared<IAsyncResult>(system, worker, [who = uid]() -> Result {
-        if (!OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
+    *out_task = std::make_shared<IAsyncResult>(system, worker, [who = uid, user = user,
+                                                                queue = queue]() -> Result {
+        if (OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
+            queue->Repair(user); // after every cache update (0x1dfca0)
+        } else {
             // A console without its server fails here with a network error; which one is not
             // established, so the list stays as it was and the task succeeds.
             LOG_UNKNOWN_CONTRACT(Service_OLSC,
