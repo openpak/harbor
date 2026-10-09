@@ -105,9 +105,11 @@ Result IDaemonController::SetGlobalAutoDownloadSetting(SetGlobalSettingParameter
 }
 
 Result IDaemonController::StopAutonomyTaskExecution(Out<SharedPointer<IStopperObject>> out_stopper) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called");
-
-    *out_stopper = std::make_shared<IStopperObject>(system);
+    // While the stopper is open the autonomy agent registers nothing.
+    LOG_DEBUG(Service_OLSC, "called");
+    queue->HoldAutonomy(true);
+    *out_stopper = std::make_shared<IStopperObject>(
+        system, [queue = queue] { queue->HoldAutonomy(false); });
     R_SUCCEED();
 }
 

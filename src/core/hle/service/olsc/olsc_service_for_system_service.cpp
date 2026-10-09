@@ -19,6 +19,9 @@
 
 namespace Service::OLSC {
 
+// olsc:s 103/105 with nothing recorded (0x7d0b3).
+constexpr Result ResultNoErrorInfo{ErrorModule::OLSC, 1000};
+
 IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_)
     : ServiceFramework{system_, "olsc:s"} {
     // clang-format off
@@ -32,8 +35,8 @@ IOlscServiceForSystemService::IOlscServiceForSystemService(Core::System& system_
         {13, nullptr, "DeleteDeviceSaveDataProperty"},
         {100, nullptr, "ListLastTransferTaskErrorInfo"},
         {101, nullptr, "GetLastErrorInfoCount"},
-        {102, nullptr, "RemoveLastErrorInfoOld"},
-        {103, nullptr, "GetLastErrorInfo"},
+        {102, D<&IOlscServiceForSystemService::RemoveLastErrorInfo>, "RemoveLastErrorInfoOld"},
+        {103, D<&IOlscServiceForSystemService::GetTransferTaskErrorInfo>, "GetLastErrorInfo"},
         {104, nullptr, "GetLastErrorEventHolder"},
         {105, D<&IOlscServiceForSystemService::GetTransferTaskErrorInfo>, "GetTransferTaskErrorInfo"},
         {200, D<&IOlscServiceForSystemService::GetDataTransferPolicy>, "GetDataTransferPolicy"},
@@ -167,19 +170,26 @@ Result IOlscServiceForSystemService::RequestLatestVersionPlayablePlatforms(
 
 Result IOlscServiceForSystemService::GetTransferTaskErrorInfo(Out<TransferTaskErrorInfo> out_info,
                                                              Common::UUID uuid, u64 application_id) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called, uuid={} application_id={:016X}",
-                Common::Redact(uuid), application_id);
-
+    // 0x18a670 (103 GetLastErrorInfo 0x18a580 is the same lookup): the title's last failed
+    // transfer, or 2179-1000 when none is recorded, which qlaunch reads as "no error".
+    LOG_DEBUG(Service_OLSC, "called, application_id={:016X}", application_id);
+    const auto error = queue->Settings()->LastErrorOf(uuid.RawString(), application_id);
+    if (!error) {
+        R_THROW(ResultNoErrorInfo);
+    }
     TransferTaskErrorInfo info{};
     info.uid = uuid;
     info.application_id = application_id;
-    info.unknown_0x18 = 0;
-    info.reserved_0x19.fill(0);
-    info.unknown_0x20 = 0;
-    info.error_code = 0;
-    info.reserved_0x2C = 0;
-
+    info.unknown_0x18 = error->task_type;
+    info.unknown_0x20 = static_cast<u64>(error->time);
+    info.error_code = error->result & 0x3fffff;
     *out_info = info;
+    R_SUCCEED();
+}
+
+Result IOlscServiceForSystemService::RemoveLastErrorInfo(Common::UUID uuid, u64 application_id) {
+    // 102 (0x18a760): success whether or not there was one.
+    queue->Settings()->RemoveLastError(uuid.RawString(), application_id);
     R_SUCCEED();
 }
 

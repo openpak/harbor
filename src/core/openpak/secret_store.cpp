@@ -8,6 +8,7 @@
 
 #include "common/logging.h"
 #include "core/openpak/secret_store.h"
+#include "common/harbor_crash.h"
 
 namespace OpenPak {
 
@@ -18,6 +19,7 @@ struct Secrets {
     std::shared_ptr<SecretStore> store;
     std::function<std::string()> resolve_namespace;
     bool migration_logged = false;
+    bool decided = false;
     std::map<std::string, std::string, std::less<>> memory;
     bool warned = false;
 };
@@ -43,6 +45,18 @@ void SetSecretStore(std::shared_ptr<SecretStore> store) {
 
 bool HasSecretStore() {
     return Store() != nullptr;
+}
+
+void SetSecretStoreDecided() {
+    Secrets& s = Get();
+    std::lock_guard lock{s.mutex};
+    s.decided = true;
+}
+
+bool SecretStoreDecided() {
+    Secrets& s = Get();
+    std::lock_guard lock{s.mutex};
+    return s.decided || s.store != nullptr;
 }
 
 std::optional<std::string> LoadHostSecret(std::string_view key, bool* unreadable) {
@@ -168,6 +182,7 @@ void SetSecretNamespace(std::function<std::string()> resolve) {
 }
 
 std::optional<std::string> LoadSecret(std::string_view key, bool* unreadable) {
+    HARBOR_CRUMB("openpak: secret store load");
     const std::string ns = Namespace();
     bool failed = false;
     if (auto secret = LoadHostSecret(Namespaced(ns, key), &failed); secret || failed || ns.empty()) {

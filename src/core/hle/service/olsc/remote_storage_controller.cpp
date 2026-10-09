@@ -174,12 +174,11 @@ Result IRemoteStorageController::RegisterUploadTaskForApplication(Out<u64> out_t
     R_SUCCEED();
 }
 
-Result IRemoteStorageController::RegisterUploadTask(Out<u64> out_task_id, u8 unknown, bool flag,
+Result IRemoteStorageController::RegisterUploadTask(Out<u64> out_task_id, u8 rank, bool flag,
                                                     u64 application_id) {
-    // 0x224e10 -> 0x1fe530: {u8, bool flag, u64 application id} in, the task id out. The u8's
-    // meaning was not read (GUESS: a priority).
-    LOG_UNKNOWN_CONTRACT(Service_OLSC, "olsc RSC 12 first byte {} not read", unknown);
-    *out_task_id = queue->RegisterUpload(user, application_id, flag);
+    // 0x224e10 -> 0x1fe530: {u8 rank, bool flag, u64 application id} in, the task id out; the
+    // rank goes to the registration core 0x1b70e0 as RSC 1's fixed 0x7f does.
+    *out_task_id = queue->RegisterUpload(user, application_id, flag, rank);
     R_SUCCEED();
 }
 

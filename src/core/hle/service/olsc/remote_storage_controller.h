@@ -62,7 +62,7 @@ private:
     Result GetDataNewnessByApplicationId(Out<u8> out_newness, u64 application_id);
     Result RegisterDownloadTask(Out<u64> out_task_id, u64 archive_id);
     Result RegisterUploadTaskForApplication(Out<u64> out_task_id, u64 application_id);
-    Result RegisterUploadTask(Out<u64> out_task_id, u8 unknown, bool flag, u64 application_id);
+    Result RegisterUploadTask(Out<u64> out_task_id, u8 rank, bool flag, u64 application_id);
     Result CreateSaveDataArchiveCacheUpdationTask(Out<SharedPointer<IAsyncResult>> out_task);
     Result CreateSaveDataArchiveCacheUpdationForSpecifiedApplicationTask(
         Out<SharedPointer<IAsyncResult>> out_task, u64 application_id);

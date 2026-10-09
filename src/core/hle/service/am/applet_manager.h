@@ -121,6 +121,7 @@ private:
     std::mutex m_sleep_lock;
     std::function<void(bool)> m_sleep_handler;
     std::function<void(bool)> m_dim_handler;
+    bool m_dimmed{};
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};

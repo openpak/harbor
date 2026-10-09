@@ -19,6 +19,7 @@
 #include "harbor_setup/menu_input.h"
 #include "harbor_setup_android.h"
 #include "native.h"
+#include "common/harbor_crash.h"
 
 namespace {
 
@@ -215,6 +216,7 @@ extern "C" {
 
 /// Once the console boots: the menu's host, the Power button binding, and the bridge it calls.
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIEnv* env, jobject) {
+    HARBOR_CRUMB("menu: initMenu");
     static std::once_flag once;
     std::call_once(once, [env] {
         jclass local = env->FindClass("org/yuzu/yuzu_emu/harbor/HarborMenuBridge");
@@ -226,6 +228,7 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIE
         menu_host = &host;
         HarborSetup::MenuSetHost(host);
     });
+    HARBOR_CRUMB("menu: initMenu done");
 }
 
 /// On the UI thread when a controller connects, changes or goes, and as the menu opens: the device

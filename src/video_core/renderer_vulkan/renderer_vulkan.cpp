@@ -42,6 +42,7 @@
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "common/harbor_crash.h"
 #ifdef __ANDROID__
 #include <jni.h>
 #endif
@@ -203,6 +204,7 @@ RendererVulkan::~RendererVulkan() {
 }
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
+    HARBOR_CRUMB_ONCE("renderer: first Vulkan present");
     SCOPE_EXIT {
         render_window.OnFrameDisplayed();
     };

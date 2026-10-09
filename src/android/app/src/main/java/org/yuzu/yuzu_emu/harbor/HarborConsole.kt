@@ -85,6 +85,18 @@ object HarborConsole {
                 start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
             }
             HarborNative.connectOpenPak()
+            // Keys that are not on this phone are never replaced on their own: the user is told.
+            val keys = HarborNative.calibrationKeys()
+            if (keys == KEYS_NOT_HERE || keys == KEYS_BACKUP_PENDING) {
+                Log.warning("[Harbor] the console's keys are not on this phone ($keys); told the user")
+                from.runOnUiThread {
+                    Toast.makeText(
+                        from,
+                        if (keys == KEYS_BACKUP_PENDING) R.string.harbor_keys_backup_pending else R.string.harbor_keys_not_here,
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
             // The Harbor menu and the mapped Power button, for this console session.
             HarborNative.initMenu()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
@@ -399,6 +411,8 @@ object HarborConsole {
     // The passphrase lives only in this field between the question and the file picker's answer.
     private var backupPassphrase: String? = null
     private const val MIN_PASSPHRASE = 8
+    private const val KEYS_NOT_HERE = 2
+    private const val KEYS_BACKUP_PENDING = 3
 
     private fun askPassphrase(activity: EmulationActivity, message: Int, answer: (String?) -> Unit) {
         val field = android.widget.EditText(activity).apply {

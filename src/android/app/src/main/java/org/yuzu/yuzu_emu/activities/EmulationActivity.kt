@@ -58,6 +58,7 @@ import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.harbor.HarborAudioFocus
 import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborStartActivity
 import org.yuzu.yuzu_emu.harbor.HarborNative
 import org.yuzu.yuzu_emu.harbor.HarborPower
 import org.yuzu.yuzu_emu.harbor.HarborSleep
@@ -78,6 +79,9 @@ import androidx.core.os.BundleCompat
 
 class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager.InputDeviceListener {
     private lateinit var binding: ActivityEmulationBinding
+
+    /** Sent through HarborStartActivity from onCreate (a start that skipped Harbor's own). */
+    private var harborRedirected = false
 
     var isActivityRecreated = false
     private lateinit var nfcReader: NfcReader
@@ -127,6 +131,21 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Harbor: Android recreates this screen on its own after the process died (the task comes
+        // back from recents). That start has not been through Harbor's (password store, OpenPak,
+        // console preset), so it goes there instead of booting a console half set up.
+        if (!HarborConsole.active && !intent.getBooleanExtra(EXTRA_OVERLAY_GAMELESS_EDIT_MODE, false)) {
+            harborRedirected = true
+            super.onCreate(null)
+            Log.info("[Harbor] emulation screen opened without a console boot (recreated: ${savedInstanceState != null}); starting through Harbor")
+            startActivity(
+                Intent(this, HarborStartActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            )
+            finish()
+            return
+        }
         Log.gameLaunched = true
         ThemeHelper.setTheme(this)
 
@@ -291,6 +310,11 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onDestroy() {
+        if (harborRedirected) {
+            // Finished in onCreate before anything was set up.
+            super.onDestroy()
+            return
+        }
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)

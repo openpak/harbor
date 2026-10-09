@@ -40,6 +40,7 @@
 #include "core/openpak/secret_store.h"
 #include "core/openpak/session.h"
 #include "core/openpak/session_detail.h"
+#include "common/harbor_crash.h"
 
 namespace OpenPak::Session {
 
@@ -344,6 +345,16 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
 
     if (WriteConsoleIdentity(cert_path, key_path)) {
         return true;
+    }
+    {
+        // A console with its own identity whose keys cannot be used now (locked, or the password
+        // store not read yet) does not get a self-signed stand-in: it would stay this server's
+        // certificate for good. No sign-in until the console's keys are back.
+        std::scoped_lock lock{identity_mutex};
+        if (identity_source) {
+            LOG_WARNING(WebService, "[OpenPak] The console's keys are not usable now; not signing in");
+            return false;
+        }
     }
 
     EVP_PKEY* key = GenerateRsaKey();
@@ -750,6 +761,7 @@ bool RunChain(const Endpoint& endpoint, const std::string& uid, const std::strin
 /// Sign `uid` in (or link it), committing the result. True when there is a fresh token after.
 bool SignIn(State& state, const std::string& uid, const std::string& account_id_token,
             std::string& error) {
+    HARBOR_CRUMB("openpak: SignIn");
     if (uid.empty()) {
         error = "no firmware user is open";
         return false;
@@ -976,6 +988,7 @@ std::string SenderName(State& state, const std::string& sender_id, const std::st
 /// active-user caches go, and the one arriving is attached (or signed in by the caller). True
 /// when there was a switch.
 bool FollowProfile(State& state) {
+    HARBOR_CRUMB("openpak: FollowProfile");
     const std::string profile = Platform::ProfileId();
 
     {

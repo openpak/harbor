@@ -70,6 +70,7 @@ private:
         Out<SharedPointer<IAsyncLatestVersionPlayablePlatformsRequest>> out_request,
         u64 application_id);
     Result GetTransferTaskErrorInfo(Out<TransferTaskErrorInfo> out_info, Common::UUID uid, u64 application_id);
+    Result RemoveLastErrorInfo(Common::UUID uuid, u64 application_id);
     Result GetOlscServiceForSystemService(
         Out<SharedPointer<IOlscServiceForSystemService>> out_interface);
 

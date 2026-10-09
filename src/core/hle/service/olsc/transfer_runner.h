@@ -55,7 +55,7 @@ struct TransferTask {
     u8 type{};   ///< 0 upload user save, 1 download user save (2/3 device: not built)
     u8 flag{};   ///< detail +0x21
     u8 rank{RankBasic}; ///< detail +0x51, TransferTaskInfo +0x0a
-    u8 state{};  ///< TransferTaskInfo +0x09 for a queued task: 0 waiting, 3 failed
+    u8 state{};  ///< TransferTaskInfo +0x09: 0 queued, 2 failed, 3 done (kept until newness 0)
     bool running{};
     u64 archive_id{};
     OpenPak::Olsc::Transfer::Progress progress{};
@@ -113,6 +113,11 @@ public:
     /// (same commit and time stamp) that newness would call a conflict (§4.3).
     void Repair(const Common::UUID& user);
 
+    /// TTLC 8 / IDaemonController 11 stoppers: while any is open no task starts / the autonomy
+    /// agent registers nothing.
+    void HoldExecution(bool hold);
+    void HoldAutonomy(bool hold);
+
     /// IDaemonController 4: the user's periodic sweep is due now.
     void MakeDue(const Common::UUID& user);
     /// IDaemonController 1/3/6 turning a setting off: the queued tasks it covered go.
@@ -154,6 +159,8 @@ private:
     bool users_known{};
     Clock::time_point postponed_gate{};
     Clock::time_point retry_at{Clock::time_point::max()};
+    int execution_holds{};
+    int autonomy_holds{};
     std::jthread thread;
 };
 

@@ -19,6 +19,7 @@
 #include "core/hle/service/sm/sm.h"
 #include "common/redact.h"
 #include "common/settings.h"
+#include "common/harbor_crash.h"
 #include <algorithm>
 
 namespace Service::Audio {
@@ -92,11 +93,13 @@ IAudioController::IAudioController(Core::System& system_)
 
     RegisterHandlers(functions);
 
+    HARBOR_CRUMB("audctl: IAudioController created");
     // A new session starts at the console's full volume; audctl lowers it in a HOME session.
     AudioCore::Sink::SetConsoleOutputGain(1.0f);
 
     m_set_sys =
         system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", true);
+    HARBOR_CRUMB_ONCE("audctl: set:sys reached");
     notification_event = service_context.CreateEvent("IAudioController:NotificationEvent");
 
     // Probably shouldn't do this in constructor?
@@ -130,6 +133,7 @@ IAudioController::IAudioController(Core::System& system_)
     } catch (...) {
         // Catch if something fails, since this is constructor
     }
+    HARBOR_CRUMB_ONCE("audctl: IAudioController constructed");
 }
 
 IAudioController::~IAudioController() {
@@ -251,6 +255,7 @@ Result IAudioController::Unknown5000(Out<SharedPointer<IAudioController>> out_au
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base), AudioController.cs.
 bool IAudioController::UseConsoleGain() {
     if (!m_console_gain) {
+        HARBOR_CRUMB_ONCE("audctl: console volume decided");
         m_console_gain = system.GetAppletManager().IsHomeSession();
         if (*m_console_gain) {
             // The constructor seeded the targets and the sink from the host's volume: a console
@@ -268,6 +273,7 @@ bool IAudioController::UseConsoleGain() {
                 LOG_WARNING(Audio, "Failed to reset the sink volume for the console volume");
             }
             ApplyConsoleGain();
+            HARBOR_CRUMB_ONCE("audctl: console volume applied");
         }
     }
     return *m_console_gain;
@@ -286,6 +292,7 @@ static std::optional<Set::AudioVolumeTarget> VolumeRecordFor(Set::AudioOutputMod
 }
 
 void IAudioController::RestoreStoredVolume(Set::AudioOutputModeTarget target) {
+    HARBOR_CRUMB("audctl: volume restore");
     const auto record = VolumeRecordFor(target);
     if (!record || !m_set_sys) {
         return;

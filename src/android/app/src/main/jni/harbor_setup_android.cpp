@@ -7,9 +7,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 #include <jni.h>
 
@@ -90,6 +94,58 @@ std::vector<std::string> Strings(JNIEnv* env, jobjectArray array) {
     }
     env->DeleteLocalRef(array);
     return out;
+}
+
+/// Calls into Java for callbacks the emulator makes from its own threads. Those can run on a guest
+/// fiber (am's, omm's and the services' threads), where a JNI call segfaults (ART checks the stack
+/// it was attached with), and they hold the emulator's locks. One plain thread, attached to the VM
+/// once, takes each call in order; the caller only queues it and never waits.
+class JavaCallQueue {
+public:
+    void Post(std::function<void(JNIEnv*)> call) {
+        {
+            std::scoped_lock lk{mutex};
+            calls.push_back(std::move(call));
+            if (!started) {
+                started = true;
+                std::thread([this] { Run(); }).detach();
+            }
+        }
+        cv.notify_one();
+    }
+
+private:
+    [[noreturn]] void Run() {
+        JNIEnv* env = Common::Android::GetEnvForThread();
+        while (true) {
+            std::function<void(JNIEnv*)> call;
+            {
+                std::unique_lock lk{mutex};
+                cv.wait(lk, [this] { return !calls.empty(); });
+                call = std::move(calls.front());
+                calls.pop_front();
+            }
+            const bool framed = env->PushLocalFrame(16) == JNI_OK;
+            call(env);
+            if (env->ExceptionCheck()) {
+                env->ExceptionDescribe();
+                env->ExceptionClear();
+            }
+            if (framed) {
+                env->PopLocalFrame(nullptr);
+            }
+        }
+    }
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::function<void(JNIEnv*)>> calls;
+    bool started = false;
+};
+
+JavaCallQueue& JavaCalls() {
+    static auto* queue = new JavaCallQueue; // lives as long as the process: its thread does
+    return *queue;
 }
 
 bool ClearException(JNIEnv* env) {
@@ -405,19 +461,27 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     env->DeleteLocalRef(sleep_local);
     sleep_changed = env->GetStaticMethodID(sleep_class, "onSleepChanged", "(Z)V");
     dim_changed = env->GetStaticMethodID(sleep_class, "onDimChanged", "(Z)V");
-    // am calls this at the sleep sequence's deepest point and on wake: HarborSleep pauses the guest
-    // and blanks the screen on the UI thread.
-    EmulationSession::GetInstance().System().GetAppletManager().SetSleepHandler([](bool sleeping) {
-        JNIEnv* thread_env = Common::Android::GetEnvForThread();
-        thread_env->CallStaticVoidMethod(sleep_class, sleep_changed, sleeping ? JNI_TRUE : JNI_FALSE);
-        ClearException(thread_env);
-    });
-    // idle:sys dims the screen after the dimming time and brings it back on input.
-    EmulationSession::GetInstance().System().GetAppletManager().SetDimHandler([](bool dimmed) {
-        JNIEnv* thread_env = Common::Android::GetEnvForThread();
-        thread_env->CallStaticVoidMethod(sleep_class, dim_changed, dimmed ? JNI_TRUE : JNI_FALSE);
-        ClearException(thread_env);
-    });
+    // am calls this at the sleep sequence's deepest point and on wake, idle:sys when the screen dims
+    // and comes back; both from emulator threads with locks held, so the call to HarborSleep goes
+    // through the Java call queue, and HarborSleep moves the work to the UI thread.
+    if (sleep_class && sleep_changed && dim_changed) {
+        auto& applet_manager = EmulationSession::GetInstance().System().GetAppletManager();
+        applet_manager.SetSleepHandler([](bool sleeping) {
+            JavaCalls().Post([sleeping](JNIEnv* call_env) {
+                call_env->CallStaticVoidMethod(sleep_class, sleep_changed,
+                                               sleeping ? JNI_TRUE : JNI_FALSE);
+            });
+        });
+        applet_manager.SetDimHandler([](bool dimmed) {
+            JavaCalls().Post([dimmed](JNIEnv* call_env) {
+                call_env->CallStaticVoidMethod(sleep_class, dim_changed,
+                                               dimmed ? JNI_TRUE : JNI_FALSE);
+            });
+        });
+    } else {
+        ClearException(env);
+        LOG_ERROR(Frontend, "harbor: HarborSleep's callbacks are missing; no sleep or dim screen");
+    }
 }
 
 /// "" when the console can boot, "setup" when the setup must run first, else why the check itself

@@ -509,6 +509,32 @@ void DaemonSettings::SetSeries(const std::string& uid, std::uint64_t application
     Save();
 }
 
+std::optional<DaemonSettings::LastError> DaemonSettings::LastErrorOf(
+    const std::string& uid, std::uint64_t application_id) const {
+    std::lock_guard lock{mutex};
+    const auto it = users.find(uid);
+    if (it == users.end()) {
+        return std::nullopt;
+    }
+    const auto app = it->second.errors.find(application_id);
+    return app != it->second.errors.end() ? std::optional{app->second} : std::nullopt;
+}
+
+void DaemonSettings::SetLastError(const std::string& uid, std::uint64_t application_id,
+                                  LastError error) {
+    std::lock_guard lock{mutex};
+    users[uid].errors[application_id] = error;
+    Save();
+}
+
+void DaemonSettings::RemoveLastError(const std::string& uid, std::uint64_t application_id) {
+    std::lock_guard lock{mutex};
+    const auto it = users.find(uid);
+    if (it != users.end() && it->second.errors.erase(application_id) != 0) {
+        Save();
+    }
+}
+
 void DaemonSettings::Load() {
     const std::string text = Platform::ReadFile(file);
     if (text.empty()) {
@@ -531,6 +557,18 @@ void DaemonSettings::Load() {
         }
         if (const auto v = value.find("auto_download"); v != value.end() && v->is_boolean()) {
             user.auto_download = v->get<bool>();
+        }
+        if (const auto apps = value.find("errors"); apps != value.end() && apps->is_object()) {
+            for (const auto& [app, entry] : apps->items()) {
+                if (entry.is_object() && !app.empty() && app.size() <= 16 &&
+                    std::all_of(app.begin(), app.end(),
+                                [](char c) { return std::isxdigit(c) != 0; })) {
+                    user.errors[std::stoull(app, nullptr, 16)] = {
+                        entry.value("task_type", std::uint8_t{0}),
+                        entry.value("time", std::int64_t{0}),
+                        entry.value("result", std::uint32_t{0})};
+                }
+            }
         }
         if (const auto apps = value.find("series"); apps != value.end() && apps->is_object()) {
             for (const auto& [app, pair] : apps->items()) {
@@ -568,7 +606,12 @@ void DaemonSettings::Save() const {
         for (const auto& [app, info] : user.series) {
             series[fmt::format("{:016x}", app)] = {info.series_id, info.commit_id};
         }
-        nlohmann::json entry = {{"auto_transfer", apps}, {"series", series}};
+        nlohmann::json errors = nlohmann::json::object();
+        for (const auto& [app, error] : user.errors) {
+            errors[fmt::format("{:016x}", app)] = {
+                {"task_type", error.task_type}, {"time", error.time}, {"result", error.result}};
+        }
+        nlohmann::json entry = {{"auto_transfer", apps}, {"series", series}, {"errors", errors}};
         if (user.auto_upload) {
             entry["auto_upload"] = *user.auto_upload;
         }

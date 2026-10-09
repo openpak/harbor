@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
+#include "common/harbor_crash.h"
 
 #include <algorithm>
 #include <cstring>
@@ -49,6 +50,7 @@ struct MdCtxDeleter {
 using MdCtx = std::unique_ptr<EVP_MD_CTX, MdCtxDeleter>;
 
 Key128 EcbDecrypt(const Key128& key, const Key128& block) {
+    HARBOR_CRUMB_ONCE("fs: first OpenSSL ECB");
     Key128 out{};
     CipherCtx ctx{EVP_CIPHER_CTX_new()};
     int len = 0;
@@ -91,6 +93,7 @@ bool Gcm(bool encrypt, const Key128& key, std::span<const u8> iv, std::span<u8> 
 }
 
 Pkey PublicKey(const Modulus& modulus) {
+    HARBOR_CRUMB_ONCE("fs: first OpenSSL public key");
     BIGNUM* n = BN_bin2bn(modulus.data(), static_cast<int>(modulus.size()), nullptr);
     BIGNUM* e = BN_new();
     BN_set_word(e, 65537);
@@ -199,6 +202,7 @@ std::optional<std::array<u8, 0x100>> SignPss(const std::string& private_key_pem_
 }
 
 void RandomBytes(std::span<u8> out) {
+    HARBOR_CRUMB_ONCE("fs: first OpenSSL RAND");
     RAND_bytes(out.data(), static_cast<int>(out.size()));
 }
 
