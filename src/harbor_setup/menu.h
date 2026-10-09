@@ -10,11 +10,13 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "common/harbor_crash.h"
+#include "common/param_package.h"
 #include "common/settings_input.h"
 
 namespace Core {
@@ -50,6 +52,13 @@ public:
     virtual bool IsAndroid() const = 0;
     virtual Core::System& System() = 0;
     virtual InputCommon::InputSubsystem& Input() = 0;
+    /// The input devices InputCommon lists (Android: a copy taken on the UI thread, where its
+    /// device list changes).
+    virtual std::vector<Common::ParamPackage> InputDevices();
+    /// Runs one of the menu thread's frames (Android: inside a JNI local frame).
+    virtual void MenuThreadFrame(const std::function<void()>& frame) {
+        frame();
+    }
 
     /// The frontend's own light or dark mode, for before the console has a colour set.
     virtual bool PlatformDarkTheme() {

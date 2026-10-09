@@ -652,7 +652,7 @@ void Run() {
             activity->Back();
         }
         try {
-            DrawFrame();
+            menu_host->MenuThreadFrame([] { DrawFrame(); });
         } catch (const std::exception& e) {
             LOG_ERROR(Frontend, "harbor: menu: {}", e.what());
         }
@@ -666,7 +666,6 @@ void Run() {
 void MenuSetHost(MenuHost& host) {
     menu_host = &host;
     StartPowerKey(host.System());
-    StartControllerWatcher(host);
     if (host.HasHud()) {
         // The FPS line is drawn by the menu's thread, so it starts now (closed).
         std::scoped_lock lk{mutex};
@@ -715,7 +714,6 @@ void MenuBack() {
 }
 
 void MenuShutdown() {
-    StopControllerWatcher();
     {
         std::scoped_lock lk{mutex};
         stopping = true;

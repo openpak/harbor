@@ -324,7 +324,7 @@ InputMapping::InputMapping(MenuHost& host_, InputStore& store_) : host{host_}, s
 
 std::vector<InputDevice> InputMapping::Devices() const {
     std::vector<InputDevice> out;
-    for (const auto& device : host.Input().GetInputDevices()) {
+    for (const auto& device : host.InputDevices()) {
         const auto engine = device.Get("engine", "");
         if (!IsControllerEngine(engine)) {
             continue;
@@ -750,53 +750,30 @@ InputStore& HarborInputStore() {
     return store;
 }
 
-namespace {
-std::thread watcher;
-std::mutex watcher_mutex;
-std::condition_variable watcher_cv;
-bool watcher_stop = false;
-} // namespace
-
-void StartControllerWatcher(MenuHost& host) {
-    if (watcher.joinable()) {
-        return;
-    }
-    watcher = std::thread([&host] {
-        Common::SetCurrentThreadName("HarborPads");
-        InputMapping mapping{host, HarborInputStore()};
-        // What each player was on at the last look: a new device, port or player is a connect.
-        std::array<std::string, InputMapping::Players> seen;
-        std::unique_lock lk{watcher_mutex};
-        while (!watcher_cv.wait_for(lk, std::chrono::seconds(1), [] { return watcher_stop; })) {
-            lk.unlock();
-            for (int player = 0; player < InputMapping::Players; player++) {
-                bool connected = false;
-                const auto device = mapping.CurrentDevice(player, &connected);
-                const std::string now = device && connected
-                                            ? InputStore::DeviceKey(device->params) + "@" +
-                                                  device->params.Get("port", "0")
-                                            : std::string{};
-                if (now == seen[player]) {
-                    continue;
-                }
-                seen[player] = now;
-                if (!now.empty()) {
-                    mapping.ApplySaved(player);
-                }
-            }
-            lk.lock();
-        }
-    });
+std::vector<Common::ParamPackage> MenuHost::InputDevices() {
+    return Input().GetInputDevices();
 }
 
-void StopControllerWatcher() {
-    {
-        std::scoped_lock lk{watcher_mutex};
-        watcher_stop = true;
+void CheckControllers(MenuHost& host) {
+    if (!host.System().IsPoweredOn()) {
+        return;
     }
-    watcher_cv.notify_all();
-    if (watcher.joinable()) {
-        watcher.join();
+    // What each player was on at the last look: a new device, port or player is a connect.
+    static std::array<std::string, InputMapping::Players> seen;
+    InputMapping mapping{host, HarborInputStore()};
+    for (int player = 0; player < InputMapping::Players; player++) {
+        bool connected = false;
+        const auto device = mapping.CurrentDevice(player, &connected);
+        const std::string now = device && connected ? InputStore::DeviceKey(device->params) + "@" +
+                                                          device->params.Get("port", "0")
+                                                    : std::string{};
+        if (now == seen[player]) {
+            continue;
+        }
+        seen[player] = now;
+        if (!now.empty()) {
+            mapping.ApplySaved(player);
+        }
     }
 }
 

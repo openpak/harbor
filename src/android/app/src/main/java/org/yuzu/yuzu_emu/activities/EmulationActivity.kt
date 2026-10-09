@@ -58,6 +58,7 @@ import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
 import org.yuzu.yuzu_emu.harbor.HarborAudioFocus
 import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborNative
 import org.yuzu.yuzu_emu.harbor.HarborPower
 import org.yuzu.yuzu_emu.harbor.HarborSleep
 import org.yuzu.yuzu_emu.model.EmulationViewModel
@@ -268,6 +269,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         buildPictureInPictureParams()
         if (HarborConsole.active) {
             HarborAudioFocus.acquire()
+            HarborNative.checkControllers()
         }
     }
 
@@ -739,6 +741,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             InputHandler.updateControllerData()
             if (HarborConsole.active) {
                 InputHandler.bindFirstControllerIfUnbound()
+                // A pad Harbor knows gets its saved mapping back.
+                HarborNative.checkControllers()
             }
             notifyPhysicalControllerState()
         }
@@ -749,6 +753,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         InputHandler.updateControllerData()
         if (HarborConsole.active) {
             InputHandler.bindFirstControllerIfUnbound()
+            HarborNative.checkControllers()
         }
         notifyPhysicalControllerState()
     }

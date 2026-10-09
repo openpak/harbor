@@ -307,6 +307,7 @@ object HarborConsole {
         Log.info("[Harbor] menu opened by $trigger")
         InputHandler.releaseAll()
         activity.harborResetChord()
+        HarborNative.checkControllers()
         HarborNative.openMenu(MENU_PAGE_MENU)
     }
 
