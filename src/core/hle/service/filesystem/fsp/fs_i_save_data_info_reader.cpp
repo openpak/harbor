@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -11,6 +12,7 @@
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/fsp/fs_i_save_data_info_reader.h"
+#include "core/hle/service/filesystem/fsp/save_data_size.h"
 #include "core/hle/service/filesystem/save_data_controller.h"
 
 namespace Service::FileSystem {
@@ -103,6 +105,30 @@ std::vector<ISaveDataInfoReader::SaveDataInfo> ISaveDataInfoReader::FindAllSaves
             FindNormalSaves(info, space, type);
         } else if (space == FileSys::SaveDataSpaceId::Temporary) {
             FindTemporaryStorageSaves(info, space, type);
+        }
+    }
+
+    // SaveDataInfo.size is the save image's total size for the sizes the save was made with, as
+    // fs stores it at creation (fs-save-size.md), not what the files take on the host. A save
+    // whose sizes are unknown keeps the host size.
+    for (auto& entry : info) {
+        if (entry.type == FileSys::SaveDataType::Temporary) {
+            continue;
+        }
+        const bool system = entry.type == FileSys::SaveDataType::System;
+        FileSys::UserId user{};
+        std::memcpy(user.data(), entry.user_id.data(), sizeof(user));
+        const auto attribute = FileSys::SaveDataAttribute::Make(
+            system ? 0 : entry.title_id, entry.type, user,
+            system ? entry.save_id : FileSys::InvalidSystemSaveDataId, 0,
+            FileSys::SaveDataRank::Primary);
+        FileSys::SaveDataExtraData extra{};
+        if (save_data_controller.ReadSaveDataExtraData(&extra, space, attribute).IsError()) {
+            continue;
+        }
+        const auto size = QuerySaveDataTotalSize(extra.available_size, extra.journal_size);
+        if (size) {
+            entry.save_image_size = static_cast<u64>(*size);
         }
     }
     return info;

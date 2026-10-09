@@ -39,6 +39,7 @@
 #include "core/hle/service/filesystem/fsp/fs_i_save_data_info_reader.h"
 #include "core/hle/service/filesystem/fsp/fs_i_storage.h"
 #include "core/hle/service/filesystem/fsp/fsp_srv.h"
+#include "core/hle/service/filesystem/fsp/save_data_size.h"
 #include "core/hle/service/filesystem/fsp/save_data_transfer_prohibiter.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_ipc.h"
 #include "core/hle/service/filesystem/romfs_controller.h"
@@ -142,7 +143,7 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {511, nullptr, "NotifySystemDataUpdateEvent"},
         {520, nullptr, "SimulateGameCardDetectionEvent"},
         {600, nullptr, "SetCurrentPosixTime"},
-        {601, nullptr, "QuerySaveDataTotalSize"},
+        {601, D<&FSP_SRV::QuerySaveDataTotalSize>, "QuerySaveDataTotalSize"},
         {602, nullptr, "VerifySaveDataFileSystem"},
         {603, nullptr, "CorruptSaveDataFileSystem"},
         {604, nullptr, "CreatePaddingFile"},
@@ -591,6 +592,14 @@ Result FSP_SRV::FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
         R_SUCCEED();
     }
     R_THROW(FileSys::ResultTargetNotFound);
+}
+
+Result FSP_SRV::QuerySaveDataTotalSize(Out<s64> out_size, s64 data_size, s64 journal_size) {
+    // 0x85b50 → 0xab1e0: the size fs stores for a save it creates with these sizes.
+    const auto size = Service::FileSystem::QuerySaveDataTotalSize(data_size, journal_size);
+    R_UNLESS(size.has_value(), FileSys::ResultInvalidSize);
+    *out_size = *size;
+    R_SUCCEED();
 }
 
 Result FSP_SRV::GetSaveDataCommitId(Out<s64> out_commit_id, FileSys::SaveDataSpaceId space_id,

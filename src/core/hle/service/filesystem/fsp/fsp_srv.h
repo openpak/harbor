@@ -107,6 +107,7 @@ private:
         FileSys::SaveDataAttribute attribute) const;
     Result FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
                             FileSys::SaveDataSpaceId space_id, u64 save_data_id) const;
+    Result QuerySaveDataTotalSize(Out<s64> out_size, s64 data_size, s64 journal_size);
     Result GetSaveDataCommitId(Out<s64> out_commit_id, FileSys::SaveDataSpaceId space_id,
                                u64 save_data_id);
     Result ReadExtraDataById(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
