@@ -456,6 +456,15 @@ struct System::Impl {
         perf_stats.reset();
         cpu_manager.Shutdown();
         debugger.reset();
+        // The general channel's event is a kernel object: it goes before the kernel does (left
+        // to System's destructor, it closed a freed KEvent and crashed every exit after a HOME
+        // session).
+        {
+            std::scoped_lock lk{general_channel_mutex};
+            general_channel_event.reset();
+            general_channel_context.reset();
+            general_channel.clear();
+        }
         kernel.Shutdown();
         stop_event = {};
         Network::RestartSocketOperations();
