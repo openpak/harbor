@@ -92,6 +92,18 @@ void DeleteAll();
 /// user name, and the software keyboard's lines (typed text) are removed.
 std::string Scrub(std::string_view text);
 
+/// Native fault dumps (diagnostics, written whatever the consent: signal, registers, code addresses
+/// and module file names only). Install opens <dir>/native-fault.txt after logging what the last
+/// process left in it; PrepareFaultDump does the same for a process that has not called Install.
+void PrepareFaultDump();
+
+/// Async-signal-safe: appends a dump of a fault (signal, si_code, fault address, registers, the
+/// frame-pointer backtrace) for `who`. Returns where it starts in the file, for DiscardFaultDump.
+long DumpFault(int sig, void* info, void* ucontext, const char* who);
+
+/// Async-signal-safe: the fault was handled after all; its dump is dropped.
+void DiscardFaultDump(long start);
+
 /// Tests: point the module at another directory and home/user without touching the real ones.
 void SetHostIdentityForTest(std::string home, std::string user);
 

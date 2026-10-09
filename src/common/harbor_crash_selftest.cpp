@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 #include <sys/prctl.h>
@@ -107,8 +108,17 @@ int main(int argc, char** argv) {
     std::ofstream(dir / "consent") << "accepted\n";
     CrashChild(dir, SIGSEGV);
     Check(fs::exists(dir / "native.partial"), "the SIGSEGV handler wrote its report");
+    {
+        std::ifstream dump(dir / "native-fault.txt");
+        const std::string text{std::istreambuf_iterator<char>(dump), {}};
+        Check(Has(text, "native fault (harbor fatal-signal handler)") && Has(text, "signal 11 (SIGSEGV)") &&
+                  Has(text, "rip=0x") && Has(text, "backtrace (frame pointers):\n    0x"),
+              "the fault dump has the signal, registers and a backtrace");
+    }
     HC::Install(dir); // the "next start"
     Check(!fs::exists(dir / "native.partial"), "the half report was finished");
+    Check(fs::exists(dir / "native-fault.txt") && fs::file_size(dir / "native-fault.txt") == 0,
+          "the fault dump was logged and emptied at the next start");
     auto reports = HC::List();
     Check(reports.size() == 1, "one native report kept");
     if (!reports.empty()) {
