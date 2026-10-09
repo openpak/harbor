@@ -339,6 +339,12 @@ void AppletManager::SetDimHandler(std::function<void(bool)> handler) {
 
 void AppletManager::OnDimChanged(bool dimmed) {
     std::scoped_lock lk{m_sleep_lock};
+    // Only a change reaches the frontend: idle:sys clears the dimming as it starts, before a
+    // frontend may have registered, and that is no change.
+    if (m_dimmed == dimmed) {
+        return;
+    }
+    m_dimmed = dimmed;
     if (m_dim_handler) {
         m_dim_handler(dimmed);
     }
