@@ -146,7 +146,7 @@ void SigHandler::SigAction(int sig, siginfo_t* info, void* raw_context) {
     }
     LOG_ERROR(Core, "Unhandled {} at {:#018x}\n", sig == SIGSEGV ? "SIGSEGV" : "SIGBUS", CTX_PC);
     // Harbor: a dump of the fault for the next start's log (crash-reports/native-fault.txt).
-    Common::HarborCrash::DumpFault(sig, info, raw_context, "dynarmic unhandled fault");
+    ::Common::HarborCrash::DumpFault(sig, info, raw_context, "dynarmic unhandled fault");
 
     struct sigaction* retry_sa = sig == SIGSEGV ? &sig_handler->old_sa_segv : &sig_handler->old_sa_bus;
     if (retry_sa->sa_flags & SA_SIGINFO) {
