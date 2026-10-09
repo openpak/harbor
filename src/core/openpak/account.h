@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -72,7 +73,10 @@ namespace OpenPak {
 /// user is linked to it in the background: a device account, then federation with the account's
 /// id_token. acc's answers (Session::Linked) then show it linked, with OpenPak's nickname and
 /// picture. Returns at once; never blocks on the network. `uid` is the 32 hex digits of the UserId.
-void OnFirmwareUserRegistered(const std::string& uid);
+/// `on_linked` runs on the link's thread once the user is linked, with the link's NA id_token
+/// (acc reads users/me with it, as the firmware's own link does). Never logged.
+void OnFirmwareUserRegistered(const std::string& uid,
+                              std::function<void(const std::string& id_token)> on_linked = {});
 
 /// While OnFirmwareUserRegistered's link of `uid` runs, waits for it (at most a few seconds), so
 /// acc answers the firmware with the linked state rather than the moment before it. Returns at once

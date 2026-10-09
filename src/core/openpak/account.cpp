@@ -286,7 +286,8 @@ std::string LinkToken(Status* status) {
 namespace {
 
 /// The background link for OnFirmwareUserRegistered: one at a time.
-void LinkUser(const std::string& uid) {
+void LinkUser(const std::string& uid,
+              const std::function<void(const std::string& id_token)>& on_linked) {
     static std::mutex link_mutex;
     std::scoped_lock link_lock{link_mutex};
 
@@ -321,12 +322,17 @@ void LinkUser(const std::string& uid) {
         LOG_WARNING(WebService, "[OpenPak] account: the new user was not linked: {}", error);
         return;
     }
-    std::scoped_lock lock{StateMutex()};
-    if (auto latest = Load()) {
-        latest->linked_uid = uid;
-        Keep(*latest);
+    {
+        std::scoped_lock lock{StateMutex()};
+        if (auto latest = Load()) {
+            latest->linked_uid = uid;
+            Keep(*latest);
+        }
     }
     LOG_INFO(WebService, "[OpenPak] account: the new user is linked to the setup's account");
+    if (on_linked) {
+        on_linked(id_token);
+    }
 }
 
 } // namespace
@@ -344,7 +350,8 @@ std::set<std::string> pending_links;
 
 } // namespace
 
-void OnFirmwareUserRegistered(const std::string& uid) {
+void OnFirmwareUserRegistered(const std::string& uid,
+                              std::function<void(const std::string& id_token)> on_linked) {
     if (uid.empty() || !Session::Enabled() || !Account::HasAccount()) {
         return;
     }
@@ -354,8 +361,8 @@ void OnFirmwareUserRegistered(const std::string& uid) {
     }
     // Network round trips (the website, then dauth, the device account and federation): never on
     // the caller's thread, which answers the guest.
-    std::thread([uid] {
-        Account::LinkUser(uid);
+    std::thread([uid, on_linked = std::move(on_linked)] {
+        Account::LinkUser(uid, on_linked);
         {
             std::scoped_lock lock{pending_mutex};
             pending_links.erase(uid);

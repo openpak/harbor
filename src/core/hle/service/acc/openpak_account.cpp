@@ -197,6 +197,19 @@ oauth::NasUserNames LoadNames(const std::string& uid) {
 
 } // namespace
 
+void KeepNamesOfLink(const std::string& uid, const std::string& id_token) {
+    const auto reply = OpenPak::Session::Send(
+        "GET", std::string{oauth::ApiAccountsHost}, std::string{oauth::UsersMePath},
+        {{"Authorization", "Bearer " + id_token}}, {}, {});
+    const auto me = reply.status == 200 ? oauth::ParseUsersMe(reply.body) : std::nullopt;
+    if (!me) {
+        LOG_WARNING(Service_ACC, "acc: users/me after the setup's link failed (status {})",
+                    reply.status);
+        return;
+    }
+    KeepNames(uid, *me);
+}
+
 Result ApplyCode(const std::stop_token& stop, const std::string& code,
                  const std::string& verifier, const std::string& uid,
                  const std::vector<std::string>& others, NintendoAccountLink& out) {

@@ -1468,7 +1468,10 @@ void Module::Interface::CompleteUserRegistration(HLERequestContext& ctx) {
              profile_manager->GetUserCount());
     // The wizard's OpenPak sign-in links the first firmware user to that account (it returns at
     // once and does nothing unless OpenPak is on and signed in).
-    OpenPak::OnFirmwareUserRegistered(user_id.RawString());
+    const std::string uid = user_id.RawString();
+    OpenPak::OnFirmwareUserRegistered(uid, [uid](const std::string& id_token) {
+        OpenPakAccount::KeepNamesOfLink(uid, id_token);
+    });
     rb.Push(ResultSuccess);
 }
 

@@ -71,6 +71,11 @@ Result ApplyCode(const std::stop_token& stop, const std::string& code,
                  const std::string& verifier, const std::string& uid,
                  const std::vector<std::string>& others, NintendoAccountLink& out);
 
+/// After a link made outside the Login applet (the setup's account, OnFirmwareUserRegistered):
+/// users/me read with that link's NA id_token, its names kept for 136 as ApplyCode keeps them.
+/// Blocking.
+void KeepNamesOfLink(const std::string& uid, const std::string& id_token);
+
 /// IAdministrator 250's rule, which 120/136 and ns:ec 9/11 follow too: the user is the active
 /// one and its sign-in is linked to a Nintendo Account.
 bool IsActiveLinked(const Common::UUID& uid);
