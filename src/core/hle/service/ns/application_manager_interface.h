@@ -42,6 +42,7 @@ private:
 
 public:
 
+    Result UnregisterNetworkServiceAccount(Common::UUID user_id);
     Result UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id);
     Result GetApplicationControlData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                      Out<u32> out_actual_size,
@@ -112,6 +113,8 @@ public:
     Result Unknown1508(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result Unknown935();
     Result Unknown2366(OutInterface<IAsyncResult> out_interface,
+                       OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id);
+    Result Unknown2367(OutInterface<IAsyncResult> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id);
     Result Unknown4008(OutInterface<ICompletedAsyncValue> out_interface,
                        OutCopyHandle<Kernel::KReadableEvent> out_event, Common::UUID user_id,

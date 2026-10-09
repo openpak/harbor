@@ -454,7 +454,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {201, nullptr, "DeleteUserSaveDataAll"},
         {210, nullptr, "DeleteUserSystemSaveData"},
         {211, nullptr, "DeleteSaveData"},
-        {220, nullptr, "UnregisterNetworkServiceAccount"},
+        {220, D<&IApplicationManagerInterface::UnregisterNetworkServiceAccount>, "UnregisterNetworkServiceAccount"},
         {221, D<&IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSaveDataDeletion>, "UnregisterNetworkServiceAccountWithUserSaveDataDeletion"},
         {300, D<&IApplicationManagerInterface::GetApplicationShellEvent>, "GetApplicationShellEvent"},
         {301, nullptr, "PopApplicationShellEventInfo"},
@@ -678,7 +678,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {2364, nullptr, "Unknown2364"}, //20.0.0+
         {2365, nullptr, "Unknown2365"}, //20.0.0+
         {2366, D<&IApplicationManagerInterface::Unknown2366>, "Unknown2366"}, //20.0.0+
-        {2367, nullptr, "Unknown2367"}, //20.0.0+
+        {2367, D<&IApplicationManagerInterface::Unknown2367>, "Unknown2367"}, //20.0.0+
         {2368, nullptr, "Unknown2368"}, //20.0.0+
         {2369, nullptr, "Unknown2369"}, //21.0.0+
         {2400, nullptr, "GetPromotionInfo"},
@@ -825,6 +825,16 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
 IApplicationManagerInterface::~IApplicationManagerInterface() {
     std::scoped_lock lk{g_record_listeners_lock};
     std::erase(g_record_listeners, this);
+}
+
+// 220: qlaunch's Delete User for an unlinked user that holds a network service account, while
+// online (23.0.1 0x08DE9FC0; research/g3pctl-re/notes.md 2c). ns checks availability, cleans the
+// account's ELicenses and system saves, then IAdministrator 202 deletes the BAAS device account.
+// Harbor keeps no ELicenses or those saves, and acc forgets the user's OpenPak device account when
+// the user is deleted (acc:su 203), so nothing is left to do here.
+Result IApplicationManagerInterface::UnregisterNetworkServiceAccount(Common::UUID user_id) {
+    LOG_INFO(Service_NS, "ns: network service account of a deleted user released");
+    R_SUCCEED();
 }
 
 Result IApplicationManagerInterface::UnregisterNetworkServiceAccountWithUserSaveDataDeletion(Common::UUID user_id) {
@@ -1392,6 +1402,21 @@ Result IApplicationManagerInterface::Unknown2366(OutInterface<IAsyncResult> out_
     R_SUCCEED();
 }
 
+Result IApplicationManagerInterface::Unknown2367(OutInterface<IAsyncResult> out_interface,
+                                                 OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                                 Common::UUID user_id) {
+    // 2366 with the flag false: qlaunch's Delete User runs it first for a linked user and polls the
+    // event, then 221 and acc:su 203 (23.0.1 0x08DE9FC0; research/g3pctl-re/notes.md 2c). Answered
+    // as 2366 is.
+    LOG_WARNING(Service_NS,
+                "unknown contract: IApplicationManagerInterface 2367; Nintendo network-install "
+                "work is unavailable, completed unchanged");
+    async_completed_event.Signal(system.Kernel());
+    *out_event = async_completed_event.GetHandle();
+    *out_interface = std::make_shared<IAsyncResult>(system, &async_completed_event);
+    R_SUCCEED();
+}
+
 Result IApplicationManagerInterface::Unknown4008(OutInterface<ICompletedAsyncValue> out_interface,
                                                  OutCopyHandle<Kernel::KReadableEvent> out_event,
                                                  Common::UUID user_id, u64 work_buffer_size,
@@ -1463,8 +1488,13 @@ Result IApplicationManagerInterface::Unknown4089(Out<UnknownTryPopRecord> out_re
     R_SUCCEED();
 }
 
+// 4105 (23.0.1 handler 0x08729CC4; research/g3pctl-re/notes.md 1): no input or output, always
+// success. ns queues each user with a Nintendo Account id for its dynamic-licence sync: es lists
+// the account's ELicenses and nim revokes, republishes and reports them at Nintendo's licence
+// server. qlaunch calls it when an application exits. OpenPak issues no ELicenses, so es lists
+// none and the queued work ends at once: success with nothing to do is the same answer.
 Result IApplicationManagerInterface::Unknown4105() {
-    LOG_UNKNOWN_CONTRACT(Service_NS, "ns:am2 4105; returning success, no linked-account work queued");
+    LOG_DEBUG(Service_NS, "ns:am2 4105: no ELicenses to sync");
     R_SUCCEED();
 }
 
