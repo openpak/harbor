@@ -83,8 +83,11 @@ Result ITransferTaskListController::GetTransferTaskEndEventNativeHandleHolder(
 
 Result ITransferTaskListController::StopNextTransferTaskExecution(
     Out<SharedPointer<IStopperObject>> out_stopper) {
-    LOG_WARNING(Service_OLSC, "(STUBBED) called");
-    *out_stopper = std::make_shared<IStopperObject>(system);
+    // 0x1abb44: while the stopper is open no task starts (a running one goes on).
+    LOG_DEBUG(Service_OLSC, "called");
+    queue->HoldExecution(true);
+    *out_stopper = std::make_shared<IStopperObject>(
+        system, [queue = queue] { queue->HoldExecution(false); });
     R_SUCCEED();
 }
 
@@ -195,13 +198,14 @@ Result ITransferTaskListController::GetTransferTaskProgress(Out<std::array<u8, 0
 
 Result ITransferTaskListController::FindTransferTaskInfo(Out<TransferTaskInfo> out_info,
                                                         std::array<u64, 4> query) {
-    // 0x2231c0 -> 0x1ab020 FindTransferTaskInfo(const Uid&, ApplicationId, TransferTaskFilter):
-    // the user's first task of the title whose type the filter takes (predicate 0x1ab5c0:
-    // 0 types 0-1, 1 types 2-3, 2 any), running or queued; none is 2179-1102.
+    // 0x2231c0 -> 0x1ab020 FindTransferTaskInfo(const Uid&, ApplicationId, TransferTaskFilter),
+    // raw {u8 filter @0, Uid @8, ApplicationId @0x18} (qlaunch's packer 0x8926bf0): the user's
+    // first task of the title whose type the filter takes (predicate 0x1ab5c0: 0 types 0-1,
+    // 1 types 2-3, 2 any), running or queued; none is 2179-1102.
+    const u8 filter = static_cast<u8>(query[0]);
     Common::UUID user{};
-    std::memcpy(user.uuid.data(), query.data(), sizeof(user.uuid));
-    const u64 application_id = query[2];
-    const u8 filter = static_cast<u8>(query[3]);
+    std::memcpy(user.uuid.data(), &query[1], sizeof(user.uuid));
+    const u64 application_id = query[3];
     for (const auto& task : queue->Tasks()) {
         if (task.user == user && task.application_id == application_id &&
             MatchesFilter(task, filter)) {

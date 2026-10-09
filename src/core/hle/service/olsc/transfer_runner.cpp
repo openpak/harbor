@@ -426,8 +426,16 @@ u8 TransferQueue::Newness(const Common::UUID& user, u64 application_id) {
     const auto cloud =
         archives ? OpenPak::Olsc::LatestFor(*archives, application_id) : std::nullopt;
     const auto local = ReadLocalSave(system, user, application_id);
-    return OpenPak::Olsc::Newness(Settings()->Series(uid, application_id),
-                                  local ? std::optional{local->commit_id} : std::nullopt, cloud);
+    const u8 newness = OpenPak::Olsc::Newness(Settings()->Series(uid, application_id),
+                                              local ? std::optional{local->commit_id} : std::nullopt,
+                                              cloud);
+    if (newness == 0) {
+        std::lock_guard lock{mutex};
+        std::erase_if(tasks, [&](const TransferTask& t) {
+            return t.state == 3 && t.user == user && t.application_id == application_id;
+        });
+    }
+    return newness;
 }
 
 void TransferQueue::Repair(const Common::UUID& user) {
@@ -470,7 +478,7 @@ Result TransferQueue::TryAutoUpload(const Common::UUID& user, u64 application_id
         for (auto it = tasks.begin(); it != tasks.end();) {
             const bool same = it->user == user && it->application_id == application_id &&
                               it->type == 0;
-            if (same && (it->running || it->rank <= rank)) {
+            if (same && (it->running || (it->state == 0 && it->rank <= rank))) {
                 return OlscResult(1603);
             }
             // A lower-priority task for the title gives way (0x1b7060).
@@ -512,7 +520,7 @@ Result TransferQueue::TryAutoDownload(const Common::UUID& user, u64 application_
         for (auto it = tasks.begin(); it != tasks.end();) {
             const bool same = it->user == user && it->application_id == application_id &&
                               it->type == 1;
-            if (same && (it->running || it->rank <= rank)) {
+            if (same && (it->running || (it->state == 0 && it->rank <= rank))) {
                 return OlscResult(1603);
             }
             it = same && it->state == 0 ? tasks.erase(it) : std::next(it);
@@ -529,6 +537,18 @@ Result TransferQueue::TryAutoDownload(const Common::UUID& user, u64 application_
         break;
     }
     return RegisterDownload(user, cloud->id, rank) ? ResultSuccess : OlscResult(1200);
+}
+
+void TransferQueue::HoldExecution(bool hold) {
+    std::lock_guard lock{mutex};
+    execution_holds += hold ? 1 : -1;
+    wake.notify_all();
+}
+
+void TransferQueue::HoldAutonomy(bool hold) {
+    std::lock_guard lock{mutex};
+    autonomy_holds += hold ? 1 : -1;
+    wake.notify_all();
 }
 
 void TransferQueue::MakeDue(const Common::UUID& user) {
@@ -602,6 +622,9 @@ void TransferQueue::Raise(std::vector<std::weak_ptr<OpenPak::HostEvent>>& events
 std::deque<TransferTask>::iterator TransferQueue::NextLocked(Clock::time_point now) {
     // The basic queue first, then the postponed one at most once per interval (0x1b1c00); never
     // a title that is running (fs's transfer prohibiter, fsp 83).
+    if (execution_holds > 0) {
+        return tasks.end();
+    }
     const auto runnable = [this](const TransferTask& t) {
         return t.state == 0 && !t.running && !running_applications.contains(t.application_id);
     };
@@ -631,6 +654,9 @@ void TransferQueue::Autonomy() {
     std::vector<Common::UUID> due;
     {
         std::lock_guard lock{mutex};
+        if (autonomy_holds > 0) {
+            return; // queued exits and due users wait for the stopper's release
+        }
         exited.assign(exited_applications.begin(), exited_applications.end());
         exited_applications.clear();
     }
@@ -722,13 +748,13 @@ void TransferQueue::Run(std::stop_token stop) {
             auto it = std::find_if(tasks.begin(), tasks.end(),
                                    [&task](const TransferTask& t) { return t.id == task.id; });
             if (it != tasks.end()) {
-                if (task.last_result == 0) {
-                    tasks.erase(it);
-                } else {
-                    *it = task;
-                    it->running = false;
-                    it->state = 3;
-                }
+                // A failed task stays as failed (state 2). A finished one stays as done (3)
+                // until newness reads 0 for its title: qlaunch's download dialog fails if the
+                // task disappears before it has seen the cloud and the save in sync
+                // (olsc-qlaunch-download.md §2 item 12).
+                *it = task;
+                it->running = false;
+                it->state = task.last_result == 0 ? 3 : 2;
             }
             Raise(end_events);
         }
