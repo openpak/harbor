@@ -434,13 +434,13 @@ private:
         rb.Push(account->id);
     }
 
-    // 141: () -> IAsyncContext; 142 is the same with a u32 seconds threshold in. The refresh of
-    // the cache 143 reads, which OpenPak always holds as Subscribed with no expiry: done at once
-    // for a linked user, and the module's answer for a user without a network service account
-    // otherwise. Unknown contract for the answer.
+    // 141: () -> IAsyncContext; 142 is the same with a u32 seconds threshold in. 23.0.1
+    // 0x0859F2B0 checks first, synchronously, that the user can use the network service
+    // (0x085F9EE0: a BAAS registration, then a linked Nintendo Account, else 2124-0220), and only
+    // then starts the refresh. PlayerSelect's license check (Save Data Cloud for an unlinked user)
+    // reads 0200/0220 as "link first". OpenPak has no paid tier: the refresh of the cache 143
+    // reads (Subscribed, no expiry) completes at once for a linked user.
     void RefreshNetworkServiceLicenseCacheAsync(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "unknown contract: acc IAdministrator 141, an async context "
-                                 "already done");
         PushLicenseRefresh(ctx);
     }
 
@@ -448,19 +448,31 @@ private:
         IPC::RequestParser rp{ctx};
         const u32 seconds = rp.Pop<u32>();
         LOG_WARNING(Service_ACC,
-                    "unknown contract: acc IAdministrator 142 ({} s), an async context already done",
-                    seconds);
+                    "unknown contract: acc IAdministrator 142 ({} s), answered as 141", seconds);
         PushLicenseRefresh(ctx);
     }
 
     void PushLicenseRefresh(HLERequestContext& ctx) {
-        const Result result = !OpenPakAccount::Enabled() || IsRegisteredAtBaas()
-                                  ? ResultSuccess
-                                  : ResultNetworkServiceAccountUnavailable;
+        Result available = ResultSuccess;
+        if (OpenPakAccount::Enabled()) {
+            // IsActiveLinked only knows the active profile; Session::Linked covers another user
+            // signed in this session (IsRegisteredAtBaas waited for that sign-in).
+            const bool registered = IsRegisteredAtBaas();
+            const bool linked = IsActiveLinked(account_id) ||
+                                OpenPak::Session::Linked(OpenPakAccount::UidString(account_id));
+            available = !registered ? ResultNetworkServiceAccountUnavailable
+                        : !linked   ? ResultNintendoAccountIdUnavailable
+                                    : ResultSuccess;
+        }
+        LOG_DEBUG(Service_ACC, "called, result={:#x}", available.raw);
+        if (available.IsError()) {
+            PushResult(ctx, available);
+            return;
+        }
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
         rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker,
-                                                 OpenPakAsyncContext::Done(result));
+                                                 OpenPakAsyncContext::Done(ResultSuccess));
     }
 
     // 143: (u32 NetworkServiceLicenseKind, u32, u64 expiration). qlaunch 22.5.0 (+0x3173c0)
@@ -1130,9 +1142,17 @@ private:
     // (NasUserBase at its head) and copies birthday, gender, language, country, region and
     // timezone out of it; MK8D shows the country as the player's flag.
     void GetNintendoAccountUserResourceCacheForApplication(HLERequestContext& ctx) {
+        // The 0x68 out is an auto-select (0x1A) buffer: MK8D sends it as a pointer (C) buffer,
+        // which leaves the work buffer as the only mapped (B) one. Sent mapped, it comes first.
+        const bool pointer_out =
+            !ctx.BufferDescriptorC().empty() && ctx.BufferDescriptorC()[0].Size() != 0;
+        const std::size_t work_index = pointer_out ? 0 : 1;
+        const std::size_t work_size = ctx.BufferDescriptorB().size() > work_index
+                                          ? ctx.BufferDescriptorB()[work_index].Size()
+                                          : 0;
         // The module's answer for a work buffer under 0x800.
         constexpr Result ResultWorkBufferTooSmall{ErrorModule::Account, 31};
-        if (ctx.CanWriteBuffer(1) && ctx.GetWriteBufferSize(1) < 0x800) {
+        if (work_size < 0x800) {
             PushResult(ctx, ResultWorkBufferTooSmall);
             return;
         }
@@ -1145,17 +1165,20 @@ private:
 
         const auto for_application = NintendoAccountOAuth::NasUserBaseForApplication(
             account->birthday, account->country, account->names);
-        ctx.WriteBuffer(for_application.data(), for_application.size());
-        if (ctx.CanWriteBuffer(1)) {
-            std::vector<u8> work(ctx.GetWriteBufferSize(1));
-            const auto base = NintendoAccountOAuth::NasUserBase(
-                account->nickname, account->birthday, account->country, account->names);
-            std::memcpy(work.data(), base.data(), base.size());
-            ctx.WriteBuffer(work, 1);
+        if (pointer_out) {
+            ctx.WriteBufferC(for_application.data(), for_application.size());
+        } else {
+            ctx.WriteBufferB(for_application.data(), for_application.size());
         }
+        std::vector<u8> work(work_size);
+        const auto base = NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday,
+                                                            account->country, account->names);
+        std::memcpy(work.data(), base.data(), base.size());
+        ctx.WriteBufferB(work.data(), work.size(), work_index);
 
         // The account's data stays out of the log.
-        LOG_DEBUG(Service_ACC, "called, linked account data written");
+        LOG_DEBUG(Service_ACC, "called, linked account data written ({} out, work {:#x})",
+                  pointer_out ? "pointer" : "mapped", work_size);
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
         rb.PushRaw<u64>(account->id);
