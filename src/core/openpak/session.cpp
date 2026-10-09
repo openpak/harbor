@@ -344,6 +344,16 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
     if (WriteConsoleIdentity(cert_path, key_path)) {
         return true;
     }
+    {
+        // A console with its own identity whose keys cannot be used now (locked, or the password
+        // store not read yet) does not get a self-signed stand-in: it would stay this server's
+        // certificate for good. No sign-in until the console's keys are back.
+        std::scoped_lock lock{identity_mutex};
+        if (identity_source) {
+            LOG_WARNING(WebService, "[OpenPak] The console's keys are not usable now; not signing in");
+            return false;
+        }
+    }
 
     EVP_PKEY* key = GenerateRsaKey();
     if (key == nullptr) {

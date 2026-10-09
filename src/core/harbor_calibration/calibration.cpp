@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -92,7 +93,7 @@ bool StoreDeviceKey(u64 device_id, const Cal0::DeviceKey& key) {
 struct Loaded {
     std::vector<u8> binary;
     Cal0::DeviceKey device_key{};
-    bool keys_pending = false;
+    Calibration::KeyState key_state = Calibration::KeyState::Ready;
 };
 
 std::filesystem::path CalibrationDir() {
@@ -124,9 +125,31 @@ Loaded Make(const std::filesystem::path& path) {
 }
 
 Loaded Load(const std::filesystem::path& path) {
+    // Before the frontend has installed the password store (or found this host has none), nothing
+    // is made and no key is judged missing: the next Get() after that reads everything.
+    if (!OpenPak::SecretStoreDecided()) {
+        LOG_WARNING(Service_SET, "calibration: the password store is not installed yet; the "
+                                 "calibration waits for it");
+        Loaded out;
+        out.key_state = Calibration::KeyState::StoreUnavailable;
+        auto binary = ReadFile(path);
+        if (binary && Cal0::Verify(*binary)) {
+            out.binary = std::move(*binary); // identity (serial, addresses) readable already
+        }
+        return out;
+    }
+    std::error_code exists_error;
+    if (!std::filesystem::exists(path, exists_error) && !exists_error) {
+        return Make(path);
+    }
     auto binary = ReadFile(path);
     if (!binary) {
-        return Make(path);
+        // There, but not readable now: never replaced. Read again later.
+        LOG_ERROR(Service_SET, "calibration: {} could not be read; not replaced, tried again later",
+                  path.filename().string());
+        Loaded out;
+        out.key_state = Calibration::KeyState::StoreUnavailable;
+        return out;
     }
     std::string why;
     if (!Cal0::Verify(*binary, &why)) {
@@ -142,7 +165,15 @@ Loaded Load(const std::filesystem::path& path) {
     Loaded out;
     out.binary = std::move(*binary);
     const u64 device_id = Cal0::DeviceId(out.binary);
-    auto secret = OpenPak::LoadHostSecret(SecretName(device_id));
+
+    bool unreadable = false;
+    auto secret = OpenPak::LoadHostSecret(SecretName(device_id), &unreadable);
+    if (unreadable) {
+        out.key_state = Calibration::KeyState::StoreUnavailable;
+        LOG_WARNING(Service_SET, "calibration: loaded; the password store could not be read, the "
+                                 "device key is tried again later");
+        return out;
+    }
     std::optional<Cal0::DeviceKey> key;
     if (secret) {
         key = FromHex(*secret);
@@ -159,26 +190,19 @@ Loaded Load(const std::filesystem::path& path) {
     // (RestoreDeviceKey) instead of being replaced.
     std::error_code ec;
     if (std::filesystem::exists(SealedKeyPath(), ec)) {
-        out.keys_pending = true;
+        out.key_state = Calibration::KeyState::BackupPending;
         LOG_WARNING(Service_SET, "calibration: loaded; the device key is in this NAND's backup and "
                                  "waits for its passphrase");
         return out;
     }
 
-    // A NAND from another host (or a host whose password store was reset): same console, its
-    // keys unreadable here, so new key pairs under a new device key. Serial, addresses and device
-    // id stay.
-    out.device_key = Cal0::NewDeviceKey();
-    if (!Cal0::RegenerateKeys(out.binary, out.device_key)) {
-        LOG_ERROR(Service_SET, "calibration: could not make new key pairs");
-        return out;
-    }
-    const bool kept = StoreDeviceKey(device_id, out.device_key);
-    WriteFile(path, out.binary);
-    LOG_WARNING(Service_SET,
-                "calibration: this host has no device key for this NAND; identity kept, new key "
-                "pairs made (device key {})",
-                kept ? "in the password store" : "NOT kept");
+    // Confirmed not here (a NAND from another host, a reset password store) or not this console's:
+    // the keys are never replaced on their own. The console stays locked until it is restored from
+    // a backup with its passphrase, or the user makes it a new console.
+    out.key_state = Calibration::KeyState::NotOnThisHost;
+    LOG_WARNING(Service_SET, "calibration: loaded; this console's device key is {} on this host: "
+                             "restore the console from a backup or make it a new console",
+                secret ? "not the right one" : "not");
     return out;
 }
 
@@ -189,6 +213,8 @@ namespace {
 struct Current {
     std::mutex mutex;
     std::filesystem::path loaded_from;
+    bool had_store = false;
+    std::chrono::steady_clock::time_point loaded_at{};
     std::unique_ptr<Calibration> current;
     // Replaced instances stay alive: a caller may still hold a reference to one.
     std::vector<std::unique_ptr<Calibration>> retired;
@@ -206,12 +232,21 @@ const Calibration& Calibration::Get() {
     Current& state = CurrentState();
     std::scoped_lock lock{state.mutex};
     const std::filesystem::path path = CalibrationDir() / "prodinfo.bin";
-    if (!state.current || path != state.loaded_from) {
+    // A key that could not be known yet (no store, a read error) is looked up again once a store
+    // is installed, or after a pause.
+    const auto now = std::chrono::steady_clock::now();
+    const bool retry =
+        state.current && state.current->key_state == Calibration::KeyState::StoreUnavailable &&
+        ((!state.had_store && OpenPak::SecretStoreDecided()) ||
+         now - state.loaded_at > std::chrono::seconds{30});
+    if (!state.current || path != state.loaded_from || retry) {
+        state.had_store = OpenPak::SecretStoreDecided();
+        state.loaded_at = now;
         Loaded loaded = Load(path);
         auto next = std::make_unique<Calibration>();
         next->binary = std::move(loaded.binary);
         next->device_key = loaded.device_key;
-        next->keys_pending = loaded.keys_pending;
+        next->key_state = loaded.key_state;
         OPENSSL_cleanse(loaded.device_key.data(), loaded.device_key.size());
         if (state.current) {
             state.retired.push_back(std::move(state.current));
@@ -233,7 +268,7 @@ void Calibration::Reload() {
 
 bool WriteDeviceKeyBackup(std::string_view passphrase) {
     const auto& calibration = Calibration::Get();
-    if (calibration.Binary().empty() || calibration.keys_pending) {
+    if (calibration.Binary().empty() || calibration.key_state != Calibration::KeyState::Ready) {
         return false;
     }
     const auto sealed =
@@ -249,7 +284,7 @@ void RemoveDeviceKeyBackup() {
 }
 
 bool DeviceKeyRestorePending() {
-    return Calibration::Get().keys_pending;
+    return Calibration::Get().key_state == Calibration::KeyState::BackupPending;
 }
 
 RestoreResult RestoreDeviceKey(std::string_view passphrase) {
