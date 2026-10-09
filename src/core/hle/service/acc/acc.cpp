@@ -469,18 +469,24 @@ private:
         PushLicenseRefresh(ctx);
     }
 
-    void PushLicenseRefresh(HLERequestContext& ctx) {
-        Result available = ResultSuccess;
-        if (OpenPakAccount::Enabled()) {
-            // IsActiveLinked only knows the active profile; Session::Linked covers another user
-            // signed in this session (IsRegisteredAtBaas waited for that sign-in).
-            const bool registered = IsRegisteredAtBaas();
-            const bool linked = IsActiveLinked(account_id) ||
-                                OpenPak::Session::Linked(OpenPakAccount::UidString(account_id));
-            available = !registered ? ResultNetworkServiceAccountUnavailable
-                        : !linked   ? ResultNintendoAccountIdUnavailable
-                                    : ResultSuccess;
+    /// The module's network-service precondition (23.0.1 0x085F9EE0): a BAAS registration
+    /// (2124-0200), then a linked Nintendo Account (2124-0220). Offline: available, as stock Eden.
+    Result NetworkServiceAvailability() const {
+        if (!OpenPakAccount::Enabled()) {
+            return ResultSuccess;
         }
+        // IsActiveLinked only knows the active profile; Session::Linked covers another user
+        // signed in this session (IsRegisteredAtBaas waited for that sign-in).
+        const bool registered = IsRegisteredAtBaas();
+        const bool linked = IsActiveLinked(account_id) ||
+                            OpenPak::Session::Linked(OpenPakAccount::UidString(account_id));
+        return !registered ? ResultNetworkServiceAccountUnavailable
+               : !linked   ? ResultNintendoAccountIdUnavailable
+                           : ResultSuccess;
+    }
+
+    void PushLicenseRefresh(HLERequestContext& ctx) {
+        const Result available = NetworkServiceAvailability();
         LOG_DEBUG(Service_ACC, "called, result={:#x}", available.raw);
         if (available.IsError()) {
             PushResult(ctx, available);
@@ -492,14 +498,22 @@ private:
                                                  OpenPakAsyncContext::Done(ResultSuccess));
     }
 
-    // 143: (u32 NetworkServiceLicenseKind, u32, u64 expiration). qlaunch 22.5.0 (+0x3173c0)
-    // reads two u32 outputs and asserts each is below 2 before the 8-byte value. OpenPak has no
-    // membership expiry and no paid tier.
+    // 143: (u32, u32, u64). 23.0.1 0x0859F6B0 (research/g3pctl-re/notes.md 2d): the same
+    // preconditions as 141 and 290 (2124-0200 unregistered, 2124-0220 not linked), then the two
+    // u32 are the "default" (Nintendo Switch Online) and "ex" (Expansion Pack) memberships' active
+    // flags from the account's membership cache, and the u64 is always 0. qlaunch 22.5.0
+    // (+0x3173c0) asserts each u32 is below 2. OpenPak has no paid tier: a linked user is a
+    // member, with no Expansion Pack.
     void GetNetworkServiceLicenseCacheEx(HLERequestContext& ctx) {
-        LOG_DEBUG(Service_ACC, "called");
+        const Result available = NetworkServiceAvailability();
+        LOG_DEBUG(Service_ACC, "called, result={:#x}", available.raw);
+        if (available.IsError()) {
+            PushResult(ctx, available);
+            return;
+        }
         IPC::ResponseBuilder rb{ctx, 6};
         rb.Push(ResultSuccess);
-        rb.Push<u32>(1); // Subscribed
+        rb.Push<u32>(1);
         rb.Push<u32>(0);
         rb.Push<u64>(0);
     }
