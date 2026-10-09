@@ -29,6 +29,7 @@
 #include "common/settings.h"
 #include "common/settings_input.h"
 #include "common/thread.h"
+#include "core/hle/service/omm/idle_policy.h"
 #include "input_common/drivers/keyboard.h"
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/main.h"
@@ -443,6 +444,13 @@ void HarborControl::Execute(const std::string& line) {
         if (hooks.power) {
             hooks.power();
         }
+    } else if (cmd == "auto-sleep") {
+        // Harness runs neither dim nor auto-sleep unless a test turns it on (idle:sys).
+        if (words.size() < 2 || (words[1] != "on" && words[1] != "off")) {
+            LOG_WARNING(Frontend, "harbor-control: usage: auto-sleep on|off");
+            return;
+        }
+        Service::OMM::IdlePolicy::SetHarnessSuppressed(words[1] == "off");
     } else if (cmd == "power-tap") {
         // The power button pressed briefly: the window's own F5 tap (HarborSystemKeys), so the
         // host side runs as it does for a person. It sleeps the console, or wakes it.

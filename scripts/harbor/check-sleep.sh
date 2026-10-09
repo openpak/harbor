@@ -41,6 +41,9 @@ wait_for() {
 }
 
 if [ "$AUTO" -gt 0 ]; then
+    # Harness runs do not auto-sleep unless asked: on for this check, off again afterwards.
+    "$DRIVE" "$1" auto-sleep on
+    trap '"$DRIVE" "$1" auto-sleep off >/dev/null 2>&1 || true' EXIT
     wait_for 'am: -> pid [0-9]* AutoPowerDown' "$AUTO"
 else
     "$DRIVE" "$1" power-tap

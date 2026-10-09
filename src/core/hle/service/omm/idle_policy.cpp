@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdlib>
 
 #include "common/logging.h"
 #include "common/settings.h"
@@ -25,6 +26,11 @@ namespace {
 using namespace std::chrono_literals;
 
 std::atomic<IdlePolicy*> g_idle_policy{};
+
+// Harness runs (HARBOR_CONTROL) neither dim nor auto-sleep unless HARBOR_AUTO_SLEEP=1 or the
+// harness turns it on (`auto-sleep on`): other streams' tests are not put to sleep.
+std::atomic_bool g_harness_off{std::getenv("HARBOR_CONTROL") != nullptr &&
+                               std::getenv("HARBOR_AUTO_SLEEP") == nullptr};
 
 constexpr std::chrono::nanoseconds TickPeriod = 500ms;
 
@@ -59,6 +65,57 @@ void Mix(u64& hash, u64 value) {
 
 IdlePolicy* GetIdlePolicy() {
     return g_idle_policy.load();
+}
+
+void IdlePolicy::SetHarnessSuppressed(bool suppressed) {
+    g_harness_off = suppressed;
+    LOG_INFO(Service_PTM, "idle: auto-sleep and dimming {} for this harness run",
+             suppressed ? "off" : "on");
+}
+
+// 0x08549780 (SetHandlingContext): a context that lets the console sleep sooner takes effect only
+// after a grace time (media playback ending 300 s, auto-sleep allowed again or a shorter idle
+// time detection extension 90 s); any other change takes effect at once.
+IdleHandlingContext IdlePolicy::EffectiveContextLocked(const IdleHandlingContext& incoming,
+                                                       std::chrono::steady_clock::time_point now) {
+    const auto same = [](const IdleHandlingContext& a, const IdleHandlingContext& b) {
+        return a.sleep_handheld_s == b.sleep_handheld_s && a.sleep_console_s == b.sleep_console_s &&
+               a.dim_handheld_s == b.dim_handheld_s && a.dim_console_s == b.dim_console_s &&
+               a.extension == b.extension && a.auto_sleep_disabled == b.auto_sleep_disabled &&
+               a.media_playing == b.media_playing;
+    };
+    if (!m_effective_valid) {
+        m_effective = incoming;
+        m_effective_valid = true;
+        return m_effective;
+    }
+    if (same(incoming, m_effective)) {
+        m_pending_valid = false;
+        return m_effective;
+    }
+    std::chrono::seconds grace{};
+    if (m_effective.media_playing && !incoming.media_playing) {
+        grace = 300s;
+    } else if (m_effective.auto_sleep_disabled && !incoming.auto_sleep_disabled) {
+        grace = 90s;
+    } else if (incoming.extension < m_effective.extension) {
+        grace = 90s;
+    }
+    if (grace == 0s) {
+        m_effective = incoming;
+        m_pending_valid = false;
+        return m_effective;
+    }
+    if (!m_pending_valid || !same(incoming, m_pending)) {
+        m_pending = incoming;
+        m_pending_valid = true;
+        m_pending_at = now + grace;
+        LOG_INFO(Service_PTM, "idle: a looser context takes effect in {} s", grace.count());
+    } else if (now >= m_pending_at) {
+        m_effective = incoming;
+        m_pending_valid = false;
+    }
+    return m_effective;
 }
 
 // 0x08548e10.
@@ -129,6 +186,10 @@ IdlePolicy::IdlePolicy(Core::System& system)
         });
     m_system.CoreTiming().ScheduleLoopingEvent(TickPeriod, TickPeriod, m_tick_event);
     g_idle_policy = this;
+    if (g_harness_off) {
+        LOG_INFO(Service_PTM, "idle: auto-sleep and dimming are off in this harness run "
+                              "(HARBOR_AUTO_SLEEP=1 or `auto-sleep on` turns them on)");
+    }
     // A new session starts at full brightness, whatever the last one ended with.
     m_system.GetAppletManager().OnDimChanged(false);
 }
@@ -248,10 +309,12 @@ void IdlePolicy::Tick() {
         const auto now = std::chrono::steady_clock::now();
         const bool resumed = now - m_last_tick > 4 * TickPeriod;
         m_last_tick = now;
-        if (input || resumed || context.sequence_running || !context.valid) {
+        if (input || resumed || context.sequence_running || !context.valid ||
+            g_harness_off.load()) {
             this->OnActivityLocked();
             return;
         }
+        context = this->EffectiveContextLocked(context, now);
         const bool docked = IsDocked();
         const auto sleep_time = AutoSleepTime(m_settings, context, docked);
         const auto dim_time = DimTime(m_settings, context, docked);
