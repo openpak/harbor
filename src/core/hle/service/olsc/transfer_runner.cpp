@@ -749,6 +749,8 @@ void TransferQueue::Execute(TransferTask& task) {
             tr::LocalSave save;
             save.application_id = task.application_id;
             save.data_size = static_cast<s64>(info->save_image_size);
+            LOG_DEBUG(Service_OLSC, "save data cloud: {:016X} data size {:#x}", task.application_id,
+                      save.data_size);
             save.saved_at = local->timestamp;
             save.commit_id = local->commit_id;
             // GetSaveDataAcdIndex: extra data byte +0x55 (olsc-transfer.md §2.2 step 4).
