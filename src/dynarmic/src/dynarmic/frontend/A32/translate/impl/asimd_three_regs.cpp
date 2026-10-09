@@ -1028,7 +1028,8 @@ bool TranslatorVisitor::asimd_VMULL(bool U, bool D, size_t sz, size_t Vn, size_t
         return DecodeError();
     }
 
-    if ((P & (U || sz == 0b10)) || mcl::bit::get_bit<0>(Vd)) {
+    // ARMv8: polynomial size 0b10 is VMULL.P64 (crypto); size 0b01 is the reserved one.
+    if ((P & (U || sz == 0b01)) || mcl::bit::get_bit<0>(Vd)) {
         return UndefinedInstruction();
     }
 
