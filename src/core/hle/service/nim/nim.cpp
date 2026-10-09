@@ -4,10 +4,13 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "common/redact.h"
 #include "core/core.h"
@@ -593,33 +596,125 @@ private:
     // (0x11a82c, 0x11a8ec).
     static constexpr const char* ShopClientId = "93af0acb26258de9";
 
-    // Both take how close to expiry a cached token may be (systemWeb sends 3 hours). Nothing is
-    // cached here: every request mints a fresh token, which is never that close. The longest
-    // token accepted is NIM's own dauth:0 buffer less its NUL (0x801 and 0x401 bytes).
+    // 1 and 3 take an s64, how long the token must still be valid (systemWeb sends 3 hours).
+    // 23.0.1 NIM keeps the last token of each kind and hands it out again while its expiry minus
+    // now is at least that long, else it asks dauth:0 for a new one (task 0x08621CC0; nim:shp
+    // method infos 0x086DBA9E, 0x086DBAE2: 8 raw bytes in, an object and a copy handle out). The
+    // unit is taken to be nn::TimeSpan's nanoseconds. The longest token accepted is NIM's own
+    // dauth:0 buffer less its NUL (0x801 and 0x401 bytes).
     void RequestCachedDeviceAuthenticationToken(HLERequestContext& ctx) {
-        RequestToken(ctx, "", 0x800);
+        IPC::RequestParser rp{ctx};
+        RequestToken(ctx, device_token, "", 0x800, rp.Pop<s64>());
     }
 
     void RequestCachedEdgeToken(HLERequestContext& ctx) {
         // NIM passes vendor index 0 to dauth:0; that index 0 is the module's "akamai" (beside
         // "fastly") is inferred from the string order, not traced.
-        RequestToken(ctx, "akamai", 0x400);
+        IPC::RequestParser rp{ctx};
+        RequestToken(ctx, edge_token, "akamai", 0x400, rp.Pop<s64>());
     }
 
-    void RequestToken(HLERequestContext& ctx, std::string vendor, std::size_t max_length) {
-        LOG_DEBUG(Service_NIM, "called, {}", vendor.empty() ? "device token" : "edge token");
+    struct CachedToken {
+        std::mutex mutex;
+        std::string token;
+        s64 expires_at{}; // Unix seconds, from the token's own exp.
+    };
+
+    // When a token expires, in Unix seconds; 0 when it cannot be read. The device token is a JWT
+    // (the payload's exp); the edge token is a CDN token whose "~"-separated fields hold exp=.
+    static s64 TokenExpiry(const std::string& token) {
+        for (std::size_t start = 0; start < token.size();) {
+            const auto end = std::min(token.find('~', start), token.size());
+            const std::string_view field{token.data() + start, end - start};
+            if (field.starts_with("exp=")) {
+                s64 exp = 0;
+                for (const char c : field.substr(4)) {
+                    if (c < '0' || c > '9') {
+                        return 0;
+                    }
+                    exp = exp * 10 + (c - '0');
+                }
+                return exp;
+            }
+            start = end + 1;
+        }
+        const auto first = token.find('.');
+        const auto second = token.find('.', first == std::string::npos ? first : first + 1);
+        if (first == std::string::npos || second == std::string::npos) {
+            return 0;
+        }
+        std::string payload;
+        u32 bits = 0;
+        int count = 0;
+        for (const char c : std::string_view{token}.substr(first + 1, second - first - 1)) {
+            int v;
+            if (c >= 'A' && c <= 'Z') {
+                v = c - 'A';
+            } else if (c >= 'a' && c <= 'z') {
+                v = c - 'a' + 26;
+            } else if (c >= '0' && c <= '9') {
+                v = c - '0' + 52;
+            } else if (c == '-' || c == '+') {
+                v = 62;
+            } else if (c == '_' || c == '/') {
+                v = 63;
+            } else {
+                break;
+            }
+            bits = (bits << 6) | static_cast<u32>(v);
+            count += 6;
+            if (count >= 8) {
+                count -= 8;
+                payload.push_back(static_cast<char>((bits >> count) & 0xFF));
+            }
+        }
+        const auto json = nlohmann::json::parse(payload, nullptr, false);
+        if (!json.is_object() || !json.contains("exp") || !json["exp"].is_number_integer()) {
+            return 0;
+        }
+        return json["exp"].get<s64>();
+    }
+
+    void RequestToken(HLERequestContext& ctx, std::shared_ptr<CachedToken> cache,
+                      std::string vendor, std::size_t max_length, s64 min_validity_ns) {
+        LOG_DEBUG(Service_NIM, "called, {}, valid for at least {} s",
+                  vendor.empty() ? "device token" : "edge token", min_validity_ns / 1'000'000'000);
         auto value = std::make_shared<IAsyncValue>(
             system, worker,
-            [vendor, max_length](std::stop_token, std::vector<u8>& out) -> Result {
-                if (!OpenPak::Session::Enabled()) {
-                    LOG_WARNING(Service_NIM, "nim:shp token: no OpenPak server configured");
-                    return IAsyncValue::ResultTokenRequestFailed;
+            [cache, vendor, max_length, min_validity_ns](std::stop_token,
+                                                         std::vector<u8>& out) -> Result {
+                const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::system_clock::now().time_since_epoch())
+                                    .count();
+                std::string token;
+                {
+                    std::scoped_lock lock{cache->mutex};
+                    if (!cache->token.empty() &&
+                        (cache->expires_at - now) >= min_validity_ns / 1'000'000'000) {
+                        token = cache->token;
+                    }
                 }
-                const std::string token = OpenPak::Session::DauthToken(ShopClientId, vendor);
-                if (token.empty() || token.size() > max_length) {
-                    LOG_WARNING(Service_NIM, "nim:shp token request failed ({} bytes, {} taken)",
-                                token.size(), max_length);
-                    return IAsyncValue::ResultTokenRequestFailed;
+                if (token.empty()) {
+                    if (!OpenPak::Session::Enabled()) {
+                        LOG_WARNING(Service_NIM, "nim:shp token: no OpenPak server configured");
+                        return IAsyncValue::ResultTokenRequestFailed;
+                    }
+                    token = OpenPak::Session::DauthToken(ShopClientId, vendor);
+                    if (token.empty() || token.size() > max_length) {
+                        LOG_WARNING(Service_NIM,
+                                    "nim:shp token request failed ({} bytes, {} taken)",
+                                    token.size(), max_length);
+                        return IAsyncValue::ResultTokenRequestFailed;
+                    }
+                    std::scoped_lock lock{cache->mutex};
+                    cache->token = token;
+                    cache->expires_at = TokenExpiry(token);
+                    LOG_INFO(Service_NIM, "nim:shp {} token issued, valid {} s",
+                             vendor.empty() ? "device" : "edge",
+                             cache->expires_at > now ? cache->expires_at - now : 0);
+                } else {
+                    LOG_DEBUG(Service_NIM, "nim:shp cached {} token handed out",
+                              vendor.empty() ? "device" : "edge");
                 }
                 out.assign(token.begin(), token.end());
                 out.push_back(0);
@@ -632,6 +727,8 @@ private:
         rb.PushIpcInterface<IAsyncValue>(ctx, std::move(value));
     }
 
+    std::shared_ptr<CachedToken> device_token{std::make_shared<CachedToken>()};
+    std::shared_ptr<CachedToken> edge_token{std::make_shared<CachedToken>()};
     std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
