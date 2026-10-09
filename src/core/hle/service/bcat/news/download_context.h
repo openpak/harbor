@@ -44,10 +44,16 @@ private:
     Result GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result GetResult();
     Result GetSize(Out<u64> out_size);
+    /// Let go of the caller's transfer memory once the work is done.
+    void ReleaseMemory();
 
     KernelHelpers::ServiceContext service_context;
     Kernel::KEvent* completed{};
-    // Held open until the object goes, so the caller's process stays valid for the worker's write.
+    // Held open while the worker may write into it, and let go as soon as the caller reads the
+    // outcome (GetResult or GetSize after the event): the memory stays locked for transfer while
+    // this holds it, and qlaunch frees its buffer right after a failed download, before the session
+    // is closed. Holding it to the destructor made that free fail (qlaunch panicked with 2001-0106,
+    // invalid current memory, when Find Channels asked for a channel with no detail).
     Kernel::KTransferMemory* transfer_memory{};
     std::shared_ptr<State> state;
     std::shared_ptr<OpenPak::AsyncTask> task;
