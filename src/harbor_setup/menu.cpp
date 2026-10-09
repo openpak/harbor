@@ -36,6 +36,7 @@
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
+#include "core/openpak/session.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
 #include "harbor_setup/menu_view.h"
@@ -676,6 +677,13 @@ void MenuSetHost(MenuHost& host) {
     HARBOR_CRUMB("menu: MenuSetHost");
     menu_host = &host;
     StartPowerKey(host.System());
+    // OpenPak refused this console's identity (another live console has it): the menu offers to
+    // make this one a new console, on every frontend alike.
+    OpenPak::Session::SetDeviceIdInUseHook([] {
+        LOG_INFO(Frontend, "harbor: menu: this console's identity is in use elsewhere; offering a "
+                           "new console");
+        MenuOpen(MenuPage::Console);
+    });
     if (host.HasHud()) {
         // The FPS line is drawn by the menu's thread, so it starts now (closed).
         std::scoped_lock lk{mutex};

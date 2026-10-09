@@ -67,6 +67,26 @@ void SetClientIdentitySource(
 /// Whether a server has been configured.
 bool Enabled();
 
+/// What the console's calibration does around a sign-in (Harbor's device enrolment): `signed_in`
+/// after the active user signed in, `beat` every third beat while signed in, `offline` when the
+/// console goes offline. All run on the heartbeat's thread (or GoOffline's caller), never on a
+/// guest's IPC thread.
+struct DeviceHooks {
+    std::function<void()> signed_in;
+    std::function<void()> beat;
+    std::function<void()> offline;
+};
+void SetDeviceHooks(DeviceHooks hooks);
+
+/// The server refused this console's device id because another console is live with it (a copied
+/// NAND): HTTP 409 {"error":"device_id_in_use","action":"make_new_console"}. Harbor answers it by
+/// offering "Make this a new console". Cleared by the next answer that accepts the console.
+bool DeviceIdInUse();
+/// Called once each time the refusal starts (from the thread that met it).
+void SetDeviceIdInUseHook(std::function<void()> on_refused);
+/// Note a dauth-host answer: a 409 device_id_in_use sets the state (true), a success clears it.
+bool NoteDeviceAnswer(int status, std::string_view body);
+
 /// The pinned OpenPak CA in DER form (the first certificate of ca.pem), or empty. Never fetches.
 std::vector<std::uint8_t> CaCertificateDer();
 

@@ -11,6 +11,7 @@
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/openpak/session.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/menu_view.h"
 #include "harbor_setup/ui.h"
@@ -108,6 +109,11 @@ void MenuActivity::Show(MenuPage page) {
         screen = Screen::Settings;
         category = Category::Controllers;
         focus_key = "category:controllers";
+        break;
+    case MenuPage::Console:
+        screen = Screen::Settings;
+        category = Category::Harbor;
+        focus_key = "console:new";
         break;
     }
     Render();
@@ -883,6 +889,13 @@ void MenuActivity::HarborPane(brls::Box* pane) {
     pane->addView(Row("setup", "Set up again", "", [this] { Close([this] { host.SetupAgain(); }); }, true, true));
     pane->addView(Note("The setup runs again on the saved choices: keys, firmware, folders and drivers."));
     pane->addView(Heading("This console"));
+    if (OpenPak::Session::DeviceIdInUse()) {
+        pane->addView(Note("Another console is using this console's identity, so OpenPak refused this "
+                           "one. A copy of this console (its system memory on another computer, or a "
+                           "second copy here) is the usual cause: make this one a new console and its "
+                           "users link their Nintendo Accounts again. If you only restarted Harbor, "
+                           "wait a minute and a half and it signs in again."));
+    }
     pane->addView(Row("console:backup", "Back up console…", "", [this] {
         Close([this] { host.ConsoleAction("backup"); });
     }, true, true));

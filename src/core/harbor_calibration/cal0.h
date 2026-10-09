@@ -131,6 +131,41 @@ std::optional<std::vector<u8>> RsaPrivateKeyDer(std::span<const u8> cal0, const 
 /// Whether a certificate block carries a signature (zero until OpenPak's device CA signs it).
 bool IsSigned(std::span<const u8> cal0, const Block& certificate_block);
 
+// Enrolment with OpenPak's device CA (docs/harbor/calibration.md, "Certificates").
+
+/// A certificate as stored: EccB233CertificateSize for the ECC block, Rsa2048CertificateSize for
+/// the two RSA ones.
+std::vector<u8> Certificate(std::span<const u8> cal0, const Block& certificate_block);
+
+/// Whether the device CA has signed all four certificates (the three Nintendo-format ones carry a
+/// signature and the TLS certificate is not self-issued).
+bool IsEnrolled(std::span<const u8> cal0);
+
+/// Proof of possession: every private key's signature over `message` (ECDSA-SHA256, DER, for the
+/// ECC key; RSASSA-PKCS1-v1_5-SHA256 for the three RSA keys). Nothing when a key does not open.
+struct Proofs {
+    std::vector<u8> ecc;
+    std::vector<u8> eticket;
+    std::vector<u8> device;
+    std::vector<u8> tls;
+};
+std::optional<Proofs> SignProofs(std::span<const u8> cal0, const DeviceKey& device_key,
+                                 std::span<const u8> message);
+
+/// What the device CA answers: the three Nintendo-format certificates signed, and the TLS client
+/// certificate it issued (DER).
+struct SignedCertificates {
+    std::vector<u8> ecc;
+    std::vector<u8> eticket;
+    std::vector<u8> device;
+    std::vector<u8> tls;
+};
+
+/// Put the signed certificates in the binary and re-seal it. Each Nintendo-format certificate must
+/// be this binary's own with a signature added, and the TLS certificate must carry this binary's
+/// TLS key; otherwise nothing changes and the answer is false.
+bool ApplySignedCertificates(std::vector<u8>& cal0, const SignedCertificates& certificates);
+
 /// The device key sealed with a passphrase for a console backup: scrypt (N 2^15, r 8, p 1) to an
 /// AES-256-GCM key, the console's device id bound in as associated data. The passphrase is not kept.
 std::vector<u8> SealDeviceKey(const DeviceKey& device_key, u64 device_id, std::string_view passphrase);

@@ -186,6 +186,9 @@ enum class MenuPage {
     Settings,
     FrameGeneration,
     Controllers,
+    /// Harbor › This console, opened when OpenPak refuses this console's identity because another
+    /// console is live with it (a copied NAND): it offers "Make this a new console".
+    Console,
 };
 
 /// Once per process, before the first Open. The host outlives the menu.

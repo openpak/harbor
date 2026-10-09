@@ -15,6 +15,7 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/harbor_calibration/calibration.h"
+#include "core/harbor_calibration/enrolment.h"
 #include "core/openpak/secret_store.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/session.h"
@@ -332,6 +333,8 @@ bool MakeNewConsole() {
     }
 
     Calibration::Reload();
+    // The refusal was the old identity's; the new one enrols on its own first sign-in.
+    OpenPak::Session::NoteDeviceAnswer(200, {});
     const bool made = Calibration::Get().DeviceId() != 0;
     LOG_INFO(Service_SET, "calibration: this NAND is a new console ({})",
              made ? "new calibration made" : "no calibration could be made");
@@ -371,6 +374,37 @@ std::optional<std::vector<u8>> Calibration::SslPrivateKey() const {
     return Cal0::RsaPrivateKeyDer(binary, Cal0::ExtendedSslKey, device_key);
 }
 
+bool Calibration::Enrolled() const {
+    return !binary.empty() && Cal0::IsEnrolled(binary);
+}
+
+std::optional<Cal0::Proofs> Calibration::SignProofs(std::span<const u8> message) const {
+    if (binary.empty() || key_state != KeyState::Ready) {
+        return std::nullopt;
+    }
+    return Cal0::SignProofs(binary, device_key, message);
+}
+
+bool ApplyEnrolment(const Cal0::SignedCertificates& certificates) {
+    const auto& calibration = Calibration::Get();
+    if (calibration.Binary().empty() || calibration.Keys() != Calibration::KeyState::Ready) {
+        return false;
+    }
+    std::vector<u8> enrolled(calibration.Binary().begin(), calibration.Binary().end());
+    if (!Cal0::ApplySignedCertificates(enrolled, certificates) || !Cal0::Verify(enrolled)) {
+        LOG_WARNING(Service_SET, "calibration: the device CA's certificates are not this "
+                                 "console's; not kept");
+        return false;
+    }
+    if (!WriteFile(CalibrationDir() / "prodinfo.bin", enrolled)) {
+        LOG_ERROR(Service_SET, "calibration: the signed certificates could not be written");
+        return false;
+    }
+    Calibration::Reload();
+    LOG_INFO(Service_SET, "calibration: OpenPak's device CA signed this console's certificates");
+    return true;
+}
+
 Cal0::DeviceKey Calibration::DeriveDeviceKey(std::string_view label) const {
     return Cal0::DeriveKey(device_key, label);
 }
@@ -389,6 +423,7 @@ void InstallSecretNamespace() {
 }
 
 void InstallClientIdentity() {
+    Enrolment::Install();
     OpenPak::Session::SetClientIdentitySource([](std::vector<u8>& certificate,
                                                  std::vector<u8>& key) {
         const auto& calibration = Calibration::Get();

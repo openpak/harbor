@@ -8,4 +8,8 @@ target_sources(core PRIVATE
     harbor_calibration/cal0.h
     harbor_calibration/calibration.cpp
     harbor_calibration/calibration.h
+    harbor_calibration/enrolment.cpp
+    harbor_calibration/enrolment.h
+    harbor_calibration/enrolment_wire.cpp
+    harbor_calibration/enrolment_wire.h
 )
