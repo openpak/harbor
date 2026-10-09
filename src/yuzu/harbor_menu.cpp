@@ -5,9 +5,12 @@
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QMetaObject>
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
 #include <QProcess>
 #include <QSettings>
 #include <QStyleHints>
+#include <QSurfaceFormat>
 #include <QTimer>
 #include <QWidget>
 
@@ -43,12 +46,46 @@ bool ReadFlag(const char* key) {
 void WriteFlag(const char* key, bool value) {
     QSettings(HarborIni(), QSettings::IniFormat).setValue(QString::fromUtf8(key), value);
 }
+
+/// What the menu draws with (nanovg's GL3 back end): OpenGL 3.3 core, 8-bit RGBA. The picture
+/// itself is the menu's own framebuffer, so the surface needs no depth or stencil.
+QSurfaceFormat MenuGlFormat() {
+    QSurfaceFormat format;
+    format.setRenderableType(QSurfaceFormat::OpenGL);
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setRedBufferSize(8);
+    format.setGreenBufferSize(8);
+    format.setBlueBufferSize(8);
+    format.setAlphaBufferSize(8);
+    return format;
+}
+
+/// A Qt context on the offscreen surface, current on the menu's thread, which owns it.
+class QtMenuGl final : public HarborSetup::MenuGl {
+public:
+    explicit QtMenuGl(std::unique_ptr<QOpenGLContext> context_) : context{std::move(context_)} {}
+    ~QtMenuGl() override {
+        context->doneCurrent();
+    }
+    void* ProcAddress(const char* name) override {
+        return reinterpret_cast<void*>(context->getProcAddress(name));
+    }
+
+private:
+    std::unique_ptr<QOpenGLContext> context;
+};
 } // namespace
 
 HarborMenu::HarborMenu(QWidget* window_, InputCommon::InputSubsystem& input_, Hooks hooks_)
     : window{window_}, input{input_}, hooks{std::move(hooks_)} {
     show_fps = ReadFlag("show_fps");
     show_device_line = ReadFlag("show_device_line");
+    // Before MenuSetHost: the menu's thread starts there and asks for its context at once.
+    gl_surface = std::make_unique<QOffscreenSurface>();
+    gl_surface->setFormat(MenuGlFormat());
+    gl_surface->create();
+    threaded_gl = QOpenGLContext::supportsThreadedOpenGL();
     HarborSetup::MenuSetHost(*this);
     WatchChord();
     // A known pad that connects gets its saved mapping back: a look once a second, on the GUI
@@ -99,6 +136,38 @@ void HarborMenu::WatchChord() {
     };
     player1_callback = watch(hid.GetEmulatedController(Core::HID::NpadIdType::Player1));
     handheld_callback = watch(hid.GetEmulatedController(Core::HID::NpadIdType::Handheld));
+}
+
+std::unique_ptr<HarborSetup::MenuGl> HarborMenu::CreateMenuGl() {
+    if (!gl_surface || !gl_surface->isValid()) {
+        LOG_ERROR(Frontend, "harbor: menu: Qt made no offscreen surface");
+        return nullptr;
+    }
+    if (!threaded_gl) {
+        LOG_WARNING(Frontend, "harbor: menu: Qt reports no OpenGL off the GUI thread here; trying anyway");
+    }
+    // Made on this (the menu's) thread, so it belongs to it and may be made current here.
+    auto context = std::make_unique<QOpenGLContext>();
+    context->setFormat(MenuGlFormat());
+    if (!context->create()) {
+        LOG_ERROR(Frontend, "harbor: menu: Qt made no OpenGL context");
+        return nullptr;
+    }
+    const auto format = context->format();
+    if (format.renderableType() != QSurfaceFormat::OpenGL ||
+        format.version() < qMakePair(3, 2)) {
+        LOG_ERROR(Frontend, "harbor: menu: Qt gave OpenGL{} {}.{}, the menu needs OpenGL 3.2 or later",
+                  format.renderableType() == QSurfaceFormat::OpenGLES ? " ES" : "",
+                  format.majorVersion(), format.minorVersion());
+        return nullptr;
+    }
+    if (!context->makeCurrent(gl_surface.get())) {
+        LOG_ERROR(Frontend, "harbor: menu: the OpenGL context did not become current");
+        return nullptr;
+    }
+    LOG_INFO(Frontend, "harbor: menu: Qt offscreen OpenGL {}.{} on {}", format.majorVersion(),
+             format.minorVersion(), QGuiApplication::platformName().toStdString());
+    return std::make_unique<QtMenuGl>(std::move(context));
 }
 
 void HarborMenu::OnGui(std::function<void()> work) {

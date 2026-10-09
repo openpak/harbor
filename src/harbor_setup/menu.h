@@ -11,6 +11,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,6 +44,14 @@ struct KeyboardDefaults {
     std::array<int, Settings::NativeAnalog::NumAnalogs> modifiers{};
 };
 
+/// The desktop menu's offscreen OpenGL 3.3 core context, made by the frontend's toolkit so that it
+/// works on every window system (WGL, CGL, GLX, EGL). Made, used and destroyed on the menu's thread.
+class MenuGl {
+public:
+    virtual ~MenuGl() = default;
+    virtual void* ProcAddress(const char* name) = 0;
+};
+
 /// What the menu needs from the frontend. The menu calls these on its own thread; anything that
 /// touches the frontend's UI is moved to the UI thread by the implementation.
 class MenuHost {
@@ -50,6 +59,11 @@ public:
     virtual ~MenuHost() = default;
 
     virtual bool IsAndroid() const = 0;
+    /// Desktop: the menu's GL context, current on the calling thread (the menu's), or null when
+    /// there is none. Android makes its own with EGL and does not use this.
+    virtual std::unique_ptr<MenuGl> CreateMenuGl() {
+        return nullptr;
+    }
     virtual Core::System& System() = 0;
     virtual InputCommon::InputSubsystem& Input() = 0;
     /// The input devices InputCommon lists (Android: a copy taken on the UI thread, where its

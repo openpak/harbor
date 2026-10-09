@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
-// The menu's thread: an offscreen GL context (EGL, the same on desktop Linux and Android), Borealis
-// on a platform that draws into it and reads the console's own input, and the picture handed to
-// the presenter (video_core/host_screen.h) once a frame while the menu is open.
+// The menu's thread: an offscreen GL context (on the desktop the frontend's toolkit makes it, so it
+// works with WGL, CGL, GLX and EGL alike; on Android EGL), Borealis on a platform that draws into it
+// and reads the console's own input, and the picture handed to the presenter
+// (video_core/host_screen.h) once a frame while the menu is open.
 
 #include <algorithm>
 #include <atomic>
@@ -14,12 +15,12 @@
 #include <mutex>
 #include <thread>
 
+#ifdef __ANDROID__
 #include <dlfcn.h>
 
-#define EGL_NO_X11
-#define MESA_EGL_NO_X11_HEADERS
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#endif
 
 #include <glad/glad.h>
 #ifdef __ANDROID__
@@ -58,6 +59,8 @@ namespace NativeButton = Settings::NativeButton;
 
 // ---- The offscreen GL context ----
 
+#ifdef __ANDROID__
+
 struct Egl {
     void* library = nullptr;
     void* gl_library = nullptr;
@@ -80,17 +83,9 @@ void* GlProc(const char* name) {
     return proc;
 }
 
-bool CreateGlContext() {
-#ifdef __ANDROID__
+bool CreateGlContext(MenuHost&) {
     egl.library = dlopen("libEGL.so", RTLD_NOW | RTLD_LOCAL);
     egl.gl_library = dlopen("libGLESv2.so", RTLD_NOW | RTLD_LOCAL);
-#else
-    egl.library = dlopen("libEGL.so.1", RTLD_NOW | RTLD_LOCAL);
-    egl.gl_library = dlopen("libOpenGL.so.0", RTLD_NOW | RTLD_LOCAL);
-    if (!egl.gl_library) {
-        egl.gl_library = dlopen("libGL.so.1", RTLD_NOW | RTLD_LOCAL);
-    }
-#endif
     if (!egl.library) {
         LOG_ERROR(Frontend, "harbor: menu: no EGL library");
         return false;
@@ -111,40 +106,17 @@ bool CreateGlContext() {
         return false;
     }
 
-    // Offscreen needs no window system: Mesa's surfaceless platform first on desktop, then the
-    // default display (Android, and drivers without it).
     EGLint major = 0, minor = 0;
-    egl.display = EGL_NO_DISPLAY;
-#ifndef __ANDROID__
-    if (const auto get_platform_display = reinterpret_cast<PFNEGLGETPLATFORMDISPLAYEXTPROC>(
-            egl.get_proc("eglGetPlatformDisplayEXT"))) {
-        egl.display = get_platform_display(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, nullptr);
-        if (egl.display != EGL_NO_DISPLAY && !initialize(egl.display, &major, &minor)) {
-            LOG_WARNING(Frontend, "harbor: menu: no surfaceless EGL (0x{:x}), trying the default display",
-                        get_error());
-            egl.display = EGL_NO_DISPLAY;
-        }
+    egl.display = get_display(EGL_DEFAULT_DISPLAY);
+    if (egl.display == EGL_NO_DISPLAY || !initialize(egl.display, &major, &minor)) {
+        LOG_ERROR(Frontend, "harbor: menu: EGL did not start (0x{:x})", get_error());
+        egl.display = EGL_NO_DISPLAY;
+        return false;
     }
-#endif
-    if (egl.display == EGL_NO_DISPLAY) {
-        egl.display = get_display(EGL_DEFAULT_DISPLAY);
-        if (egl.display == EGL_NO_DISPLAY || !initialize(egl.display, &major, &minor)) {
-            LOG_ERROR(Frontend, "harbor: menu: EGL did not start (0x{:x})", get_error());
-            egl.display = EGL_NO_DISPLAY;
-            return false;
-        }
-    }
-#ifdef __ANDROID__
     bind_api(EGL_OPENGL_ES_API);
-    constexpr EGLint renderable = EGL_OPENGL_ES3_BIT_KHR;
-#else
-    bind_api(EGL_OPENGL_API);
-    constexpr EGLint renderable = EGL_OPENGL_BIT;
-#endif
-    const EGLint config_attribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, renderable,
-                                     EGL_RED_SIZE,     8,               EGL_GREEN_SIZE,      8,
-                                     EGL_BLUE_SIZE,    8,               EGL_ALPHA_SIZE,      8,
-                                     EGL_NONE};
+    const EGLint config_attribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE,
+                                     EGL_OPENGL_ES3_BIT_KHR, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8,
+                                     EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
     EGLConfig config{};
     EGLint count = 0;
     if (!choose_config(egl.display, config_attribs, &config, 1, &count) || count < 1) {
@@ -153,13 +125,7 @@ bool CreateGlContext() {
     }
     const EGLint surface_attribs[] = {EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE};
     egl.surface = create_pbuffer(egl.display, config, surface_attribs);
-#ifdef __ANDROID__
     const EGLint context_attribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-#else
-    const EGLint context_attribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
-                                      EGL_CONTEXT_OPENGL_PROFILE_MASK,
-                                      EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
-#endif
     egl.context = create_context(egl.display, config, EGL_NO_CONTEXT, context_attribs);
     if (egl.surface == EGL_NO_SURFACE || egl.context == EGL_NO_CONTEXT ||
         !make_current(egl.display, egl.surface, egl.surface, egl.context)) {
@@ -174,6 +140,43 @@ bool CreateGlContext() {
              reinterpret_cast<const char*>(glGetString(GL_VERSION)), major, minor);
     return true;
 }
+
+/// The EGL context stays with the thread's process.
+void ReleaseGlContext() {}
+
+#else
+
+/// The frontend's context (MenuHost::CreateMenuGl), owned by the menu's thread.
+std::unique_ptr<MenuGl> desktop_gl;
+
+void* GlProc(const char* name) {
+    return desktop_gl ? desktop_gl->ProcAddress(name) : nullptr;
+}
+
+bool CreateGlContext(MenuHost& host) {
+    HARBOR_CRUMB("menu: GL setup");
+    desktop_gl = host.CreateMenuGl();
+    if (!desktop_gl) {
+        LOG_ERROR(Frontend, "harbor: menu: no offscreen GL context");
+        return false;
+    }
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(GlProc))) {
+        LOG_ERROR(Frontend, "harbor: menu: GL functions did not load");
+        desktop_gl.reset();
+        return false;
+    }
+    LOG_INFO(Frontend, "harbor: menu: offscreen GL {} ({})",
+             reinterpret_cast<const char*>(glGetString(GL_VERSION)),
+             reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
+    return true;
+}
+
+/// The context goes on the thread that made it, before the frontend's toolkit shuts down.
+void ReleaseGlContext() {
+    desktop_gl.reset();
+}
+
+#endif
 
 /// The picture the menu draws into, at the console's resolution.
 struct Target {
@@ -609,9 +612,10 @@ void Run() {
     HARBOR_CRUMB("menu: thread runs");
     Common::SetCurrentThreadName("HarborMenu");
     // No GL is retried at the next open; Borealis that would not start is not (it starts once).
-    const bool gl = CreateGlContext();
+    const bool gl = CreateGlContext(*menu_host);
     if (!gl || !InitBorealis()) {
         failed = !gl;
+        ReleaseGlContext();
         std::scoped_lock lk{mutex};
         want_open = false;
         return;
@@ -662,6 +666,8 @@ void Run() {
         lk.lock();
         cv.wait_until(lk, start + FrameTime, [] { return stopping || want_back || !want_open; });
     }
+    lk.unlock();
+    ReleaseGlContext();
 }
 
 } // namespace

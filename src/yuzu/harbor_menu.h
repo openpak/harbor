@@ -9,6 +9,7 @@
 
 #include "harbor_setup/menu.h"
 
+class QOffscreenSurface;
 class QWidget;
 
 namespace InputCommon {
@@ -38,6 +39,7 @@ public:
     bool IsAndroid() const override {
         return false;
     }
+    std::unique_ptr<HarborSetup::MenuGl> CreateMenuGl() override;
     bool HasHud() const override {
         return true;
     }
@@ -76,6 +78,10 @@ private:
 
     QWidget* window;
     InputCommon::InputSubsystem& input;
+    /// The menu's offscreen surface: made here on the GUI thread (some platforms back it with a
+    /// hidden window), drawn to from the menu's thread with a context made there.
+    std::unique_ptr<QOffscreenSurface> gl_surface;
+    bool threaded_gl = true;
     Hooks hooks;
     // Harbor Settings' Show FPS and device line, kept in harbor.ini (off by default).
     std::atomic_bool show_fps{false};
