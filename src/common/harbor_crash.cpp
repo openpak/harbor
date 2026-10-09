@@ -950,6 +950,42 @@ void StartRecordingLocked() {
     g_recording.store(true);
 }
 
+std::atomic<int>& CrumbFd() {
+    static std::atomic<int> fd{-1};
+    return fd;
+}
+
+/// The last run's breadcrumbs (written synchronously) go to the log; the file then starts again
+/// for this run.
+void OpenCrumbsLocked() {
+#ifndef _WIN32
+    if (CrumbFd().load() >= 0) {
+        return;
+    }
+    const fs::path path = g_dir / "crumbs.txt";
+    const std::string previous = ReadFile(path, 512 * 1024);
+    if (!previous.empty()) {
+        // The tail matters: the last lines before the process ended.
+        std::size_t begin = previous.size() > 64 * 1024 ? previous.find('\n', previous.size() - 64 * 1024) + 1 : 0;
+        while (begin < previous.size()) {
+            std::size_t end = previous.find('\n', begin);
+            if (end == std::string::npos) {
+                end = previous.size();
+            }
+            if (end > begin) {
+                LOG_INFO(Common, "harbor: last run crumb: {}",
+                         std::string_view{previous}.substr(begin, end - begin));
+            }
+            begin = end + 1;
+        }
+    }
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_SYNC | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+        CrumbFd() = fd;
+    }
+#endif
+}
+
 /// The last process's fault dumps go to the log; then the file is opened, empty, for this one.
 void PrepareFaultDumpLocked() {
 #ifndef _WIN32
@@ -977,6 +1013,7 @@ void PrepareFaultDumpLocked() {
             at = end + 1;
         }
     }
+    OpenCrumbsLocked();
     const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd < 0) {
         LOG_WARNING(Common, "harbor: the native fault dump file could not be opened");
@@ -1186,12 +1223,40 @@ void DiscardFaultDump(long start) {
 #endif
 }
 
+namespace {
+std::atomic<unsigned> g_crumb_run{1};
+} // namespace
+
+void NewCrumbRun() {
+    g_crumb_run.fetch_add(1);
+}
+
+unsigned CrumbRun() {
+    return g_crumb_run.load(std::memory_order_relaxed);
+}
+
 void Breadcrumb(std::string_view what) {
     char name[32] = "?";
+    long tid = 0;
 #ifndef _WIN32
     pthread_getname_np(pthread_self(), name, sizeof(name));
+    tid = static_cast<long>(syscall(SYS_gettid));
+    if (const int fd = CrumbFd().load(); fd >= 0) {
+        timespec now{};
+        clock_gettime(CLOCK_REALTIME, &now);
+        char line[512];
+        const int size = std::snprintf(line, sizeof(line), "%lld.%03ld crumb: %.*s [thread %s tid %ld]\n",
+                                       static_cast<long long>(now.tv_sec), now.tv_nsec / 1000000,
+                                       static_cast<int>(std::min<std::size_t>(what.size(), 300)),
+                                       what.data(), name, tid);
+        if (size > 0) {
+            // O_SYNC: on the disk before this returns.
+            [[maybe_unused]] const ssize_t written =
+                ::write(fd, line, std::min<std::size_t>(static_cast<std::size_t>(size), sizeof(line) - 1));
+        }
+    }
 #endif
-    LOG_INFO(Common, "harbor: crumb: {} [thread {}]", what, name);
+    LOG_INFO(Common, "harbor: crumb: {} [thread {} tid {}]", what, name, tid);
 }
 
 void LogSignalHandlers(std::string_view when) {

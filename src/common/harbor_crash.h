@@ -105,8 +105,15 @@ long DumpFault(int sig, void* info, void* ucontext, const char* who);
 /// Async-signal-safe: the fault was handled after all; its dump is dropped.
 void DiscardFaultDump(long start);
 
-/// Diagnostics (temporary): an INFO line "harbor: crumb: <what> [thread <name>]".
+/// Diagnostics (temporary): "harbor: crumb: <what> [thread <name> tid <n>]", written with write()
+/// to crash-reports/crumbs.txt (O_SYNC) by the calling thread before it returns, then to the log.
+/// The next start copies crumbs.txt into eden_log.txt ("harbor: last run crumb: ...").
 void Breadcrumb(std::string_view what);
+
+/// A new emulation run: every "once" crumb may log again.
+void NewCrumbRun();
+/// The current run's number (for HARBOR_CRUMB_ONCE).
+unsigned CrumbRun();
 
 /// Diagnostics: logs, for each fatal signal, which handler would take it now: the one the kernel
 /// calls (libc's view, past ART's wrapper) and the one ART's signal chain forwards to.
@@ -119,11 +126,12 @@ void SetHostIdentityForTest(std::string home, std::string user);
 
 /// A breadcrumb, logged every time.
 #define HARBOR_CRUMB(what) ::Common::HarborCrash::Breadcrumb(what)
-/// A breadcrumb, logged the first time this line runs only.
+/// A breadcrumb, logged the first time this line runs in each emulation run.
 #define HARBOR_CRUMB_ONCE(what)                                                                    \
     do {                                                                                           \
-        static std::atomic<bool> harbor_crumb_once_{false};                                        \
-        if (!harbor_crumb_once_.exchange(true)) {                                                  \
+        static std::atomic<unsigned> harbor_crumb_run_{0};                                         \
+        const unsigned harbor_crumb_now_ = ::Common::HarborCrash::CrumbRun();                      \
+        if (harbor_crumb_run_.exchange(harbor_crumb_now_) != harbor_crumb_now_) {                  \
             ::Common::HarborCrash::Breadcrumb(what);                                               \
         }                                                                                          \
     } while (0)

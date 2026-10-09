@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "common/harbor_crash.h"
 #include "game_settings.h"
 #include "audio_core/audio_core.h"
 #include "common/fs/fs.h"
@@ -320,6 +321,9 @@ struct System::Impl {
     }
 
     SystemResultStatus Load(System& system, Frontend::EmuWindow& emu_window, const std::string& filepath, Service::AM::FrontendAppletParameters& params) {
+        // Harbor diagnostics: a new run, so every "once" breadcrumb logs again.
+        ::Common::HarborCrash::NewCrumbRun();
+        HARBOR_CRUMB("core: System::Load");
         if (params.launch_type == Service::AM::LaunchType::FrontendInitiated) {
             fs_controller.InitTempStorage();
         }
