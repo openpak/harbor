@@ -708,7 +708,18 @@ Result FSP_SRV::ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute(
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                                 u64 save_data_id) {
-    R_RETURN(ReadExtraDataById(out_buffer, FileSys::SaveDataSpaceId::System, save_data_id));
+    // No space given: fs finds the save's space in its index (LibHac
+    // ReadSaveDataFileSystemExtraDataCore without a space). qlaunch reads an application save's
+    // time stamp this way for the Save Data Cloud dialogs; a System-only lookup missed every
+    // user save and the dialogs said "Couldn't get information".
+    for (const auto space : {FileSys::SaveDataSpaceId::System, FileSys::SaveDataSpaceId::User,
+                             FileSys::SaveDataSpaceId::SdSystem, FileSys::SaveDataSpaceId::SdUser}) {
+        FileSys::SaveDataAttribute attribute{};
+        if (FindSaveDataById(&attribute, space, save_data_id).IsSuccess()) {
+            R_RETURN(ReadExtraData(out_buffer, space, attribute, {}));
+        }
+    }
+    R_THROW(FileSys::ResultTargetNotFound);
 }
 
 Result FSP_SRV::ReadSaveDataFileSystemExtraDataBySaveDataAttribute(
