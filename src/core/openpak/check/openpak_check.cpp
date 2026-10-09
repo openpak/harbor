@@ -895,6 +895,8 @@ void TransferFlowChecks() {
           "an upload creates every component (meta included), PUTs them and finishes");
     Check(server.versions[0].key_seed == tr::Base64Url(harbor_a.own_seed),
           "finish_upload carries the exporter's key seed and MAC");
+    Check(up.commit_id == save.commit_id && up.series_id != 0,
+          "an upload reports the archive's series and commit for SeriesInfo");
     // Download on a second console of the same account (shares the MAC key: same keys).
     FakeFs harbor_b{st::ArchiveSource{}};
     harbor_b.shared_mac_key = &harbor_a.mac_key;
