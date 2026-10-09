@@ -41,12 +41,14 @@ bool InstallSecretStore() {
         LOG_WARNING(Frontend, "harbor: no password store on this system; OpenPak keeps its "
                               "credentials in memory only");
         installed = false;
+        OpenPak::SetSecretStoreDecided();
         return false;
     }
     if (!RoundTrip(*store)) {
         LOG_WARNING(Frontend, "harbor: the password store failed a store/load/erase check; OpenPak "
                               "keeps its credentials in memory only");
         installed = false;
+        OpenPak::SetSecretStoreDecided();
         return false;
     }
     OpenPak::SetSecretStore(std::move(store));

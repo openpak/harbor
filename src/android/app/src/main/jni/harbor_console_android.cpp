@@ -39,6 +39,13 @@ JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_deviceKey
     return Harbor::DeviceKeyRestorePending();
 }
 
+/// 0 the keys are usable, 1 not known yet (no password store), 2 not on this phone, 3 a restored
+/// backup's sealed key waits for its passphrase.
+JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_calibrationKeys(JNIEnv*,
+                                                                                  jobject) {
+    return static_cast<jint>(Harbor::Calibration::Get().Keys());
+}
+
 JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_restoreDeviceKey(
     JNIEnv* env, jobject, jstring passphrase) {
     return static_cast<jint>(

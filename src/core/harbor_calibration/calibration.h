@@ -35,6 +35,18 @@ public:
     /// Read again on the next Get() (the binary or the device key changed on disk).
     static void Reload();
 
+    /// Whether this console's private keys can be used here. Keys are never replaced on their own:
+    /// only a restore from a backup or "Make this a new console" changes them.
+    enum class KeyState {
+        Ready,            ///< the device key is in this host's password store
+        StoreUnavailable, ///< no store installed yet, or it could not be read: looked up again later
+        NotOnThisHost,    ///< confirmed absent (or not this console's): restore or make a new console
+        BackupPending,    ///< a restored NAND whose sealed key waits for its passphrase
+    };
+    KeyState Keys() const {
+        return key_state;
+    }
+
     /// The whole binary (0x8000 bytes, CAL0), as set:cal and a BIS CalibrationBinary read see it.
     std::span<const u8> Binary() const {
         return binary;
@@ -63,7 +75,7 @@ private:
 
     std::vector<u8> binary;
     Cal0::DeviceKey device_key{};
-    bool keys_pending = false; ///< a restored NAND whose sealed device key waits for its passphrase
+    KeyState key_state = KeyState::Ready;
 };
 
 // Console backups. A NAND backup carries the device key sealed with a passphrase the user chooses

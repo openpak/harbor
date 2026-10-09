@@ -106,6 +106,9 @@ object HarborNative {
     /** A restored NAND whose device key waits for its backup's passphrase. */
     external fun deviceKeyRestorePending(): Boolean
 
+    /** 0 keys usable, 1 not known yet (no password store), 2 not on this phone, 3 a backup's key waits. */
+    external fun calibrationKeys(): Int
+
     /** 0 restored, 1 wrong passphrase, 2 no sealed key in the NAND, 3 the key could not be kept. */
     external fun restoreDeviceKey(passphrase: String): Int
 

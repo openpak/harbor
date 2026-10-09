@@ -215,4 +215,26 @@ void MakeNew(QWidget* parent, const WhileStopped& while_stopped) {
     }
 }
 
+void WarnIfLocked(QWidget* parent) {
+    using Keys = Harbor::Calibration::KeyState;
+    const Keys keys = Harbor::Calibration::Get().Keys();
+    if (keys != Keys::NotOnThisHost && keys != Keys::BackupPending) {
+        return;
+    }
+    LOG_WARNING(Frontend, "harbor: the console's keys are not on this computer; told the user");
+    if (std::getenv("HARBOR_CONTROL") != nullptr) {
+        return; // test runs: the log line is the signal, no dialog in the way
+    }
+    QMessageBox::warning(
+        parent, QObject::tr("This console's keys"),
+        keys == Keys::BackupPending
+            ? QObject::tr("This console was restored from a backup and its keys are still locked. "
+                          "Use Harbor > Restore console with the backup's passphrase. Until then "
+                          "it does not sign in to OpenPak.")
+            : QObject::tr("This console's keys are not on this computer, so it does not sign in "
+                          "to OpenPak. Restore it from a backup (Harbor > Restore console), or "
+                          "make it a new console (Harbor > Make this a new console): its users then "
+                          "link their Nintendo Accounts again."));
+}
+
 } // namespace HarborConsoleMenu
