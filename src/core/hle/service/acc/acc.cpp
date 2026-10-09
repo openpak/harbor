@@ -1760,6 +1760,27 @@ void Module::Interface::ClearSaveDataThumbnail(HLERequestContext& ctx) {
     PushResult(ctx, ResultSuccess);
 }
 
+// 112: (Uid, ApplicationId, out buffer) -> u32 size. 23.0.1 (account 0x19ac70) checks the id,
+// the user and the buffer, reads the save's 0x40-byte thumbnail header through fs, answers 395
+// when it is not the one 110 writes, needs 0x24000 bytes of buffer (31) and reads that much.
+// Harbor's 110 keeps no thumbnail, so every header reads as not written.
+void Module::Interface::LoadSaveDataThumbnail(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uuid = rp.PopRaw<Common::UUID>();
+    const auto application_id = rp.Pop<u64>();
+    Result result = Account::ResultSaveDataThumbnailNotFound;
+    if (application_id == 0) {
+        result = Account::ResultInvalidApplication;
+    } else if (uuid.IsInvalid()) {
+        result = Account::ResultInvalidUserId;
+    } else if (ctx.GetWriteBufferSize() == 0) {
+        result = Account::ResultNullptr;
+    }
+    LOG_DEBUG(Service_ACC, "called, application_id={:016X}, result={:#x}", application_id,
+              result.raw);
+    PushResult(ctx, result);
+}
+
 void Module::Interface::CreateGuestLoginRequest(HLERequestContext& ctx) {
     LOG_WARNING(Service_ACC, "(STUBBED) called");
     IPC::ResponseBuilder rb{ctx, 2, 0, 1};
@@ -1830,7 +1851,7 @@ public:
             {106, nullptr, "GetProfileSyncNotifier"},
             {110, &ACC_SU::StoreSaveDataThumbnailSystem, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
-            {112, nullptr, "LoadSaveDataThumbnail"},
+            {112, &ACC_SU::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},
@@ -1948,7 +1969,7 @@ public:
             {106, nullptr, "GetProfileSyncNotifier"},
             {110, &ACC_U1::StoreSaveDataThumbnailApplication, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
-            {112, nullptr, "LoadSaveDataThumbnail"},
+            {112, &ACC_U1::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},
@@ -2028,7 +2049,7 @@ public:
             { 106, nullptr, "GetProfileSyncNotifier"},
             { 110, nullptr, "StoreSaveDataThumbnail"},
             { 111, nullptr, "ClearSaveDataThumbnail"},
-            { 112, nullptr, "LoadSaveDataThumbnail"},
+            { 112, &ACC_E::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             { 113, nullptr, "GetSaveDataThumbnailExistence"},
             { 120, nullptr, "ListOpenUsersInApplication"},
             { 130, nullptr, "ActivateOpenContextRetention"},
@@ -2116,7 +2137,7 @@ public:
             {106, nullptr, "GetProfileSyncNotifier"},
             {110, nullptr, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
-            {112, nullptr, "LoadSaveDataThumbnail"},
+            {112, &ACC_E_U1::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},
@@ -2160,7 +2181,7 @@ public:
             {106, nullptr, "GetProfileSyncNotifier"},
             {110, nullptr, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
-            {112, nullptr, "LoadSaveDataThumbnail"},
+            {112, &ACC_E_U2::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},

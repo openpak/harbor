@@ -40,6 +40,8 @@ constexpr Result ResultNetworkServiceAccountFederationFailed{ErrorModule::Accoun
 constexpr Result ResultNintendoAccountAlreadyRegistered{ErrorModule::Account, 291};
 constexpr Result ResultNetworkServiceAccountProfileUnavailable{ErrorModule::Account, 292};
 // The users/me cache reader: no cache.
+/// acc 112: the save's thumbnail file header is not one 110 wrote (23.0.1, 0x19ac70).
+constexpr Result ResultSaveDataThumbnailNotFound{ErrorModule::Account, 395};
 constexpr Result ResultNintendoAccountUserResourceCacheNotFound{ErrorModule::Account, 400};
 constexpr Result ResultInvalidIdTokenCacheBufferSize{ErrorModule::Account, 451};
 // The callback URL is not the procedure's (other prefix, malformed query, other state, no code).

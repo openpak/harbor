@@ -66,6 +66,7 @@ public:
         void DebugActivateOpenContextRetention(HLERequestContext& ctx);
         void AuthenticateApplicationAsync(HLERequestContext& ctx);
         void ClearSaveDataThumbnail(HLERequestContext& ctx);
+        void LoadSaveDataThumbnail(HLERequestContext& ctx);
         void CreateGuestLoginRequest(HLERequestContext& ctx);
         void LoadOpenContext(HLERequestContext& ctx);
 
