@@ -121,6 +121,7 @@ void WindowSystem::Update() {
     }
 
     this->NotifyApplicationChangedIfNeeded();
+    this->LoadIdleSettingsIfReady();
 }
 
 bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_application) {
