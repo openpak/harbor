@@ -70,7 +70,7 @@ public:
 
     /// The host battery changed: a bound session's event is signalled, as the Ryujinx Harbor does.
     void SignalBatteryChanged() {
-        if (should_signal) {
+        if (should_signal && state_change_event != nullptr) {
             state_change_event->Signal(system.Kernel());
         }
     }
@@ -134,7 +134,7 @@ private:
     bool should_signal_power_supply{};
     bool should_signal_battery_voltage{};
     bool should_signal{};
-    Kernel::KEvent* state_change_event;
+    Kernel::KEvent* state_change_event{};
 };
 
 PSM::PSM(Core::System& system_) : ServiceFramework{system_, "psm"} {
@@ -217,6 +217,15 @@ BatteryState PSM::ReadBattery() const {
 
 void PSM::PollBattery() {
     HARBOR_CRUMB_ONCE("psm: first battery poll");
+    // Outside a HOME session psm stays stock (the guest reads the battery when it asks). In one,
+    // nothing happens until the overlay applet has attached its ovln source: before that there is
+    // no receiver for a notice and no system applet has a session to signal. The first reading
+    // after that is the baseline and announces nothing. This runs on the host timing thread, so it
+    // takes no am or window system lock.
+    if (!system.GetAppletManager().IsHomeSession() || !PSC::GetOvlnAgent().HasReceiver("overlay")) {
+        return;
+    }
+    HARBOR_CRUMB_ONCE("psm: first battery poll with the overlay attached");
     const BatteryState now = ReadBattery();
 
     BatteryNotices notices{};
@@ -244,12 +253,11 @@ void PSM::PollBattery() {
     LOG_DEBUG(Service_PTM, "psm: battery {}%, charger {}", now.percentage,
               static_cast<u32>(now.charger));
     for (const auto& session : bound) {
-        session->SignalBatteryChanged();
+        if (session) {
+            session->SignalBatteryChanged();
+        }
     }
 
-    if (!system.GetAppletManager().IsHomeSession()) {
-        return;
-    }
     if (notices.charger_changed) {
         SendOverlayNotice(OverlayTagChargerChanged, now);
     }

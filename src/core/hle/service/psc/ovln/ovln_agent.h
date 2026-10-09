@@ -306,6 +306,17 @@ public:
         receiver.total = 0;
     }
 
+    /// Whether a receiver holds the source (the overlay applet attached "overlay"), so a host
+    /// sender can wait until someone will read its notices.
+    bool HasReceiver(std::string_view source_name) {
+        SourceName name{};
+        std::copy_n(source_name.begin(), std::min(source_name.size(), name.name.size()),
+                    name.name.begin());
+        std::scoped_lock lk{mutex};
+        const auto it = sources.find(name);
+        return it != sources.end() && it->second != nullptr && it->second->receiver != nullptr;
+    }
+
 private:
     std::shared_ptr<Source> GetOrCreateSourceLocked(const SourceName& name) {
         auto& source = sources[name];

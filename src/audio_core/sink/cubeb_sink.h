@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -84,6 +85,9 @@ private:
     /// Cubeb id of the actual hardware input device
     cubeb_devid input_device{};
     /// Vector of streams managed by this sink
+    // Streams are opened and closed on audio service threads while audctl and audout change
+    // the volumes from others.
+    std::mutex sink_streams_mutex;
     std::vector<SinkStreamPtr> sink_streams{};
 
 #ifdef _WIN32

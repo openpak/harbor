@@ -246,6 +246,7 @@ SinkStream* SDLSink::AcquireSinkStream(Core::System& system, u32 system_channels
                                        const std::string&, StreamType type) {
     HARBOR_CRUMB("audio: SDL stream creation");
     system_channels = system_channels_;
+    std::scoped_lock lk{sink_streams_mutex};
     SinkStreamPtr& stream = sink_streams.emplace_back(std::make_unique<SDLSinkStream>(
         device_channels, system_channels, output_device, input_device, type, system));
     stream->SetDeviceVolume(device_volume);
@@ -254,6 +255,7 @@ SinkStream* SDLSink::AcquireSinkStream(Core::System& system, u32 system_channels
 }
 
 void SDLSink::CloseStream(SinkStream* stream) {
+    std::scoped_lock lk{sink_streams_mutex};
     for (size_t i = 0; i < sink_streams.size(); i++) {
         if (sink_streams[i].get() == stream) {
             sink_streams[i].reset();
@@ -264,6 +266,7 @@ void SDLSink::CloseStream(SinkStream* stream) {
 }
 
 void SDLSink::CloseStreams() {
+    std::scoped_lock lk{sink_streams_mutex};
     sink_streams.clear();
 }
 
@@ -272,6 +275,7 @@ f32 SDLSink::GetDeviceVolume() const {
 }
 
 void SDLSink::SetDeviceVolume(f32 volume) {
+    std::scoped_lock lk{sink_streams_mutex};
     device_volume = volume;
     for (auto& stream : sink_streams) {
         stream->SetDeviceVolume(volume);
@@ -279,6 +283,7 @@ void SDLSink::SetDeviceVolume(f32 volume) {
 }
 
 void SDLSink::SetSystemVolume(f32 volume) {
+    std::scoped_lock lk{sink_streams_mutex};
     for (auto& stream : sink_streams) {
         stream->SetSystemVolume(volume);
     }
