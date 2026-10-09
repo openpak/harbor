@@ -108,7 +108,14 @@ void NvMap::UnmapHandle(Handle& handle_description) {
     }
     const VAddr vaddress = handle_description.address;
     auto* session = core.GetSession(handle_description.session_id);
-    session->mapper->Unmap(vaddress, map_size);
+    // The session that mapped it may be gone (its slot reused by a process without a heap
+    // mapper): its mapper and the region behind it went with it, so there is nothing to unmap.
+    if (session->mapper) {
+        session->mapper->Unmap(vaddress, map_size);
+    } else {
+        LOG_WARNING(Service_NVDRV, "nvmap handle {}: its session's heap mapper is gone",
+                    handle_description.id);
+    }
     handle_description.d_address = 0;
     handle_description.in_heap = false;
 }
@@ -331,14 +338,37 @@ void NvMap::UnmapAllHandles(NvCore::SessionId session_id) {
         return handles;
     }();
 
+    size_t extra_references = 0;
+    size_t heap_unmapped = 0;
     for (auto& [id, handle] : handles_copy) {
-        {
-            std::scoped_lock lk{handle->mutex};
-            if (handle->session_id.id != session_id.id || handle->dupes <= 0) {
-                continue;
+        // Every guest reference of the closing session goes, not just one: a handle duplicated
+        // twice used to stay mapped through the session's heap mapper after the mapper was freed,
+        // and the next process given the same session slot crashed unmapping it.
+        for (size_t freed = 0;; ++freed) {
+            {
+                std::scoped_lock lk{handle->mutex};
+                if (handle->session_id.id != session_id.id || handle->dupes <= 0) {
+                    extra_references += freed > 1 ? freed - 1 : 0;
+                    break;
+                }
             }
+            FreeHandle(id, false);
         }
-        FreeHandle(id, false);
+        // Still held by the emulator (internal references): it cannot stay mapped through a
+        // heap mapper that is about to be freed.
+        std::scoped_lock lk{handle->mutex};
+        if (handle->session_id.id == session_id.id && handle->in_heap) {
+            std::scoped_lock queue_lock(unmap_queue_lock);
+            UnmapHandle(*handle);
+            handle->pins = 0;
+            ++heap_unmapped;
+        }
+    }
+    if (extra_references != 0 || heap_unmapped != 0) {
+        LOG_INFO(Service_NVDRV,
+                 "nvmap: session {} closed: {} more guest reference(s) freed, {} handle(s) held "
+                 "internally taken off its heap",
+                 session_id.id, extra_references, heap_unmapped);
     }
 }
 
