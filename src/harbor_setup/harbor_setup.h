@@ -92,7 +92,9 @@ void ReportPickerFailure(const std::string& message);
 /// is given (the flag is removed from argv). Under the test harness (HARBOR_CONTROL) or with an
 /// explicit boot target (--qlaunch, a game path) it does nothing, unless `--harbor-setup` or
 /// `--harbor-console` is given.
-/// Returns -1 when no setup was needed, 0 when setup completed, 1 when the window was closed: quit.
+/// A completed setup starts the console in a fresh process (Linux and macOS: this one is replaced).
+/// Returns -1 when no setup was needed, 0 when setup completed and the console starts in this
+/// process, 1 to quit (the window was closed, or Windows started the console in a new process).
 int RunDesktopIfNeeded(int& argc, char** argv);
 
 /// Desktop: whether this process may run in console mode (set by RunDesktopIfNeeded; false under the

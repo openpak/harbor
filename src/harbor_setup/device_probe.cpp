@@ -4,17 +4,20 @@
 // Reads the device for the device check: every value comes from the running system.
 
 #include <cstdlib>
+#include <filesystem>
 #include <sstream>
-
-#include <dlfcn.h>
-#include <sys/statvfs.h>
-#include <unistd.h>
+#include <system_error>
 
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
 #if defined(__ANDROID__)
+#include <dlfcn.h>
 #include <sys/system_properties.h>
+#include <unistd.h>
+#else
+#include "common/memory_detect.h"
+#include "video_core/vulkan_common/vulkan_library.h"
 #endif
 
 #include "harbor_setup/device_check.h"
@@ -32,19 +35,31 @@ std::string Property(const char* name) {
 #endif
 
 // A Vulkan 1.0 instance on the system loader; the first device's version and name.
-void ProbeVulkan(DeviceInfo& d) {
+// The loader stays loaded: unloading it while driver threads may still run is not worth the bytes.
+PFN_vkGetInstanceProcAddr VulkanLoader() {
+#if defined(__ANDROID__)
     void* lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!lib) {
         lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
     }
+    return lib ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr"))
+               : nullptr;
+#else
+    // Eden's own search: vulkan-1.dll, libvulkan.so.1, or the bundle's loader or MoltenVK on macOS.
+    static const auto* const library =
+        new std::shared_ptr<Common::DynamicLibrary>(Vulkan::OpenLibrary(nullptr));
+    PFN_vkGetInstanceProcAddr get_proc = nullptr;
+    if (*library && (*library)->IsOpen()) {
+        void((*library)->GetSymbol("vkGetInstanceProcAddr", &get_proc));
+    }
+    return get_proc;
+#endif
+}
+
+void ProbeVulkan(DeviceInfo& d) {
     d.vulkan_major = 0;
     d.vulkan_minor = 0;
-    if (!lib) {
-        return;
-    }
-
-    const auto get_proc =
-        reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(lib, "vkGetInstanceProcAddr"));
+    const auto get_proc = VulkanLoader();
     const auto create =
         get_proc ? reinterpret_cast<PFN_vkCreateInstance>(get_proc(nullptr, "vkCreateInstance"))
                  : nullptr;
@@ -86,7 +101,6 @@ void ProbeVulkan(DeviceInfo& d) {
     if (destroy) {
         destroy(instance, nullptr);
     }
-    // The loader stays loaded: unloading it while driver threads may still run is not worth the bytes.
 }
 
 } // namespace
@@ -102,24 +116,31 @@ DeviceInfo ProbeDevice(const std::string& data_dir, bool probe_vulkan) {
         abis.push_back(abi);
     }
     d.abis = abis;
-#elif defined(__aarch64__)
+#elif defined(ARCHITECTURE_arm64)
     d.abis = std::vector<std::string>{"arm64"};
-#elif defined(__x86_64__)
+#elif defined(ARCHITECTURE_x86_64)
+    // (MSVC defines neither __aarch64__ nor __x86_64__; Eden's build names the architecture.)
     d.abis = std::vector<std::string>{"x64"};
 #else
     d.abis = std::vector<std::string>{"unknown"};
 #endif
 
+#if defined(__ANDROID__)
     // The same figure as ActivityManager.MemoryInfo.totalMem (MemTotal).
     const long pages = sysconf(_SC_PHYS_PAGES);
     const long page_size = sysconf(_SC_PAGESIZE);
     if (pages > 0 && page_size > 0) {
         d.total_memory = static_cast<long long>(pages) * page_size;
     }
+#else
+    d.total_memory = static_cast<long long>(Common::GetMemInfo().TotalPhysicalMemory);
+#endif
 
-    struct statvfs fs {};
-    if (statvfs(data_dir.c_str(), &fs) == 0) {
-        d.free_storage = static_cast<long long>(fs.f_bavail) * static_cast<long long>(fs.f_frsize);
+    // What an unprivileged user may still write (statvfs' f_bavail on POSIX).
+    std::error_code ec;
+    const auto space = std::filesystem::space(data_dir, ec);
+    if (!ec) {
+        d.free_storage = static_cast<long long>(space.available);
     }
 
 #if defined(__ANDROID__)

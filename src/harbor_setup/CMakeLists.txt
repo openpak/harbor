@@ -31,6 +31,9 @@ list(APPEND BOREALIS_SOURCES
     "${BOREALIS}/lib/extern/tinyxml2/tinyxml2.cpp")
 if (ANDROID)
     list(APPEND BOREALIS_SOURCES "${BOREALIS}/lib/platforms/android/android_platform.cpp")
+elseif (APPLE)
+    # The two hooks the desktop platform takes from the fork's Objective-C++ file, in plain C++.
+    list(APPEND BOREALIS_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/borealis_darwin.cpp")
 endif()
 
 add_library(borealis STATIC ${BOREALIS_SOURCES})
@@ -61,10 +64,26 @@ else()
     find_package(Threads REQUIRED)
     target_link_libraries(borealis PUBLIC Threads::Threads ${CMAKE_DL_LIBS})
 endif()
+if (WIN32)
+    # The desktop platform's network and power queries.
+    target_link_libraries(borealis PUBLIC wlanapi iphlpapi ws2_32)
+elseif (APPLE)
+    target_link_libraries(borealis PUBLIC "-framework IOKit" "-framework SystemConfiguration" "-framework CoreFoundation")
+endif()
+if (MSVC)
+    # The fork is built with GCC-style toolchains (MinGW on Windows): unistd.h and strings.h come
+    # from small stand-ins, and its task thread is std::thread instead of pthreads.
+    target_include_directories(borealis SYSTEM BEFORE PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/msvc")
+    target_compile_definitions(borealis PUBLIC BOREALIS_USE_STD_THREAD)
+    set(HARBOR_SETUP_RTTI /GR)
+else()
+    set(HARBOR_SETUP_RTTI -frtti)
+endif()
 # Eden's common already carries stb_image; nanovg's copy stays private to nanovg.c.
 set_source_files_properties("${BOREALIS}/lib/extern/nanovg/nanovg.c" PROPERTIES COMPILE_DEFINITIONS STB_IMAGE_STATIC)
-# Third-party code: built with its own expectations (RTTI) and without Eden's warnings-as-errors.
-target_compile_options(borealis PRIVATE -w $<$<COMPILE_LANGUAGE:CXX>:-frtti>)
+# Third-party code: built with its own expectations (RTTI) and without Eden's warnings-as-errors
+# (cl takes -w as /w).
+target_compile_options(borealis PRIVATE -w $<$<COMPILE_LANGUAGE:CXX>:${HARBOR_SETUP_RTTI}>)
 set_target_properties(borealis PROPERTIES CXX_STANDARD 20 POSITION_INDEPENDENT_CODE ON)
 
 # The text font, Noto Sans (OFL-1.1), embedded so no resource files ship next to the binary.
@@ -120,13 +139,18 @@ if (NOT ANDROID)
 endif()
 target_link_libraries(harbor_setup PUBLIC harbor_setup_core PRIVATE borealis SDL3::SDL3 ${CMAKE_DL_LIBS})
 # Its classes derive from Borealis' views, which are built with RTTI.
-target_compile_options(harbor_setup PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-frtti>)
+target_compile_options(harbor_setup PRIVATE $<$<COMPILE_LANGUAGE:CXX>:${HARBOR_SETUP_RTTI}>)
 set_target_properties(harbor_setup PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if (NOT ANDROID)
     # harbor_setup_run: the desktop wizard on its own, against the current user directory (or ./user).
-    # core calls back into frontend_common (play time): the static libraries are linked as one group.
-    set(HARBOR_SETUP_CORE_GROUP "$<LINK_GROUP:RESCAN,core,frontend_common,video_core,audio_core,hid_core>")
+    # core calls back into frontend_common (play time): the static libraries are linked as one group
+    # where the linker is single-pass (GNU and LLVM on ELF); MSVC's and Apple's linkers look again.
+    if (CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED OR CMAKE_LINK_GROUP_USING_RESCAN_SUPPORTED)
+        set(HARBOR_SETUP_CORE_GROUP "$<LINK_GROUP:RESCAN,core,frontend_common,video_core,audio_core,hid_core>")
+    else()
+        set(HARBOR_SETUP_CORE_GROUP core frontend_common video_core audio_core hid_core)
+    endif()
     add_executable(harbor_setup_run run_main.cpp vma_impl.cpp)
     target_link_libraries(harbor_setup_run PRIVATE harbor_setup ${HARBOR_SETUP_CORE_GROUP})
 

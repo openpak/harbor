@@ -4,21 +4,31 @@
 // The desktop host: SDL's own file and folder dialogs (the portal on Linux), run before Qt starts.
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <SDL3/SDL.h>
-#ifdef __linux__
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#else
 #include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
 #endif
 
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "common/string_util.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
 
@@ -40,9 +50,15 @@ void DialogDone(void* userdata, const char* const* files, int) {
     (*done)(Picked{name, path.string(), true});
 }
 
-const char* Home() {
+/// Where the pickers open (UTF-8, as SDL takes it); empty when unknown.
+std::string Home() {
+#ifdef _WIN32
+    const wchar_t* home = _wgetenv(L"USERPROFILE");
+    return home ? Common::UTF16ToUTF8(std::wstring_view{home}) : std::string{};
+#else
     const char* home = std::getenv("HOME");
-    return home ? home : nullptr;
+    return home ? home : std::string{};
+#endif
 }
 
 // Test hook: HARBOR_SETUP_PICKS="path|path|..." answers the next pickers in order without opening a
@@ -107,8 +123,8 @@ public:
         SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, filters.data());
         SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, static_cast<Sint64>(filters.size()));
         SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title.c_str());
-        if (const char* home = Home()) {
-            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, home);
+        if (const auto home = Home(); !home.empty()) {
+            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, home.c_str());
         }
         SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFILE, DialogDone,
                                          new PickCallback(std::move(done)), props);
@@ -121,8 +137,8 @@ public:
         }
         SDL_PropertiesID props = SDL_CreateProperties();
         SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, title.c_str());
-        if (const char* home = Home()) {
-            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, home);
+        if (const auto home = Home(); !home.empty()) {
+            SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_LOCATION_STRING, home.c_str());
         }
         SDL_ShowFileDialogWithProperties(SDL_FILEDIALOG_OPENFOLDER, DialogDone,
                                          new PickCallback(std::move(done)), props);
@@ -184,6 +200,69 @@ bool ExplicitBoot(int argc, char** argv) {
     return false;
 }
 
+/// Starts the console in a fresh process with this one's arguments (TakeFlag removed the Harbor
+/// flags it was started with) and --harbor-console, which says to boot the console even in a
+/// test-harness run. Linux and macOS replace this process (same pid); Windows starts a new one and
+/// returns true, and this one ends. False when no fresh process could be started.
+bool RestartForConsole(int argc, char** argv) {
+#ifdef _WIN32
+    // The wide command line: argv is in the ANSI code page and may not hold every path.
+    static_cast<void>(argc);
+    static_cast<void>(argv);
+    int count = 0;
+    LPWSTR* wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!wide) {
+        return false;
+    }
+    std::vector<std::string> args;
+    for (int i = 0; i < count; i++) {
+        const std::wstring_view arg{wide[i]};
+        if (i > 0 && (arg == L"--harbor-setup" || arg == L"--harbor-console")) {
+            continue;
+        }
+        args.push_back(Common::UTF16ToUTF8(arg));
+    }
+    LocalFree(wide);
+    if (args.empty()) {
+        return false;
+    }
+    wchar_t exe[MAX_PATH * 4];
+    const DWORD length = GetModuleFileNameW(nullptr, exe, static_cast<DWORD>(std::size(exe)));
+    if (length > 0 && length < std::size(exe)) {
+        args[0] = Common::UTF16ToUTF8(std::wstring_view{exe, length});
+    }
+    args.push_back("--harbor-console");
+    std::vector<const char*> pointers;
+    for (const auto& arg : args) {
+        pointers.push_back(arg.c_str());
+    }
+    pointers.push_back(nullptr);
+    SDL_Process* process = SDL_CreateProcess(pointers.data(), false);
+    if (!process) {
+        return false;
+    }
+    SDL_DestroyProcess(process); // only the handle: the console keeps running
+    return true;
+#else
+    std::vector<char*> args(argv, argv + argc);
+    static char console_flag[] = "--harbor-console";
+    args.push_back(console_flag);
+    args.push_back(nullptr);
+#if defined(__linux__)
+    execv("/proc/self/exe", args.data());
+#elif defined(__APPLE__)
+    std::string exe(4096, '\0');
+    std::uint32_t size = static_cast<std::uint32_t>(exe.size());
+    if (_NSGetExecutablePath(exe.data(), &size) == 0) {
+        execv(exe.c_str(), args.data());
+    }
+#else
+    execvp(argv[0], args.data());
+#endif
+    return false; // exec failed
+#endif
+}
+
 } // namespace
 
 bool DesktopConsoleAllowed() {
@@ -217,23 +296,16 @@ int RunDesktopIfNeeded(int& argc, char** argv) {
 
     DesktopHost host;
     const int result = RunWizard(host);
-#ifdef __linux__
     if (result == 0) {
         // Borealis ran the setup in this process with SDL's window; the Harbor menu starts it with
-        // its own platform, once per process. The console starts in a fresh process (same pid).
+        // its own platform, once per process. The console starts in a fresh process.
         LOG_INFO(Frontend, "harbor: setup completed; starting the console in a fresh process");
         Common::Log::Stop();
-        // The fresh process boots the console: --harbor-console says so (TakeFlag removed the flags
-        // this one was started with, and a test-harness run would otherwise boot what its other
-        // flags ask).
-        std::vector<char*> args(argv, argv + argc);
-        static char console_flag[] = "--harbor-console";
-        args.push_back(console_flag);
-        args.push_back(nullptr);
-        execv("/proc/self/exe", args.data());
-        // execv failed: go on in this process.
+        if (RestartForConsole(argc, argv)) {
+            return 1; // Windows: the new process runs the console; this one ends.
+        }
+        // No fresh process: go on in this one.
     }
-#endif
     return result;
 }
 
