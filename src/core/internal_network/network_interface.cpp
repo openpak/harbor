@@ -17,6 +17,9 @@
 #include <cerrno>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #elif defined(__FreeBSD__)
 #include <sys/types.h>
 #include <sys/time.h>
@@ -220,11 +223,51 @@ std::vector<Network::NetworkInterface> GetAvailableNetworkInterfaces() {
 
 #endif // _WIN32
 
+// [Harbor] The address the host's internet route leaves from, as a console has only that one. A
+// connected UDP socket sends nothing; it only makes the kernel choose the route. Without this the
+// first listed interface won, which on a phone running a VPN (ZeroTier) is the VPN's, and online
+// games then gave their peers an address the traffic never came from.
+static std::optional<u32> DefaultRouteAddress() {
+#if defined(__linux__) || defined(__ANDROID__)
+    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        return std::nullopt;
+    }
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(53);
+    remote.sin_addr.s_addr = htonl(0x01010101); // 1.1.1.1, never contacted
+    sockaddr_in local{};
+    socklen_t len = sizeof(local);
+    const bool ok = ::connect(fd, reinterpret_cast<sockaddr*>(&remote), sizeof(remote)) == 0 &&
+                    ::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &len) == 0;
+    ::close(fd);
+    if (!ok || local.sin_addr.s_addr == 0) {
+        return std::nullopt;
+    }
+    return local.sin_addr.s_addr;
+#else
+    return std::nullopt; // ponytail: Windows/FreeBSD keep the first interface; same trick works there
+#endif
+}
+
+static Network::NetworkInterface DefaultInterface(const std::vector<Network::NetworkInterface>& ifaces) {
+    if (const auto address = DefaultRouteAddress()) {
+        if (const auto it = std::ranges::find_if(ifaces, [&](const auto& iface) {
+                return iface.ip_address.s_addr == *address;
+            });
+            it != ifaces.end()) {
+            return *it;
+        }
+    }
+    return ifaces[0];
+}
+
 std::optional<Network::NetworkInterface> GetSelectedNetworkInterface() {
     auto const& sel_if = Settings::values.network_interface.GetValue();
     if (auto const ifaces = Network::GetAvailableNetworkInterfaces(); ifaces.size() > 0) {
         if (sel_if.empty())
-            return ifaces[0];
+            return DefaultInterface(ifaces);
         if (auto const res = std::ranges::find_if(ifaces, [&sel_if](const auto& iface) {
             return iface.name == sel_if;
         }); res != ifaces.end())
@@ -243,7 +286,7 @@ std::optional<Network::NetworkInterface> GetSelectedNetworkInterface() {
 
 void SelectFirstNetworkInterface() {
     if (auto const ifaces = Network::GetAvailableNetworkInterfaces(); ifaces.size() > 0)
-        Settings::values.network_interface.SetValue(ifaces[0].name);
+        Settings::values.network_interface.SetValue(DefaultInterface(ifaces).name);
 }
 
 } // namespace Network

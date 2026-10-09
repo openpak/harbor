@@ -58,6 +58,9 @@ void ApplyConsolePreset() {
 #endif
     // Every log line reaches the file at once, so a console that crashes leaves its last lines.
     v.log_flush_line.SetValue(true);
+    // A console has one network interface: always the one the host reaches the internet through,
+    // never a saved pick (a VPN chosen once would stay the console's address).
+    v.network_interface.SetValue("");
 }
 
 void ApplyRecordFolders(const Record& record) {
