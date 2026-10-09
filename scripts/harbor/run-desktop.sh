@@ -5,7 +5,7 @@
 # Start the desktop Harbor (qlaunch) on a hidden Hyprland workspace, with an isolated portable data
 # directory and a control FIFO for scripted input.
 #
-#   run-desktop.sh <name> [--fresh] [--docked] [--auto-sleep] [-- extra harbor args]
+#   run-desktop.sh <name> [--fresh] [--docked] [--auto-sleep] [--console] [-- extra harbor args]
 #
 # The console runs in handheld mode (the firmware's setup waits for input there; docked it stops at
 # "remove the console from the dock"); --docked switches to docked.
@@ -27,18 +27,20 @@ mkdir -p "$TMPDIR"
 
 die() { echo "run-desktop: $*" >&2; exit 2; }
 
-[ $# -ge 1 ] || die "usage: run-desktop.sh <name> [--fresh] [--docked] [--auto-sleep] [-- extra harbor args]"
+[ $# -ge 1 ] || die "usage: run-desktop.sh <name> [--fresh] [--docked] [--auto-sleep] [--console] [-- extra harbor args]"
 NAME="$1"; shift
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "bad run name: $NAME"
 FRESH=0
 DOCKED=0
 AUTO_SLEEP=0
+CONSOLE=0
 EXTRA=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --fresh) FRESH=1 ;;
         --docked) DOCKED=1 ;;
         --auto-sleep) AUTO_SLEEP=1 ;;
+        --console) CONSOLE=1 ;;
         --) shift; EXTRA=("$@"); break ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -159,9 +161,20 @@ LAUNCH="$RUN/launch.sh"
     echo "cd '$RUN'"
     echo "export TMPDIR='$TMPDIR'"
     echo "export HARBOR_CONTROL='$RUN/control'"
+    # Every window Harbor opens carries the harness app id, so the window rule below hides it:
+    # Qt's (the console, its dialogs, the crash and stopped pages) through HARBOR_CONTROL, SDL's
+    # (the Borealis setup wizard) through SDL_APP_ID.
+    echo "export SDL_APP_ID='org.openpak.harbor.harness'"
     [ "$AUTO_SLEEP" = 1 ] && echo "export HARBOR_AUTO_SLEEP=1"
     echo "echo \$\$ > '$RUN/pid'"
-    printf "exec '%s' --qlaunch" "$HARBOR_BIN"
+    # Console mode (--console) is the owner's: the setup wizard when the setup is not complete,
+    # then HOME, whose Restart and Turn Off restart and close Harbor. Otherwise --qlaunch boots
+    # HOME directly and power requests only end the session.
+    if [ "$CONSOLE" = 1 ]; then
+        printf "exec '%s' --harbor-console" "$HARBOR_BIN"
+    else
+        printf "exec '%s' --qlaunch" "$HARBOR_BIN"
+    fi
     for a in "${EXTRA[@]}"; do printf " '%s'" "$a"; done
     echo " > '$RUN/stdout.log' 2>&1"
 } > "$LAUNCH"
