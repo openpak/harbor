@@ -524,7 +524,16 @@ std::vector<std::string> SnapshotTail() {
 
 #ifndef _WIN32
 
+#ifdef __ANDROID__
+// Android: abort only. NCE runs guest code natively and takes SIGSEGV and SIGBUS (and the ART
+// signal chain SIGSEGV) during normal execution; Harbor stays out of those chains entirely.
+// Native faults are left to the platform's crash reporter; guest fatal errors still report.
+constexpr std::array<int, 1> FatalSignals{SIGABRT};
+#else
+// Desktop: installed at start-up, before dynarmic's fastmem handler, which chains to this one only
+// for faults it does not own.
 constexpr std::array<int, 5> FatalSignals{SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT};
+#endif
 struct sigaction g_previous[FatalSignals.size()];
 std::atomic<bool> g_in_handler{false};
 char g_partial_path[4096];
