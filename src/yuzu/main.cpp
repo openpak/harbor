@@ -224,13 +224,5 @@ int main(int argc, char* argv[]) {
 
     app.connect(&app, &QGuiApplication::applicationStateChanged, &main_window, &MainWindow::OnAppFocusStateChanged);
     const int exit_code = app.exec();
-#ifdef __unix__
-    if (!qEnvironmentVariableIsEmpty("HARBOR_CONTROL")) {
-        // Test runs: the static destructors crash after a HOME session (Service::Event teardown) and
-        // leave a core dump per run. Everything is saved by now, so leave without them.
-        Common::Log::Stop();
-        _exit(exit_code);
-    }
-#endif
     return exit_code;
 }

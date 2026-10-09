@@ -150,9 +150,11 @@ first screen differ.
   the next frame, so later requests fail fast until the guest draws again.
 - The thread dump reads guest memory and kernel lists while the guest runs; it is a debugging aid,
   not a consistent snapshot. A thread running on a core is shown with its live registers.
-- Eden's static destructors crash at exit after a HOME session (`Service::Event` teardown). With
-  `HARBOR_CONTROL` set the binary flushes the log and `_exit`s instead, so a `quit` is clean and
-  leaves no core dump; the underlying crash is still there without the harness.
+- Exit after a HOME session used to crash in `Service::Event`'s destructor (the general channel's
+  event outlived the kernel); the event now goes with the session, so a `quit` exits normally, with
+  no core dump. A core dump after `quit` is a real crash.
+- Harness runs start in `--qlaunch` mode, not console mode: HOME's Restart and Turn Off end the
+  session but do not restart or close Harbor (the window stays on its last screen); `quit` then.
 - Guest memory reads from a non-core host thread (the thread dump, F12) used to index past
   `rasterizer_read_areas` in `core/memory.cpp` and crash; this branch clamps the index.
 - `quit` closes the window; `confirmStop` is set to never ask. If a modal guest dialog is open,
