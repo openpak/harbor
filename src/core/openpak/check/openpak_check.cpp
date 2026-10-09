@@ -41,6 +41,7 @@
 #include "core/openpak/olsc_transfer.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/secret_store.h"
+#include "core/openpak/session.h"
 
 namespace np = OpenPak::NetworkProfile;
 
@@ -996,6 +997,22 @@ void SecretChecks() {
     OpenPak::SetSecretStore(nullptr);
 }
 
+// aauth refusal codes as the account module maps them to 2124 results (versions-research §3).
+void AauthChecks() {
+    namespace se = OpenPak::Session;
+    Check(se::AauthRefusalDescription("0111") == 3001u, "0111 is 2124-3001, a software update");
+    Check(se::AauthRefusalDescription("0105") == 4605u && se::AauthRefusalDescription("0121") == 4621u,
+          "the 01xx restrictions are 2124-45xx + code");
+    Check(!se::AauthRefusalDescription("0104") && !se::AauthRefusalDescription(""),
+          "an unmapped code refuses nothing");
+    // The gate's answer for an old version (versions-research §3).
+    const std::string refused =
+        R"({"errors":[{"code":"0111","message":"Application update is required."}]})";
+    Check(se::AauthErrorCode(400, refused) == "0111", "a 400 with errors[0].code is read");
+    Check(se::AauthErrorCode(200, refused).empty() && se::AauthErrorCode(400, "nope").empty(),
+          "a success or a body without errors is no refusal");
+}
+
 int SelfTest(bool online) {
     const auto dir = std::filesystem::current_path() / "user" / "openpak-selftest";
     std::error_code ec;
@@ -1022,6 +1039,7 @@ int SelfTest(bool online) {
     SaveArchiveChecks();
     TransferFlowChecks();
     SecretChecks();
+    AauthChecks();
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {

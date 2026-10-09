@@ -126,6 +126,23 @@ static bool SignedInUnlinked(const Common::UUID& user) {
     return OpenPak::Session::NetworkServiceAccountId(uid) != 0 && !OpenPak::Session::Linked(uid);
 }
 
+/// aauth refused the running title for this user (an old version: 0111): the account module's
+/// 2124 result, which the title hands to the error applet (2124-3001, "A software update is
+/// required"). Only a title's own id-token requests answer it: offline play, launch and the
+/// system's sign-ins never depend on the title's version.
+static std::optional<Result> AauthRefused(const Common::UUID& user) {
+    if (!OpenPakAccount::Enabled()) {
+        return std::nullopt;
+    }
+    const std::string code = OpenPak::Session::AauthRefusal(OpenPakAccount::UidString(user));
+    const auto description = OpenPak::Session::AauthRefusalDescription(code);
+    if (!description) {
+        return std::nullopt;
+    }
+    LOG_INFO(Service_ACC, "acc: aauth refused the title (code {}): 2124-{:04}", code, *description);
+    return Result{ErrorModule::Account, *description};
+}
+
 /// LoadIdTokenCache (3 and 4): the user's OpenPak id_token, size checked against the buffer.
 static void LoadIdTokenCacheFor(HLERequestContext& ctx, const Common::UUID& user) {
     std::string token;
@@ -1139,6 +1156,10 @@ private:
             PushResult(ctx, ResultNetworkServiceAccountUnavailable);
             return;
         }
+        if (const auto refused = AauthRefused(user_id)) {
+            PushResult(ctx, *refused);
+            return;
+        }
         LoadIdTokenCacheFor(ctx, user_id);
     }
 
@@ -1218,6 +1239,9 @@ private:
                 return ResultSuccess;
             }
             OpenPakAccount::EnsureAndAdopt(OpenPakAccount::UidString(user));
+            if (const auto refused = AauthRefused(user)) {
+                return *refused;
+            }
             // Signed in but not linked: the console's answer for a user without a network service
             // account, which sends the title to the firmware's link prompt.
             return SignedInUnlinked(user) ? ResultNetworkServiceAccountUnavailable : ResultSuccess;

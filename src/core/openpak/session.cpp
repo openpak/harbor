@@ -118,6 +118,8 @@ struct Identity {
     /// The friends surface (inbox, presence) answered 401 since the last sign-in: the server
     /// does not hold this user as linked, so nothing social is asked again until the next one.
     bool social_refused = false;
+    /// aauth's refusal code ("0111") from the last sign-in, empty when it was not refused.
+    std::string aauth_refusal;
 };
 
 struct State {
@@ -134,7 +136,7 @@ struct State {
     std::string active;
 
     std::string application_id;      ///< The bound title, 16 hex digits, or empty.
-    std::string application_version; ///< The bound title's own version string.
+    std::string application_version; ///< The bound title's version, %08x of the u32.
 
     std::vector<std::uint8_t> ca_der; ///< The CA as the guest's certificate store wants it.
     std::vector<Invitation> invitations;
@@ -579,6 +581,7 @@ struct Login {
     std::uint64_t na_id = 0;
     std::string birthday;
     std::string country;
+    std::string aauth_refusal; ///< aauth's errors[0].code when it refused the title.
 };
 
 /// The login chain, with no lock held. With a Nintendo Account id_token it goes to /federation,
@@ -635,10 +638,18 @@ bool RunChain(const Endpoint& endpoint, const std::string& uid, const std::strin
             {"application_version", application_version},
         };
 
-        const auto answered =
-            Parsed(aauth->Post("/v5/application_auth_token", Bearer(device_token), application),
-                   "application auth token");
-        if (answered) {
+        const auto reply =
+            aauth->Post("/v5/application_auth_token", Bearer(device_token), application);
+        // A refusal (an old version: 0111) is kept for the title's own id-token request, which
+        // acc answers with the account module's 2124 result as a console does. The sign-in
+        // itself goes on without the binding, as before: friends, presence and the system
+        // applets never depend on a title's version, and nothing may stop the game offline.
+        if (const std::string code = reply ? AauthErrorCode(reply->status, reply->body) : "";
+            AauthRefusalDescription(code)) {
+            LOG_WARNING(WebService, "[OpenPak] aauth refused the title (code {})", code);
+            out.aauth_refusal = code;
+        }
+        if (const auto answered = Parsed(reply, "application auth token")) {
             application_auth_token = Text(*answered, "application_auth_token");
         }
     }
@@ -781,6 +792,7 @@ bool SignIn(State& state, const std::string& uid, const std::string& account_id_
     bool active;
     {
         std::lock_guard lock{state.mutex};
+        identity->aauth_refusal = login.aauth_refusal;
         identity->loaded = true;
         identity->device_id = login.device_id;
         identity->device_password = login.device_password;
@@ -1215,6 +1227,37 @@ std::uint64_t NintendoAccountId(const std::string& uid) {
 
 std::string Birthday(const std::string& uid) {
     return Read<std::string>(uid, [](const Identity& i) { return i.birthday; });
+}
+
+std::string AauthErrorCode(int status, std::string_view body) {
+    if (status < 100 || status > 599 || (status >= 200 && status < 300)) {
+        return {};
+    }
+    const auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (!parsed.is_object() || !parsed.contains("errors") || !parsed["errors"].is_array() ||
+        parsed["errors"].empty() || !parsed["errors"][0].is_object()) {
+        return {};
+    }
+    return Text(parsed["errors"][0], "code");
+}
+
+std::optional<std::uint32_t> AauthRefusalDescription(std::string_view code) {
+    // The account module's table (22.5.0 0x291508, FUN_002403b0; versions-research §3): 0111 is
+    // the update dialog (Restart / Later), the 01xx restrictions and maintenance are 45xx + code.
+    if (code == "0111") {
+        return 3001;
+    }
+    for (const std::string_view listed : {"0105", "0106", "0107", "0108", "0109", "0110", "0113",
+                                          "0121"}) {
+        if (code == listed) {
+            return 4500 + static_cast<std::uint32_t>(std::stoul(std::string{code}));
+        }
+    }
+    return std::nullopt;
+}
+
+std::string AauthRefusal(const std::string& uid) {
+    return Read<std::string>(uid, [](const Identity& i) { return i.aauth_refusal; });
 }
 
 std::string Country(const std::string& uid) {

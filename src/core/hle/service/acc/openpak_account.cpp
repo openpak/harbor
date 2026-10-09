@@ -20,8 +20,8 @@
 #include "common/logging.h"
 #include "common/stb.h"
 #include "core/core.h"
-#include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/registered_cache.h"
 #include "core/hle/service/acc/errors.h"
 #include "core/hle/service/acc/nintendo_account_oauth.h"
 #include "core/hle/service/acc/openpak_account.h"
@@ -125,14 +125,14 @@ void BindRunningApplication(Core::System& system) {
     if (program_id == 0) {
         return;
     }
-    std::string version;
-    const auto [nacp, icon] = FileSys::PatchManager{program_id, system.GetFileSystemController(),
-                                                    system.GetContentProvider()}
-                                  .GetControlMetadata();
-    if (nacp) {
-        version = nacp->GetVersionString();
-    }
-    OpenPak::Session::SetApplication(fmt::format("{:016x}", program_id), std::move(version));
+    // aauth's application_version is the installed title version (the applied update's, else
+    // the base's) as %08x, as a console sends it; OpenPak's latest-version gate compares it.
+    const u32 version = FileSys::PatchManager{program_id, system.GetFileSystemController(),
+                                              system.GetContentProviderUnion()}
+                            .GetGameVersion()
+                            .value_or(0);
+    OpenPak::Session::SetApplication(fmt::format("{:016x}", program_id),
+                                     fmt::format("{:08x}", version));
 }
 
 std::filesystem::path ProfileImagePath(const Common::UUID& uid) {

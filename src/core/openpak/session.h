@@ -30,7 +30,9 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -100,6 +102,16 @@ std::uint64_t NintendoAccountId(const std::string& uid); ///< links.nintendoAcco
 std::string Birthday(const std::string& uid);            ///< "YYYY-MM-DD" (may be 0000-00-00)
 std::string Country(const std::string& uid);
 std::string ThumbnailUrl(const std::string& uid);
+
+/// aauth's refusal code from `uid`'s last sign-in for the bound title ("0111"), empty when it was
+/// not refused. Only the title's own id-token request answers it; the sign-in goes on without it.
+std::string AauthRefusal(const std::string& uid);
+/// aauth's $.errors[0].code of an answer that is not a success (status 100-599), as the account
+/// module reads it; empty otherwise.
+std::string AauthErrorCode(int status, std::string_view body);
+/// The 2124 description the account module answers for an aauth refusal code, as the firmware
+/// maps them ("0111": 3001, a software update is required); nothing for a code it does not map.
+std::optional<std::uint32_t> AauthRefusalDescription(std::string_view code);
 
 /// A dauth token for another client with this install's device identity: the device auth token
 /// (empty `vendor`, /v8/device_auth_tokens) or an edge token (/v8/edge_tokens with vendor_id,
