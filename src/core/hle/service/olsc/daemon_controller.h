@@ -21,6 +21,8 @@ class DaemonSettings;
 
 namespace Service::OLSC {
 
+class TransferQueue;
+
 // The setters' input: the bool first, then the Uid at +8 (nn::account::Uid is 8-aligned; the
 // 23.0.1 sysmodule reads 0x18 bytes for 3 and 6, 0x20 for 1 with the application id at +0x18).
 // Common::UUID has an alignment of 1, so a plain (bool, UUID) argument list reads the Uid at +1.
@@ -43,8 +45,7 @@ static_assert(offsetof(SetApplicationSettingParameters, application_id) == 0x18)
 
 class IDaemonController final : public ServiceFramework<IDaemonController> {
 public:
-    explicit IDaemonController(Core::System& system_,
-                               std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings_);
+    explicit IDaemonController(Core::System& system_, std::shared_ptr<TransferQueue> queue_);
     ~IDaemonController() override;
 
 private:
@@ -65,6 +66,7 @@ private:
     Result GetAutonomyTaskStatus(Out<u8> out_status, Common::UUID user_id);
 
     // Kept across restarts, as the sysmodule keeps them in its system save.
+    std::shared_ptr<TransferQueue> queue;
     std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings;
 };
 

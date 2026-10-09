@@ -66,6 +66,29 @@ bool ArchiveWriter::SetDivisionCount(int count) {
     }
     content.division_count = count;
     chunks.assign(count + 1, std::nullopt);
+    unchanged.assign(count, false);
+    return true;
+}
+
+bool ArchiveWriter::SetBase(const InitialDataContent& base) {
+    if (!SetDivisionCount(base.division_count)) {
+        return false;
+    }
+    content.aad = base.aad;
+    // ponytail: "unchanged" = same plaintext hash as the base's chunk (what ChunkHashes are for;
+    // INFERRED, fs-transfer.md §9.5). A base whose hashes mean something else only costs a
+    // whole re-upload, never a wrong archive.
+    for (int n = 0; n < content.division_count; ++n) {
+        const auto [at, length] = slices[n];
+        if (base.chunk_sizes[n] > 0 &&
+            Hash({source.stream.data() + at, length}) == base.chunk_hashes[n]) {
+            unchanged[n] = true;
+            content.chunk_hashes[n] = base.chunk_hashes[n];
+            content.chunk_sizes[n] = base.chunk_sizes[n];
+            content.chunk_macs[n] = base.chunk_macs[n];
+            content.total_chunk_size += base.chunk_sizes[n];
+        }
+    }
     return true;
 }
 
@@ -76,7 +99,9 @@ int ArchiveWriter::DivisionCount() const {
 std::vector<u16> ArchiveWriter::ChunkIds() const {
     std::vector<u16> ids;
     for (int n = 0; n < content.division_count; ++n) {
-        ids.push_back(static_cast<u16>(FirstDataChunkId + n));
+        if (!unchanged[n]) {
+            ids.push_back(static_cast<u16>(FirstDataChunkId + n));
+        }
     }
     ids.push_back(MetaChunkId);
     return ids;
@@ -84,7 +109,9 @@ std::vector<u16> ArchiveWriter::ChunkIds() const {
 
 void ArchiveWriter::MakeAll() {
     for (int n = 0; n < content.division_count; ++n) {
-        Chunk(static_cast<u16>(FirstDataChunkId + n));
+        if (!unchanged[n]) {
+            Chunk(static_cast<u16>(FirstDataChunkId + n));
+        }
     }
 }
 
@@ -101,7 +128,7 @@ std::optional<std::vector<u8>> ArchiveWriter::Chunk(u16 id) {
         return meta;
     }
     const int n = id - FirstDataChunkId;
-    if (id < FirstDataChunkId || n >= content.division_count) {
+    if (id < FirstDataChunkId || n >= content.division_count || unchanged[n]) {
         return std::nullopt;
     }
     auto& chunk = chunks[n];

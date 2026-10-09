@@ -78,6 +78,7 @@ struct Archive {
     std::uint64_t id = 0;
     std::string status;
     int num_of_partitions = 0;
+    std::uint64_t series_id = 0;
     std::vector<Component> components;
 };
 
@@ -94,6 +95,10 @@ std::optional<Archive> ParseArchive(const std::string& body) {
     if (const auto count = archive->find("num_of_partitions");
         count != archive->end() && count->is_number_integer()) {
         out.num_of_partitions = count->get<int>();
+    }
+    if (const auto series = archive->find("series_id");
+        series != archive->end() && series->is_number_unsigned()) {
+        out.series_id = series->get<std::uint64_t>();
     }
     if (const auto list = archive->find("component_files");
         list != archive->end() && list->is_array()) {
@@ -115,6 +120,11 @@ std::optional<Component> ParseComponentReply(const std::string& body) {
     return ParseComponent(*component);
 }
 
+/// X-SDA-ID, the archive a request is about (0x1e7d10 sends it when the caller names one).
+Headers Sda(std::uint64_t archive_id) {
+    return {{"X-SDA-ID", std::to_string(archive_id)}};
+}
+
 Outcome Fail(Error error, std::string detail, std::uint64_t archive_id = 0) {
     LOG_WARNING(Service_OLSC, "save data cloud transfer: {} (2179-{:04})", detail,
                 static_cast<std::uint32_t>(error));
@@ -124,10 +134,16 @@ Outcome Fail(Error error, std::string detail, std::uint64_t archive_id = 0) {
 /// The policy check both directions make (olsc-transfer.md §2.2 step 2).
 std::optional<Outcome> CheckPolicy(Rest& rest, std::uint64_t application_id,
                                    std::uint32_t launch_version) {
+    // ?dtoken= is the dauth device token for olsc's client; without one the console never
+    // sends the request (0x1f4ac0).
+    const std::string token = rest.DeviceToken();
+    if (token.empty()) {
+        return Fail(Error::Http, "policy: no device token");
+    }
     const auto reply = rest.Request(
         "GET", PolicyHost,
-        fmt::format("/api/console/v2/application_policy/{:016x}/{:05}", application_id,
-                    launch_version),
+        fmt::format("/api/console/v2/application_policy/{:016x}/{:05}?dtoken={}", application_id,
+                    launch_version, token),
         {});
     std::string detail;
     if (ErrorOf(reply, &detail) != Error::None) {
@@ -145,6 +161,49 @@ Aad MakeAad(std::uint64_t application_id, std::uint64_t archive_id) {
     std::memcpy(aad.data(), &application_id, 8);
     std::memcpy(aad.data() + 8, &archive_id, 8);
     return aad;
+}
+
+/// The archive's key seed package for this task's challenge (0x20f860 → 0x1e73c0).
+std::optional<Outcome> LoadKeySeedPackage(Rest& rest, Fs& fs, const std::string& archive_path,
+                                          std::uint64_t archive_id) {
+    const auto challenge = fs.Challenge();
+    const auto generated = rest.Request(
+        "POST", StorageHost, archive_path + "/generate_key_seed_package",
+        fmt::format(R"({{"encoded_challenge": "{}"}})", Base64Url(challenge)), Sda(archive_id));
+    std::string detail;
+    if (ErrorOf(generated, &detail) != Error::None) {
+        return Fail(Error::Http, "generate_key_seed_package: " + detail, archive_id);
+    }
+    const auto json = nlohmann::json::parse(generated.body, nullptr, false);
+    const auto package =
+        json.is_object() ? FromBase64Url(json.value("encoded_key_seed_package", std::string{}))
+                         : std::nullopt;
+    if (!package || package->size() != 0x200 || !fs.SetKeySeedPackage(*package)) {
+        return Fail(Error::Fs, "key seed package refused", archive_id);
+    }
+    return std::nullopt;
+}
+
+/// The archive's `meta` component, the 8 KiB initial data (0x20bb10).
+std::optional<Outcome> ReadMeta(Rest& rest, const Archive& archive, Bytes* out) {
+    const auto meta = std::find_if(archive.components.begin(), archive.components.end(),
+                                   [](const Component& c) { return c.index == 0; });
+    if (meta == archive.components.end() || meta->size != 0x2000) {
+        return Fail(Error::MetaWrongSize, "meta component not 8 KiB", archive.id);
+    }
+    const auto readable = rest.Request(
+        "POST", StorageHost, fmt::format("{}/component_files/{}/signed_uri", Api, meta->id),
+        R"({"permissions": ["read"]})", Sda(archive.id));
+    const auto meta_url = ParseComponentReply(readable.body);
+    if (!meta_url || meta_url->get_url.empty()) {
+        return Fail(Error::MetaWithoutUrl, "meta without get_url", archive.id);
+    }
+    const auto bytes = rest.Blob("GET", meta_url->get_url, {});
+    if (bytes.body.size() != 0x2000) {
+        return Fail(Error::MetaWrongSize, "meta not 8 KiB", archive.id);
+    }
+    out->assign(bytes.body.begin(), bytes.body.end());
+    return std::nullopt;
 }
 
 } // namespace
@@ -229,7 +288,8 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         return *failed;
     }
 
-    // The cloud's records for the title: one still uploading blocks a new upload.
+    // The cloud's records for the title: one still uploading blocks a new upload, a fixed one
+    // is the base of a delta upload.
     const auto list =
         rest.Request("GET", StorageHost,
                      fmt::format("{}/save_data_archives?datatype=0&application_id={:016x}", Api,
@@ -240,7 +300,7 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         return Fail(Error::Http, "archive list: " + detail);
     }
     const auto records = nlohmann::json::parse(list.body, nullptr, false);
-    bool has_fixed = false;
+    std::optional<std::uint64_t> base_id;
     if (records.is_object() && records.contains("save_data_archives") &&
         records["save_data_archives"].is_array()) {
         for (const auto& record : records["save_data_archives"]) {
@@ -248,42 +308,87 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
             if (status == "uploading") {
                 return Fail(Error::AlreadyUploading, "an archive of the title is uploading");
             }
-            has_fixed = has_fixed || status == "fixed";
+            if (status == "fixed" && record.contains("id") && record["id"].is_number_unsigned()) {
+                // ponytail: the newest fixed record is the base (the console keeps two records;
+                // the server lists one fixed archive per title).
+                base_id = std::max(base_id.value_or(0), record["id"].get<std::uint64_t>());
+            }
         }
     }
-    if (has_fixed) {
-        // The console uploads a delta against the fixed archive (§2.3); Harbor has no diff
-        // exporter yet and uploads it whole.
-        LOG_WARNING(Service_OLSC,
-                    "unknown contract: olsc delta upload not built, uploading the save whole");
-    }
 
-    if (series_id == 0) {
-        std::random_device random;
-        series_id = (std::uint64_t{random()} << 32 | random()) & 0x7fffffffffffffffULL;
-    }
-    const auto started = rest.Request("POST", StorageHost,
-                                      fmt::format("{}/save_data_archives/start_upload", Api),
-                                      StartUploadBody(save, series_id));
-    if (CodeOf(started) == "0010") {
-        return Fail(Error::AlreadyUploading, "start_upload: already uploading");
-    }
-    if (ErrorOf(started, &detail) != Error::None) {
-        return Fail(Error::Http, "start_upload: " + detail);
-    }
-    const auto archive = ParseArchive(started.body);
-    if (!archive) {
-        return Fail(Error::ArchiveIncomplete, "start_upload reply has no archive");
-    }
-
-    auto exporter = fs.OpenFullExporter();
-    if (!exporter) {
-        return Fail(Error::Fs, "the save could not be exported", archive->id);
-    }
-    if (!exporter->SetDivisionCount(archive->num_of_partitions)) {
-        return Fail(Error::Fs,
-                    fmt::format("SetDivisionCount({}) refused", archive->num_of_partitions),
-                    archive->id);
+    std::unique_ptr<Exporter> exporter;
+    std::optional<Archive> archive;
+    std::optional<Archive> base;
+    if (base_id) {
+        // Delta upload (§2.3): the base archive with its components, its key seed, its meta.
+        const std::string base_path = fmt::format("{}/save_data_archives/{}", Api, *base_id);
+        const auto got = rest.Request("GET", StorageHost, base_path, {}, Sda(*base_id));
+        base = CodeOf(got) == "0001" ? std::nullopt : ParseArchive(got.body);
+        if (!base) {
+            return Fail(Error::SeriesBaseMissing, "the base archive is gone", *base_id);
+        }
+        if (auto failed = LoadKeySeedPackage(rest, fs, base_path, base->id)) {
+            return *failed;
+        }
+        Bytes meta;
+        if (auto failed = ReadMeta(rest, *base, &meta)) {
+            return *failed;
+        }
+        exporter = fs.OpenDiffExporter(meta);
+        if (!exporter) {
+            return Fail(Error::Fs, "the save could not be diff-exported", base->id);
+        }
+        const auto aad = exporter->ImportAad();
+        const auto expected = MakeAad(save.application_id, base->id);
+        if (!std::equal(aad.begin(), aad.begin() + 16, expected.begin())) {
+            return Fail(Error::AadMismatch, "base initial data AAD", base->id);
+        }
+        const auto started = rest.Request("POST", StorageHost, base_path + "/start_upload",
+                                          StartUploadBody(save, base->series_id), Sda(base->id));
+        if (CodeOf(started) == "0010") {
+            return Fail(Error::AlreadyUploading, "start_upload: already uploading");
+        }
+        if (ErrorOf(started, &detail) != Error::None) {
+            return Fail(Error::Http, "start_upload: " + detail, base->id);
+        }
+        archive = ParseArchive(started.body);
+        if (!archive) {
+            return Fail(Error::ArchiveIncomplete, "start_upload reply has no archive");
+        }
+        // No SetDivisionCount: the initial data carries the base's.
+        if (archive->num_of_partitions != base->num_of_partitions) {
+            return Fail(Error::PartitionCountDiffers, "num_of_partitions differs from the base",
+                        archive->id);
+        }
+    } else {
+        if (series_id == 0) {
+            std::random_device random;
+            series_id = (std::uint64_t{random()} << 32 | random()) & 0x7fffffffffffffffULL;
+        }
+        const auto started = rest.Request("POST", StorageHost,
+                                          fmt::format("{}/save_data_archives/start_upload", Api),
+                                          StartUploadBody(save, series_id));
+        if (CodeOf(started) == "0010") {
+            return Fail(Error::AlreadyUploading, "start_upload: already uploading");
+        }
+        if (ErrorOf(started, &detail) != Error::None) {
+            return Fail(Error::Http, "start_upload: " + detail);
+        }
+        archive = ParseArchive(started.body);
+        if (!archive) {
+            return Fail(Error::ArchiveIncomplete, "start_upload reply has no archive");
+        }
+        // A full upload creates every component itself; the reply's are not read (0x1edbf0).
+        archive->components.clear();
+        exporter = fs.OpenFullExporter();
+        if (!exporter) {
+            return Fail(Error::Fs, "the save could not be exported", archive->id);
+        }
+        if (!exporter->SetDivisionCount(archive->num_of_partitions)) {
+            return Fail(Error::Fs,
+                        fmt::format("SetDivisionCount({}) refused", archive->num_of_partitions),
+                        archive->id);
+        }
     }
     exporter->SetAad(MakeAad(save.application_id, archive->id));
 
@@ -298,20 +403,37 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         }
     }
     const std::string archive_path = fmt::format("{}/save_data_archives/{}", Api, archive->id);
+    const auto sda = Sda(archive->id);
+    unsigned counter = 0;
     for (const auto id : ids) {
+        // X-Ignorable: counter=<chunk index> (0x1eed30); "2000" is tolerated.
+        auto extend_headers = sda;
+        extend_headers.emplace_back("X-Ignorable", fmt::format("counter={}", counter++));
         const auto extended = rest.Request("POST", StorageHost,
-                                           archive_path + "/extend_upload_timeout", {});
+                                           archive_path + "/extend_upload_timeout", {},
+                                           extend_headers);
         if (ErrorOf(extended, &detail) != Error::None && CodeOf(extended) != "2000") {
             return Fail(Error::Http, "extend_upload_timeout: " + detail, archive->id);
         }
 
-        const auto created = rest.Request(
-            "POST", StorageHost, archive_path + "/component_files/create",
-            fmt::format(R"({{"index": {},"datatype": "{}"}})", id, id == 0 ? "meta" : "save"));
-        if (ErrorOf(created, &detail) != Error::None) {
-            return Fail(Error::Http, "component create: " + detail, archive->id);
+        // The component of this index (0x20f7f0): a delta's start_upload listed the base's;
+        // absent ones are created (`meta` iff chunk 0).
+        std::optional<Component> component;
+        if (const auto listed =
+                std::find_if(archive->components.begin(), archive->components.end(),
+                             [id](const Component& c) { return c.index == id; });
+            listed != archive->components.end()) {
+            component = *listed;
+        } else {
+            const auto created = rest.Request(
+                "POST", StorageHost, archive_path + "/component_files/create",
+                fmt::format(R"({{"index": {},"datatype": "{}"}})", id, id == 0 ? "meta" : "save"),
+                sda);
+            if (ErrorOf(created, &detail) != Error::None) {
+                return Fail(Error::Http, "component create: " + detail, archive->id);
+            }
+            component = ParseComponentReply(created.body);
         }
-        auto component = ParseComponentReply(created.body);
         if (!component) {
             return Fail(Error::ArchiveIncomplete, "component create reply", archive->id);
         }
@@ -322,9 +444,9 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         }
         const auto signed_uri =
             component->status == "hand_over"
-                ? rest.Request("POST", StorageHost, component_path + "/update", {})
+                ? rest.Request("POST", StorageHost, component_path + "/update", {}, sda)
                 : rest.Request("POST", StorageHost, component_path + "/signed_uri",
-                               R"({"permissions": ["write"]})");
+                               R"({"permissions": ["write"]})", sda);
         if (ErrorOf(signed_uri, &detail) != Error::None) {
             return Fail(Error::Http, "signed_uri: " + detail, archive->id);
         }
@@ -344,7 +466,8 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         const auto finished = rest.Request(
             "POST", StorageHost, component_path + "/finish_upload",
             fmt::format(R"({{"archive_size": {},"encoded_archive_digest": "{}"}})", bytes->size(),
-                        Base64Url(Md5(*bytes))));
+                        Base64Url(Md5(*bytes))),
+            sda);
         if (ErrorOf(finished, &detail) != Error::None) {
             return Fail(Error::Http, "component finish_upload: " + detail, archive->id);
         }
@@ -353,32 +476,37 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         }
     }
 
-    const auto seed = exporter->KeySeed();
     const auto mac = exporter->InitialDataMac();
     if (!mac) {
         return Fail(Error::Fs, "no initial-data MAC", archive->id);
     }
+    // A full upload sends its new key seed (0x1ee2d0); a delta keeps the base's and sends the
+    // MAC alone (0x1ee5a0).
+    const std::string finish_body =
+        base ? fmt::format(R"({{"encoded_mac": "{}"}})", Base64Url(*mac))
+             : fmt::format(R"({{"encoded_key_seed": "{}","encoded_mac": "{}"}})",
+                           Base64Url(exporter->KeySeed()), Base64Url(*mac));
     const auto finished =
-        rest.Request("POST", StorageHost, archive_path + "/finish_upload",
-                     fmt::format(R"({{"encoded_key_seed": "{}","encoded_mac": "{}"}})",
-                                 Base64Url(seed), Base64Url(*mac)));
+        rest.Request("POST", StorageHost, archive_path + "/finish_upload", finish_body, sda);
     if (ErrorOf(finished, &detail) != Error::None) {
         return Fail(Error::Http, "finish_upload: " + detail, archive->id);
     }
     exporter->Finalize();
 
-    const auto check = rest.Request("GET", StorageHost, archive_path, {});
+    const auto check = rest.Request("GET", StorageHost, archive_path, {}, sda);
     if (CodeOf(check) == "0001" || !ParseArchive(check.body)) {
         return Fail(Error::ArchiveMissingAfterFinish, "archive missing after finish", archive->id);
     }
-    LOG_INFO(Service_OLSC, "save data cloud: uploaded {} chunk(s)", ids.size());
+    LOG_INFO(Service_OLSC, "save data cloud: uploaded {} chunk(s){}", ids.size(),
+             base ? " (delta)" : "");
     return {Error::None, archive->id, {}};
 }
 
 Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t archive_id,
-                 Progress* progress) {
+                 std::uint32_t launch_version, Progress* progress) {
     const std::string archive_path = fmt::format("{}/save_data_archives/{}", Api, archive_id);
-    const auto got = rest.Request("GET", StorageHost, archive_path, {});
+    const auto sda = Sda(archive_id);
+    const auto got = rest.Request("GET", StorageHost, archive_path, {}, sda);
     std::string detail;
     if (CodeOf(got) == "0001") {
         return Fail(Error::ArchiveGone, "archive gone", archive_id);
@@ -390,45 +518,17 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
     if (!archive) {
         return Fail(Error::ArchiveIncomplete, "archive reply", archive_id);
     }
-    if (auto failed = CheckPolicy(rest, application_id, 0)) {
+    if (auto failed = CheckPolicy(rest, application_id, launch_version)) {
         return *failed;
     }
-
-    const auto challenge = fs.Challenge();
-    const auto generated = rest.Request(
-        "POST", StorageHost, archive_path + "/generate_key_seed_package",
-        fmt::format(R"({{"encoded_challenge": "{}"}})", Base64Url(challenge)));
-    if (ErrorOf(generated, &detail) != Error::None) {
-        return Fail(Error::Http, "generate_key_seed_package: " + detail, archive_id);
+    if (auto failed = LoadKeySeedPackage(rest, fs, archive_path, archive_id)) {
+        return *failed;
     }
-    const auto package_json = nlohmann::json::parse(generated.body, nullptr, false);
-    const auto package = package_json.is_object()
-                             ? FromBase64Url(package_json.value("encoded_key_seed_package",
-                                                                std::string{}))
-                             : std::nullopt;
-    if (!package || package->size() != 0x200 || !fs.SetKeySeedPackage(*package)) {
-        return Fail(Error::Fs, "key seed package refused", archive_id);
+    Bytes meta;
+    if (auto failed = ReadMeta(rest, *archive, &meta)) {
+        return *failed;
     }
-
-    const auto meta = std::find_if(archive->components.begin(), archive->components.end(),
-                                   [](const Component& c) { return c.index == 0; });
-    if (meta == archive->components.end() || meta->size != 0x2000) {
-        return Fail(Error::MetaWrongSize, "meta component not 8 KiB", archive_id);
-    }
-    const auto readable = rest.Request(
-        "POST", StorageHost, fmt::format("{}/component_files/{}/signed_uri", Api, meta->id),
-        R"({"permissions": ["read"]})");
-    const auto meta_url = ParseComponentReply(readable.body);
-    if (!meta_url || meta_url->get_url.empty()) {
-        return Fail(Error::MetaWithoutUrl, "meta without get_url", archive_id);
-    }
-    const auto meta_bytes = rest.Blob("GET", meta_url->get_url, {});
-    if (meta_bytes.body.size() != 0x2000) {
-        return Fail(Error::MetaWrongSize, "meta not 8 KiB", archive_id);
-    }
-    const std::span<const std::uint8_t> meta_span{
-        reinterpret_cast<const std::uint8_t*>(meta_bytes.body.data()), meta_bytes.body.size()};
-    auto importer = fs.OpenImporter(meta_span);
+    auto importer = fs.OpenImporter(meta);
     if (!importer) {
         return Fail(Error::Fs, "the archive could not be opened for import", archive_id);
     }
@@ -439,7 +539,8 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
     }
 
     const auto ids = importer->ChunkIds();
-    const auto started = rest.Request("POST", StorageHost, archive_path + "/start_download", {});
+    const auto started =
+        rest.Request("POST", StorageHost, archive_path + "/start_download", {}, sda);
     if (ErrorOf(started, &detail) != Error::None) {
         return Fail(Error::Http, "start_download: " + detail, archive_id);
     }
@@ -474,7 +575,8 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
             progress->done += bytes.size();
         }
     }
-    const auto finished = rest.Request("POST", StorageHost, archive_path + "/finish_download", {});
+    const auto finished =
+        rest.Request("POST", StorageHost, archive_path + "/finish_download", {}, sda);
     if (ErrorOf(finished, &detail) != Error::None) {
         return Fail(Error::Http, "finish_download: " + detail, archive_id);
     }

@@ -73,8 +73,6 @@ private:
     Result GetOlscServiceForSystemService(
         Out<SharedPointer<IOlscServiceForSystemService>> out_interface);
 
-    /// The daemon's settings, shared by every IDaemonController of this service.
-    std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings;
     /// Runs the network work behind the async objects (the archive list).
     std::shared_ptr<OpenPak::AsyncWorker> worker;
     /// The session's transfer task queue (RSC 1/12 register, TTLC reads it).
