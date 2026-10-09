@@ -20,7 +20,7 @@ that makes a `--qlaunch` run connect to OpenPak at boot; never the owner's data,
 Nintendo name fails closed and the account sign-in shows 2810-1006), writes a minimal `qt-config.ini` (no first-run prompts,
 vsync Immediate, null audio, line-flushed log, no pause or confirm dialogs, Handheld
 connected and Player 1 not, so a title sees one controller), and starts `harbor --qlaunch` in handheld mode (the 23.0.1 starter stops at "remove the
-console from the dock" when docked; `--docked` selects docked, re-applied on every start). `--fresh`
+console from the dock" when docked; `--docked` selects docked, re-applied on every start; `--auto-sleep` lets the run dim and auto-sleep, which harness runs otherwise never do). `--fresh`
 wipes only `<run>/user/` (refused unless the path is under `$SCR/run/`). It prints the pid and the
 Hyprland stable window id. Files in the run directory: `stdout.log`, `pid`, `window`, `control`
 (the FIFO), `launch.sh`; the emulator log is `user/log/eden_log.txt`.
@@ -47,6 +47,7 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `capture` | Capture button, short press |
 | `power` | the power button, middle press (F5 in the window) |
 | `power-tap` | the power button, short press (an F5 tap in the window): HOME starts the sleep sequence; while the console sleeps it wakes it |
+| `auto-sleep <on\|off>` | harness runs neither dim nor auto-sleep (idle:sys) unless turned on here or started with `run-desktop.sh --auto-sleep` (`HARBOR_AUTO_SLEEP=1`); `check-sleep.sh --auto` turns it on for its check and off again |
 | `terminate` | force-terminates the running application (F10 in the window) |
 | `dock` | toggles docked / handheld (the Qt "Docked" menu entry); in console mode it switches silently, with no "Invalid config" dialog |
 | `type <text>` | types the text on the emulated USB keyboard, following the guest's keyboard layout (see below); logged |
