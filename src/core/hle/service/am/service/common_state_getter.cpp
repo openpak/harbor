@@ -23,7 +23,7 @@
 namespace Service::AM {
 
 namespace {
-// In a HOME session readers and writers of one button share its lock.
+// In a HOME session readers and writers of one button share its reader/writer lock.
 std::shared_ptr<LockState> SharedLockState(Core::System& system, u32 button_type) {
     if (!system.GetAppletManager().IsHomeSession()) {
         return nullptr;
@@ -236,8 +236,8 @@ Result ICommonStateGetter::IsDisablingSleepSuppressed(Out<bool> out_is_suppresse
 Result ICommonStateGetter::GetReaderLockAccessorEx(
     Out<SharedPointer<ILockAccessor>> out_lock_accessor, u32 button_type) {
     LOG_INFO(Service_AM, "called, button_type={}", button_type);
-    *out_lock_accessor =
-        std::make_shared<ILockAccessor>(system, SharedLockState(system, button_type));
+    *out_lock_accessor = std::make_shared<ILockAccessor>(
+        system, SharedLockState(system, button_type), LockKind::Reader);
     R_SUCCEED();
 }
 
@@ -451,7 +451,8 @@ Result ICommonStateGetter::PushToGeneralChannel(SharedPointer<IStorage> storage)
 
 Result ICommonStateGetter::GetHomeButtonReaderLockAccessor(Out<SharedPointer<ILockAccessor>> out_lock_accessor) {
     LOG_DEBUG(Service_AM, "called");
-    *out_lock_accessor = std::make_shared<ILockAccessor>(system, SharedLockState(system, 0));
+    *out_lock_accessor =
+        std::make_shared<ILockAccessor>(system, SharedLockState(system, 0), LockKind::Reader);
     R_SUCCEED();
 }
 
