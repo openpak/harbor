@@ -276,6 +276,44 @@ Result TransferManager::SetKeySeedPackage(std::span<const u8> bytes) {
 
 Result TransferManager::OpenFullExporter(std::shared_ptr<Exporter>* out,
                                          FileSys::SaveDataSpaceId space, u64 save_data_id) {
+    Key128 seed{};
+    if (package) {
+        seed = package->key_seed;
+    } else {
+        std::memcpy(seed.data(), own_seed.data(), seed.size());
+    }
+    Key128 stream_key{};
+    Key128 mac_key{};
+    return OpenExporter(out, space, save_data_id, seed, &stream_key, &mac_key);
+}
+
+Result TransferManager::OpenDiffExporter(std::shared_ptr<Exporter>* out,
+                                         std::span<const u8> initial_data,
+                                         FileSys::SaveDataSpaceId space, u64 save_data_id) {
+    R_UNLESS(package.has_value(), ResultTransferNotReady);
+    std::shared_ptr<Exporter> exporter;
+    Key128 stream_key{};
+    Key128 mac_key{};
+    R_TRY(OpenExporter(&exporter, space, save_data_id, package->key_seed, &stream_key, &mac_key));
+    ArchiveReader base;
+    switch (base.Open(initial_data, stream_key, mac_key, package->initial_data_mac)) {
+    case ArchiveReader::Error::None:
+        break;
+    case ArchiveReader::Error::Mac:
+        R_THROW(ResultInitialDataMac);
+    default:
+        R_THROW(ResultImportDataVerification);
+    }
+    R_UNLESS(exporter->writer->SetBase(base.Content()), FileSys::ResultOutOfRange);
+    LOG_INFO(Service_FS, "save transfer: diff export, {} of {} chunks changed",
+             exporter->writer->ChunkIds().size() - 1, exporter->writer->DivisionCount());
+    *out = std::move(exporter);
+    R_SUCCEED();
+}
+
+Result TransferManager::OpenExporter(std::shared_ptr<Exporter>* out,
+                                     FileSys::SaveDataSpaceId space, u64 save_data_id,
+                                     const Key128& seed, Key128* stream_key, Key128* mac_key) {
     FileSys::SaveDataAttribute attribute{};
     R_TRY(FindSave(*controller, space, save_data_id, &attribute));
     auto exporter = std::make_shared<Exporter>();
@@ -300,17 +338,9 @@ Result TransferManager::OpenFullExporter(std::shared_ptr<Exporter>* out,
     source.integrity_seed = image->parameters.integrity_seed;
     std::memcpy(source.extra_data.data(), &exporter->extra_data, source.extra_data.size());
 
-    Key128 seed{};
-    if (package) {
-        seed = package->key_seed;
-    } else {
-        std::memcpy(seed.data(), own_seed.data(), seed.size());
-    }
-    Key128 stream_key{};
-    Key128 mac_key{};
-    R_TRY(Keys(seed, &stream_key, &mac_key));
+    R_TRY(Keys(seed, stream_key, mac_key));
     std::memcpy(exporter->key_seed.data(), seed.data(), seed.size());
-    exporter->writer = std::make_unique<ArchiveWriter>(std::move(source), stream_key, mac_key);
+    exporter->writer = std::make_unique<ArchiveWriter>(std::move(source), *stream_key, *mac_key);
     LOG_INFO(Service_FS, "save transfer: exporting the save of {:016X}", attribute.program_id);
     *out = std::move(exporter);
     R_SUCCEED();
