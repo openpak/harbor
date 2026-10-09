@@ -47,8 +47,8 @@
 
 #ifdef __ANDROID__
 #include "../../android/app/src/main/jni/android_settings.h"
-#include "common/harbor_crash.h"
 #endif
+#include "common/harbor_crash.h"
 
 namespace Vulkan {
 
