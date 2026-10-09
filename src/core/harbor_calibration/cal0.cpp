@@ -727,4 +727,176 @@ bool IsSigned(std::span<const u8> cal0, const Block& certificate_block) {
     return std::any_of(signature, signature + EccPointSize, [](u8 b) { return b != 0; });
 }
 
+std::vector<u8> Certificate(std::span<const u8> cal0, const Block& certificate_block) {
+    const std::size_t size = certificate_block.offset == EccB233DeviceCertificate.offset
+                                 ? EccB233CertificateSize
+                                 : Rsa2048CertificateSize;
+    const u8* at = cal0.data() + certificate_block.offset;
+    return std::vector<u8>(at, at + size);
+}
+
+namespace {
+
+struct X509Free {
+    void operator()(X509* cert) const {
+        X509_free(cert);
+    }
+};
+using X509Ptr = std::unique_ptr<X509, X509Free>;
+
+X509Ptr ParseX509(std::span<const u8> der) {
+    const u8* in = der.data();
+    X509Ptr cert{d2i_X509(nullptr, &in, static_cast<long>(der.size()))};
+    if (cert && in != der.data() + der.size()) {
+        return nullptr; // trailing bytes: not one certificate
+    }
+    return cert;
+}
+
+/// The B233 device key as an OpenSSL key: its scalar and the point in its certificate.
+Pkey EccKey(std::span<const u8> cal0, const DeviceKey& device_key) {
+#ifdef OPENSSL_NO_EC2M
+    return nullptr;
+#else
+    auto scalar = EccDevicePrivateKey(cal0, device_key);
+    if (!scalar) {
+        return nullptr;
+    }
+    std::array<u8, 1 + EccPointSize> point{0x04};
+    std::memcpy(point.data() + 1, cal0.data() + EccB233DeviceCertificate.offset + CertPublicKey,
+                EccPointSize);
+    Bn priv{BN_bin2bn(scalar->data(), static_cast<int>(scalar->size()), nullptr)};
+    OPENSSL_cleanse(scalar->data(), scalar->size());
+    OSSL_PARAM_BLD* build = OSSL_PARAM_BLD_new();
+    OSSL_PARAM* params = nullptr;
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+    EVP_PKEY* key = nullptr;
+    const bool ok =
+        priv && build != nullptr && ctx != nullptr &&
+        OSSL_PARAM_BLD_push_utf8_string(build, OSSL_PKEY_PARAM_GROUP_NAME, "sect233r1", 0) == 1 &&
+        OSSL_PARAM_BLD_push_BN(build, OSSL_PKEY_PARAM_PRIV_KEY, priv.get()) == 1 &&
+        OSSL_PARAM_BLD_push_octet_string(build, OSSL_PKEY_PARAM_PUB_KEY, point.data(),
+                                         point.size()) == 1 &&
+        (params = OSSL_PARAM_BLD_to_param(build)) != nullptr && EVP_PKEY_fromdata_init(ctx) == 1 &&
+        EVP_PKEY_fromdata(ctx, &key, EVP_PKEY_KEYPAIR, params) == 1;
+    EVP_PKEY_CTX_free(ctx);
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(build);
+    if (!ok) {
+        EVP_PKEY_free(key);
+        return nullptr;
+    }
+    return Pkey{key};
+#endif
+}
+
+Pkey RsaKey(std::span<const u8> cal0, const Block& key_block, const DeviceKey& device_key) {
+    auto der = RsaPrivateKeyDer(cal0, key_block, device_key);
+    if (!der) {
+        return nullptr;
+    }
+    const u8* in = der->data();
+    Pkey key{d2i_AutoPrivateKey(nullptr, &in, static_cast<long>(der->size()))};
+    OPENSSL_cleanse(der->data(), der->size());
+    return key;
+}
+
+std::vector<u8> SignSha256(EVP_PKEY* key, std::span<const u8> message) {
+    if (key == nullptr) {
+        return {};
+    }
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    std::size_t size = 0;
+    std::vector<u8> out;
+    if (ctx != nullptr && EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, key) == 1 &&
+        EVP_DigestSign(ctx, nullptr, &size, message.data(), message.size()) == 1) {
+        out.resize(size);
+        if (EVP_DigestSign(ctx, out.data(), &size, message.data(), message.size()) == 1) {
+            out.resize(size);
+        } else {
+            out.clear();
+        }
+    }
+    EVP_MD_CTX_free(ctx);
+    return out;
+}
+
+/// A Nintendo-format certificate from the CA: this binary's own, with a signature in place.
+bool SameCertificateSigned(std::span<const u8> cal0, const Block& block,
+                           const std::vector<u8>& from_ca) {
+    const std::vector<u8> own = Certificate(cal0, block);
+    if (from_ca.size() != own.size() ||
+        std::memcmp(from_ca.data(), own.data(), CertSignature) != 0 ||
+        std::memcmp(from_ca.data() + CertIssuer, own.data() + CertIssuer,
+                    own.size() - CertIssuer) != 0) {
+        return false;
+    }
+    const u8* signature = from_ca.data() + CertSignature;
+    return std::any_of(signature, signature + EccPointSize, [](u8 b) { return b != 0; });
+}
+
+} // namespace
+
+bool IsEnrolled(std::span<const u8> cal0) {
+    if (!IsSigned(cal0, EccB233DeviceCertificate) || !IsSigned(cal0, Rsa2048ETicketCertificate) ||
+        !IsSigned(cal0, Rsa2048DeviceCertificate)) {
+        return false;
+    }
+    const X509Ptr cert = ParseX509(SslCertificateDer(cal0));
+    return cert && X509_NAME_cmp(X509_get_subject_name(cert.get()),
+                                 X509_get_issuer_name(cert.get())) != 0;
+}
+
+std::optional<Proofs> SignProofs(std::span<const u8> cal0, const DeviceKey& device_key,
+                                 std::span<const u8> message) {
+    Proofs out;
+    out.ecc = SignSha256(EccKey(cal0, device_key).get(), message);
+    out.eticket =
+        SignSha256(RsaKey(cal0, ExtendedRsa2048ETicketKey, device_key).get(), message);
+    out.device = SignSha256(RsaKey(cal0, ExtendedRsa2048DeviceKey, device_key).get(), message);
+    out.tls = SignSha256(RsaKey(cal0, ExtendedSslKey, device_key).get(), message);
+    if (out.ecc.empty() || out.eticket.empty() || out.device.empty() || out.tls.empty()) {
+        return std::nullopt;
+    }
+    return out;
+}
+
+bool ApplySignedCertificates(std::vector<u8>& cal0, const SignedCertificates& certificates) {
+    if (!SameCertificateSigned(cal0, EccB233DeviceCertificate, certificates.ecc) ||
+        !SameCertificateSigned(cal0, Rsa2048ETicketCertificate, certificates.eticket) ||
+        !SameCertificateSigned(cal0, Rsa2048DeviceCertificate, certificates.device) ||
+        certificates.tls.empty() || certificates.tls.size() > SslCertificateMax) {
+        return false;
+    }
+    // The issued TLS certificate must carry the key this binary holds.
+    const X509Ptr issued = ParseX509(certificates.tls);
+    const X509Ptr own = ParseX509(SslCertificateDer(cal0));
+    if (!issued || !own) {
+        return false;
+    }
+    EVP_PKEY* issued_key = X509_get0_pubkey(issued.get());
+    EVP_PKEY* own_key = X509_get0_pubkey(own.get());
+    if (issued_key == nullptr || own_key == nullptr || EVP_PKEY_eq(issued_key, own_key) != 1) {
+        return false;
+    }
+
+    std::memcpy(At(cal0, EccB233DeviceCertificate), certificates.ecc.data(),
+                EccB233CertificateSize);
+    std::memcpy(At(cal0, Rsa2048ETicketCertificate), certificates.eticket.data(),
+                Rsa2048CertificateSize);
+    std::memcpy(At(cal0, Rsa2048DeviceCertificate), certificates.device.data(),
+                Rsa2048CertificateSize);
+    u8* tls = At(cal0, SslCertificate);
+    std::memset(tls, 0, SslCertificateMax);
+    std::memcpy(tls, certificates.tls.data(), certificates.tls.size());
+    const u64 size = certificates.tls.size();
+    std::memcpy(At(cal0, SslCertificateSize), &size, sizeof(size));
+    for (const Block& block : {EccB233DeviceCertificate, Rsa2048ETicketCertificate,
+                               Rsa2048DeviceCertificate, SslCertificateSize, SslCertificate}) {
+        Close(cal0, block);
+    }
+    Seal(cal0);
+    return true;
+}
+
 } // namespace Harbor::Cal0

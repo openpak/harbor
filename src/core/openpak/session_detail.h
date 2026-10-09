@@ -20,4 +20,12 @@ std::unique_ptr<httplib::SSLClient> MakeClientFor(const std::string& host);
 /// The configured server as a file-name key ("host-port"), or empty when none is.
 std::string ServerKey();
 
+/// The console's certificate changed (its calibration was enrolled): this server's client
+/// certificate is written again from it, when it is not that one already. False when the
+/// console's identity could not be used.
+bool ReplaceClientCertificate();
+
+/// The dauth host, where the console presents its certificate and enrols.
+inline constexpr const char* DeviceHost = "dauth-lp1.ndas.srv.nintendo.net";
+
 } // namespace OpenPak::Session::detail

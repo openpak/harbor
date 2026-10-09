@@ -64,6 +64,13 @@ public:
     std::vector<u8> SslCertificate() const;
     std::optional<std::vector<u8>> SslPrivateKey() const;
 
+    /// Whether OpenPak's device CA has signed this console's certificates (its enrolment).
+    bool Enrolled() const;
+
+    /// The enrolment's proof of possession: every key of this console signs `message`. Nothing
+    /// when the keys cannot be used here.
+    std::optional<Cal0::Proofs> SignProofs(std::span<const u8> message) const;
+
     /// A 16-byte key derived from the device key for one purpose (say "fs-save-transfer"): the
     /// device-bound input a console derives from its own hardware key. Same label, same install,
     /// same key; another install never gets it.
@@ -107,7 +114,12 @@ bool MakeNewConsole();
 /// read: the frontend's secret store installation and core's boot both do.
 void InstallSecretNamespace();
 
-/// Make OpenPak servers this install meets from now on see the console's own TLS certificate.
+/// Write the device CA's signed certificates into this console's calibration (its enrolment) and
+/// read it again. False, and nothing written, when they are not this console's.
+bool ApplyEnrolment(const Cal0::SignedCertificates& certificates);
+
+/// Make OpenPak servers this install meets from now on see the console's own TLS certificate,
+/// and enrol the console with OpenPak's device CA after its first sign-in (enrolment.h).
 /// Called before the services start, so no session can make a self-signed one first.
 void InstallClientIdentity();
 

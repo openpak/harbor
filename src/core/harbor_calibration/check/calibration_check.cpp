@@ -4,7 +4,9 @@
 // Self-check of Harbor's calibration binary: two new installs get different calibration, a binary
 // read back is the same one, the CAL0 header and block checks are valid (and catch a flipped
 // byte), the identity fields are well formed, every private key opens with its device key and
-// matches its certificate, and another device key opens none of them. No emulator, no files.
+// matches its certificate, and another device key opens none of them; an enrolment with a
+// throwaway device CA made here signs the proofs and takes the signed certificates. No emulator,
+// no files.
 // Build and run from the source root:
 //
 //   c++ -std=c++20 -Isrc src/core/harbor_calibration/check/calibration_check.cpp
@@ -21,6 +23,7 @@
 
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
+#include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/param_build.h>
 #include <openssl/x509.h>
@@ -130,6 +133,215 @@ bool SslMatches(std::span<const u8> bin, const cal0::DeviceKey& device_key) {
     return ok;
 }
 
+// ---- A throwaway device CA, as the server's enrolment signs ----
+
+/// A Nintendo-format certificate signed the way the server signs it: ECDSA-SHA256 on B233 over the
+/// certificate from its issuer on, r and s (30 bytes each) at 0x4.
+std::vector<u8> CaSign(EVP_PKEY* ca, std::vector<u8> cert) {
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    std::vector<u8> der(128);
+    std::size_t size = der.size();
+    const bool ok = EVP_DigestSignInit(ctx, nullptr, EVP_sha256(), nullptr, ca) == 1 &&
+                    EVP_DigestSign(ctx, der.data(), &size, cert.data() + 0x80,
+                                   cert.size() - 0x80) == 1;
+    EVP_MD_CTX_free(ctx);
+    if (!ok) {
+        return {};
+    }
+    const u8* in = der.data();
+    ECDSA_SIG* sig = d2i_ECDSA_SIG(nullptr, &in, static_cast<long>(size));
+    const bool placed = sig != nullptr &&
+                        BN_bn2binpad(ECDSA_SIG_get0_r(sig), cert.data() + 4, 30) == 30 &&
+                        BN_bn2binpad(ECDSA_SIG_get0_s(sig), cert.data() + 34, 30) == 30;
+    ECDSA_SIG_free(sig);
+    return placed ? cert : std::vector<u8>{};
+}
+
+bool CaVerifies(EVP_PKEY* ca, const std::vector<u8>& cert) {
+    ECDSA_SIG* sig = ECDSA_SIG_new();
+    ECDSA_SIG_set0(sig, BN_bin2bn(cert.data() + 4, 30, nullptr), BN_bin2bn(cert.data() + 34, 30, nullptr));
+    u8* der = nullptr;
+    const int size = i2d_ECDSA_SIG(sig, &der);
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    const bool ok = size > 0 && EVP_DigestVerifyInit(ctx, nullptr, EVP_sha256(), nullptr, ca) == 1 &&
+                    EVP_DigestVerify(ctx, der, static_cast<std::size_t>(size), cert.data() + 0x80,
+                                     cert.size() - 0x80) == 1;
+    EVP_MD_CTX_free(ctx);
+    OPENSSL_free(der);
+    ECDSA_SIG_free(sig);
+    return ok;
+}
+
+/// The TLS client certificate the CA issues for `public_key`.
+std::vector<u8> CaIssue(EVP_PKEY* ca_key, EVP_PKEY* public_key) {
+    X509* cert = X509_new();
+    X509_NAME* subject = X509_NAME_new();
+    X509_NAME* issuer = X509_NAME_new();
+    ASN1_INTEGER_set(X509_get_serialNumber(cert), 42);
+    X509_set_version(cert, 2);
+    X509_gmtime_adj(X509_getm_notBefore(cert), -3600);
+    X509_gmtime_adj(X509_getm_notAfter(cert), 86400);
+    X509_set_pubkey(cert, public_key);
+    X509_NAME_add_entry_by_txt(subject, "CN", MBSTRING_ASC,
+                               reinterpret_cast<const unsigned char*>("NX7E00000000000000-0"), -1, -1, 0);
+    X509_NAME_add_entry_by_txt(issuer, "CN", MBSTRING_ASC,
+                               reinterpret_cast<const unsigned char*>("Test Harbor Device CA"), -1, -1, 0);
+    X509_set_subject_name(cert, subject);
+    X509_set_issuer_name(cert, issuer);
+    std::vector<u8> out;
+    if (X509_sign(cert, ca_key, EVP_sha256()) != 0) {
+        const int size = i2d_X509(cert, nullptr);
+        out.resize(static_cast<std::size_t>(size));
+        u8* p = out.data();
+        i2d_X509(cert, &p);
+    }
+    X509_NAME_free(issuer);
+    X509_NAME_free(subject);
+    X509_free(cert);
+    return out;
+}
+
+EVP_PKEY* PublicOf(std::span<const u8> cert_der) {
+    const u8* in = cert_der.data();
+    X509* cert = d2i_X509(nullptr, &in, static_cast<long>(cert_der.size()));
+    EVP_PKEY* key = cert ? X509_get_pubkey(cert) : nullptr;
+    X509_free(cert);
+    return key;
+}
+
+/// An RSA proof verifies against the modulus in a Nintendo-format certificate.
+bool RsaProofVerifies(std::span<const u8> bin, const cal0::Block& cert,
+                      const std::vector<u8>& message, const std::vector<u8>& proof) {
+    BIGNUM* n = BN_bin2bn(bin.data() + cert.offset + 0x108, 0x100, nullptr);
+    BIGNUM* e = BN_bin2bn(bin.data() + cert.offset + 0x208, 4, nullptr);
+    OSSL_PARAM_BLD* build = OSSL_PARAM_BLD_new();
+    OSSL_PARAM_BLD_push_BN(build, OSSL_PKEY_PARAM_RSA_N, n);
+    OSSL_PARAM_BLD_push_BN(build, OSSL_PKEY_PARAM_RSA_E, e);
+    OSSL_PARAM* params = OSSL_PARAM_BLD_to_param(build);
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+    EVP_PKEY* key = nullptr;
+    EVP_PKEY_fromdata_init(ctx);
+    EVP_PKEY_fromdata(ctx, &key, EVP_PKEY_PUBLIC_KEY, params);
+    EVP_MD_CTX* md = EVP_MD_CTX_new();
+    const bool ok = key != nullptr &&
+                    EVP_DigestVerifyInit(md, nullptr, EVP_sha256(), nullptr, key) == 1 &&
+                    EVP_DigestVerify(md, proof.data(), proof.size(), message.data(),
+                                     message.size()) == 1;
+    EVP_MD_CTX_free(md);
+    EVP_PKEY_free(key);
+    EVP_PKEY_CTX_free(ctx);
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(build);
+    BN_free(e);
+    BN_free(n);
+    return ok;
+}
+
+bool EccProofVerifies(std::span<const u8> bin, const std::vector<u8>& message,
+                      const std::vector<u8>& proof) {
+    std::array<u8, 61> point{0x04};
+    std::memcpy(point.data() + 1, bin.data() + cal0::EccB233DeviceCertificate.offset + 0x108, 60);
+    OSSL_PARAM_BLD* build = OSSL_PARAM_BLD_new();
+    OSSL_PARAM_BLD_push_utf8_string(build, OSSL_PKEY_PARAM_GROUP_NAME, "sect233r1", 0);
+    OSSL_PARAM_BLD_push_octet_string(build, OSSL_PKEY_PARAM_PUB_KEY, point.data(), point.size());
+    OSSL_PARAM* params = OSSL_PARAM_BLD_to_param(build);
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+    EVP_PKEY* key = nullptr;
+    EVP_PKEY_fromdata_init(ctx);
+    EVP_PKEY_fromdata(ctx, &key, EVP_PKEY_PUBLIC_KEY, params);
+    EVP_MD_CTX* md = EVP_MD_CTX_new();
+    const bool ok = key != nullptr &&
+                    EVP_DigestVerifyInit(md, nullptr, EVP_sha256(), nullptr, key) == 1 &&
+                    EVP_DigestVerify(md, proof.data(), proof.size(), message.data(),
+                                     message.size()) == 1;
+    EVP_MD_CTX_free(md);
+    EVP_PKEY_free(key);
+    EVP_PKEY_CTX_free(ctx);
+    OSSL_PARAM_free(params);
+    OSSL_PARAM_BLD_free(build);
+    return ok;
+}
+
+void EnrolmentChecks(const std::vector<u8>& a, const cal0::DeviceKey& key_a,
+                     const cal0::DeviceKey& key_b) {
+    Check(!cal0::IsEnrolled(a), "a new binary is not enrolled");
+
+    const std::vector<u8> message{'n', 'o', 'n', 'c', 'e', 1, 2, 3};
+    const auto proofs = cal0::SignProofs(a, key_a, message);
+    Check(proofs && EccProofVerifies(a, message, proofs->ecc) &&
+              RsaProofVerifies(a, cal0::Rsa2048ETicketCertificate, message, proofs->eticket) &&
+              RsaProofVerifies(a, cal0::Rsa2048DeviceCertificate, message, proofs->device),
+          "proofs: the ECC, eTicket and device keys sign the challenge");
+    {
+        EVP_PKEY* tls = PublicOf(cal0::SslCertificateDer(a));
+        EVP_MD_CTX* md = EVP_MD_CTX_new();
+        Check(proofs && tls != nullptr &&
+                  EVP_DigestVerifyInit(md, nullptr, EVP_sha256(), nullptr, tls) == 1 &&
+                  EVP_DigestVerify(md, proofs->tls.data(), proofs->tls.size(), message.data(),
+                                   message.size()) == 1,
+              "proofs: the TLS key signs the challenge");
+        EVP_MD_CTX_free(md);
+        EVP_PKEY_free(tls);
+    }
+    Check(!cal0::SignProofs(a, key_b, message), "proofs: another device key signs nothing");
+
+    EVP_PKEY* ca_ecc = EVP_PKEY_Q_keygen(nullptr, nullptr, "EC", "sect233r1");
+    EVP_PKEY* ca_tls = EVP_RSA_gen(2048);
+    EVP_PKEY* own_tls = PublicOf(cal0::SslCertificateDer(a));
+    cal0::SignedCertificates signed_certs{
+        .ecc = CaSign(ca_ecc, cal0::Certificate(a, cal0::EccB233DeviceCertificate)),
+        .eticket = CaSign(ca_ecc, cal0::Certificate(a, cal0::Rsa2048ETicketCertificate)),
+        .device = CaSign(ca_ecc, cal0::Certificate(a, cal0::Rsa2048DeviceCertificate)),
+        .tls = CaIssue(ca_tls, own_tls),
+    };
+
+    // Refused: a body that is not this console's, a TLS certificate for another key.
+    std::vector<u8> untouched = a;
+    auto other_body = signed_certs;
+    other_body.eticket[0x150] ^= 1;
+    Check(!cal0::ApplySignedCertificates(untouched, other_body) && untouched == a,
+          "enrolment: a certificate with another body is refused, the binary unchanged");
+    auto other_key = signed_certs;
+    EVP_PKEY* stranger = EVP_RSA_gen(2048);
+    other_key.tls = CaIssue(ca_tls, stranger);
+    Check(!cal0::ApplySignedCertificates(untouched, other_key) && untouched == a,
+          "enrolment: a TLS certificate for another key is refused");
+    auto unsigned_ecc = signed_certs;
+    unsigned_ecc.ecc = cal0::Certificate(a, cal0::EccB233DeviceCertificate);
+    Check(!cal0::ApplySignedCertificates(untouched, unsigned_ecc) && untouched == a,
+          "enrolment: an unsigned certificate is refused");
+
+    std::vector<u8> enrolled = a;
+    Check(cal0::ApplySignedCertificates(enrolled, signed_certs) && cal0::Verify(enrolled) &&
+              cal0::IsEnrolled(enrolled),
+          "enrolment: signed certificates taken, every check passes, enrolled");
+    Check(CaVerifies(ca_ecc, cal0::Certificate(enrolled, cal0::EccB233DeviceCertificate)) &&
+              CaVerifies(ca_ecc, cal0::Certificate(enrolled, cal0::Rsa2048ETicketCertificate)) &&
+              CaVerifies(ca_ecc, cal0::Certificate(enrolled, cal0::Rsa2048DeviceCertificate)),
+          "enrolment: the three Nintendo-format certificates carry the CA's signature");
+    Check(cal0::SslCertificateDer(enrolled) == signed_certs.tls && EccMatches(enrolled, key_a) &&
+              cal0::DeviceId(enrolled) == cal0::DeviceId(a) &&
+              cal0::Serial(enrolled) == cal0::Serial(a),
+          "enrolment: same identity and keys, the issued TLS certificate in place");
+    {
+        const auto cert_der = cal0::SslCertificateDer(enrolled);
+        const auto key_der = cal0::RsaPrivateKeyDer(enrolled, cal0::ExtendedSslKey, key_a);
+        const u8* in = cert_der.data();
+        X509* cert = d2i_X509(nullptr, &in, static_cast<long>(cert_der.size()));
+        const u8* key_in = key_der ? key_der->data() : nullptr;
+        EVP_PKEY* key = key_der ? d2i_AutoPrivateKey(nullptr, &key_in, static_cast<long>(key_der->size())) : nullptr;
+        Check(cert != nullptr && key != nullptr && X509_check_private_key(cert, key) == 1 &&
+                  X509_verify(cert, ca_tls) == 1,
+              "enrolment: the TLS key opens and matches the CA-issued certificate");
+        EVP_PKEY_free(key);
+        X509_free(cert);
+    }
+    EVP_PKEY_free(stranger);
+    EVP_PKEY_free(own_tls);
+    EVP_PKEY_free(ca_tls);
+    EVP_PKEY_free(ca_ecc);
+}
+
 } // namespace
 
 int main() {
@@ -189,6 +401,8 @@ int main() {
               cal0::DeriveKey(key_a, "fs-save-transfer") != cal0::DeriveKey(key_b, "fs-save-transfer") &&
               cal0::DeriveKey(key_a, "fs-save-transfer") != cal0::DeriveKey(key_a, "other"),
           "derived keys: stable per install and label, different across installs and labels");
+
+    EnrolmentChecks(a, key_a, key_b);
 
     // New key pairs for a NAND whose device key is gone: identity kept, old key no longer opens.
     std::vector<u8> moved = a;

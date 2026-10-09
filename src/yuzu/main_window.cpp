@@ -653,6 +653,8 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                         HarborSetup::MenuOpen(MenuPage::FrameGeneration);
                     } else if (name == "controllers") {
                         HarborSetup::MenuOpen(MenuPage::Controllers);
+                    } else if (name == "console") {
+                        HarborSetup::MenuOpen(MenuPage::Console);
                     } else if (name == "close") {
                         HarborSetup::MenuClose();
                     } else if (name == "back") {

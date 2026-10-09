@@ -283,6 +283,37 @@ std::filesystem::path DevicePath(const Endpoint& endpoint, const char* suffix) {
 std::mutex identity_mutex;
 std::function<bool(std::vector<std::uint8_t>&, std::vector<std::uint8_t>&)> identity_source;
 
+std::mutex device_hooks_mutex;
+DeviceHooks device_hooks;
+std::function<void()> in_use_hook;
+std::atomic<bool> device_id_in_use{false};
+
+void RunDeviceHook(std::function<void()> DeviceHooks::*which) {
+    std::function<void()> hook;
+    {
+        std::scoped_lock lock{device_hooks_mutex};
+        hook = device_hooks.*which;
+    }
+    if (hook) {
+        hook();
+    }
+}
+
+/// This run of the console, as the server tells two running copies of one console apart: random
+/// per process, sent only to the dauth host, never logged.
+const std::string& ConsoleSession() {
+    static const std::string session = [] {
+        unsigned char bytes[16];
+        RAND_bytes(bytes, sizeof(bytes));
+        std::string hex;
+        for (const unsigned char b : bytes) {
+            hex += fmt::format("{:02x}", b);
+        }
+        return hex;
+    }();
+    return session;
+}
+
 /// The console's own certificate and key (its calibration), written as this server's PEM pair.
 bool WriteConsoleIdentity(const std::filesystem::path& cert_path,
                           const std::filesystem::path& key_path) {
@@ -435,8 +466,15 @@ std::unique_ptr<httplib::SSLClient> MakeClient(const Endpoint& endpoint, const c
     client->set_write_timeout(TimeoutSeconds, 0);
     client->set_follow_location(false);
 
+    httplib::Headers headers;
     if (std::string header = Platform::ClientHeader(); !header.empty()) {
-        client->set_default_headers({{"X-OpenPak-Client", std::move(header)}});
+        headers.emplace("X-OpenPak-Client", std::move(header));
+    }
+    if (std::string_view{host} == DauthHost) {
+        headers.emplace("X-OpenPak-Console-Session", ConsoleSession());
+    }
+    if (!headers.empty()) {
+        client->set_default_headers(std::move(headers));
     }
 
     return client;
@@ -628,9 +666,13 @@ bool RunChain(const Endpoint& endpoint, const std::string& uid, const std::strin
         {"token_requests", nlohmann::json::array({{{"client_id", BaasClientId}}})},
     };
 
-    const auto device_tokens =
-        Parsed(dauth->Post("/v8/device_auth_tokens", device_request.dump(), "application/json"),
-               "device auth tokens");
+    const auto device_reply =
+        dauth->Post("/v8/device_auth_tokens", device_request.dump(), "application/json");
+    if (device_reply && NoteDeviceAnswer(device_reply->status, device_reply->body)) {
+        error = "another console is live with this console's device id";
+        return false;
+    }
+    const auto device_tokens = Parsed(device_reply, "device auth tokens");
     if (!device_tokens || !device_tokens->contains("results") ||
         (*device_tokens)["results"].empty()) {
         error = "the console server refused this device";
@@ -1101,6 +1143,92 @@ void SetClientIdentitySource(
     identity_source = std::move(source);
 }
 
+bool detail::ReplaceClientCertificate() {
+    const Endpoint endpoint = EndpointSnapshot(Get());
+    if (endpoint.host.empty()) {
+        return false;
+    }
+    // Written beside the old pair and moved over it, so a client made meanwhile reads one whole
+    // pair or the other.
+    const std::filesystem::path cert_path = DevicePath(endpoint, "pem");
+    const std::filesystem::path key_path = DevicePath(endpoint, "key");
+    {
+        // Already the console's own certificate: nothing to do.
+        std::vector<std::uint8_t> console_cert;
+        std::vector<std::uint8_t> console_key;
+        {
+            std::scoped_lock lock{identity_mutex};
+            if (!identity_source || !identity_source(console_cert, console_key)) {
+                return false;
+            }
+        }
+        OPENSSL_cleanse(console_key.data(), console_key.size());
+        bool same = false;
+        if (FILE* file = std::fopen(cert_path.string().c_str(), "rb")) {
+            if (X509* current = PEM_read_X509(file, nullptr, nullptr, nullptr)) {
+                unsigned char* der = nullptr;
+                const int size = i2d_X509(current, &der);
+                same = size > 0 && static_cast<std::size_t>(size) == console_cert.size() &&
+                       std::memcmp(der, console_cert.data(), console_cert.size()) == 0;
+                OPENSSL_free(der);
+                X509_free(current);
+            }
+            std::fclose(file);
+        }
+        if (same) {
+            return true;
+        }
+    }
+    const std::filesystem::path cert_new = cert_path.string() + ".new";
+    const std::filesystem::path key_new = key_path.string() + ".new";
+    if (!WriteConsoleIdentity(cert_new, key_new)) {
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::rename(key_new, key_path, ec);
+    if (!ec) {
+        std::filesystem::rename(cert_new, cert_path, ec);
+    }
+    return !ec;
+}
+
+void SetDeviceHooks(DeviceHooks hooks) {
+    std::scoped_lock lock{device_hooks_mutex};
+    device_hooks = std::move(hooks);
+}
+
+bool DeviceIdInUse() {
+    return device_id_in_use.load();
+}
+
+void SetDeviceIdInUseHook(std::function<void()> on_refused) {
+    std::scoped_lock lock{device_hooks_mutex};
+    in_use_hook = std::move(on_refused);
+}
+
+bool NoteDeviceAnswer(int status, std::string_view body) {
+    if (status == 409 && body.find("device_id_in_use") != std::string_view::npos) {
+        if (!device_id_in_use.exchange(true)) {
+            LOG_WARNING(WebService, "[OpenPak] Another console is live with this console's "
+                                    "identity (device id in use); offering to make this a new "
+                                    "console");
+            std::function<void()> hook;
+            {
+                std::scoped_lock lock{device_hooks_mutex};
+                hook = in_use_hook;
+            }
+            if (hook) {
+                hook();
+            }
+        }
+        return true;
+    }
+    if (status >= 200 && status < 300 && device_id_in_use.exchange(false)) {
+        LOG_INFO(WebService, "[OpenPak] The server accepts this console's identity again");
+    }
+    return false;
+}
+
 void Configure(std::string server_host, int port, std::string ca_path) {
     State& state = Get();
     std::lock_guard lock{state.mutex};
@@ -1317,8 +1445,11 @@ std::string DauthToken(const std::string& client_id, const std::string& vendor) 
         };
 
         const char* path = vendor.empty() ? "/v8/device_auth_tokens" : "/v8/edge_tokens";
-        const auto tokens = Parsed(dauth->Post(path, request.dump(), "application/json"),
-                                   vendor.empty() ? "device auth token" : "edge token");
+        const auto reply = dauth->Post(path, request.dump(), "application/json");
+        if (reply && NoteDeviceAnswer(reply->status, reply->body)) {
+            return {};
+        }
+        const auto tokens = Parsed(reply, vendor.empty() ? "device auth token" : "edge token");
         if (!tokens || !tokens->contains("results") || !(*tokens)["results"].is_array() ||
             (*tokens)["results"].empty()) {
             return {};
@@ -1627,6 +1758,7 @@ void StartHeartbeat(std::function<std::string()> current_title_id) {
                     if (SocialAllowed(state, ActiveIdentity(state))) {
                         OpenPak::Baas::BackgroundSync();
                     }
+                    RunDeviceHook(&DeviceHooks::signed_in);
                 }
 
                 if (beat) {
@@ -1655,6 +1787,10 @@ void StartHeartbeat(std::function<std::string()> current_title_id) {
                     // who has not changed game in a while would otherwise read as offline while
                     // sitting in front of the machine.
                     PublishPresence(state, tick % InvitationEveryNthBeat == 0);
+
+                    if (tick % InvitationEveryNthBeat == 0 && !UserId({}).empty()) {
+                        RunDeviceHook(&DeviceHooks::beat);
+                    }
                 } else if (presence_changed) {
                     PublishPresence(state, false);
                 }
@@ -1764,6 +1900,13 @@ void GoOffline() {
 
     // The one moment "I am gone" can be said; if it never arrives, the lease says it later.
     PublishInactive(state);
+
+    // And the console's session ends, so this console may start again at once.
+    try {
+        RunDeviceHook(&DeviceHooks::offline);
+    } catch (const std::exception& e) {
+        LOG_WARNING(WebService, "[OpenPak] Ending the console session failed: {}", e.what());
+    }
 }
 
 Response Send(const std::string& method, const std::string& host,
