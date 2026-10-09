@@ -1443,7 +1443,7 @@ Response SendAs(const std::string& method, const std::string& host,
 
 Response SendAsUser(const std::string& uid, const std::string& method, const std::string& host,
                     const std::string& path_and_query, const std::string& content_type,
-                    const std::string& body) {
+                    const std::string& body, const Headers& headers) {
     try {
         Ensure(uid);
 
@@ -1466,6 +1466,9 @@ Response SendAsUser(const std::string& uid, const std::string& method, const std
         request.method = method;
         request.path = path_and_query;
         request.headers = Bearer(token);
+        for (const auto& [name, value] : headers) {
+            request.set_header(name, value);
+        }
 
         if (!content_type.empty()) {
             request.set_header("Content-Type", content_type + "; charset=utf-8");
