@@ -27,6 +27,14 @@ class HarborStartActivity : Activity() {
         super.onCreate(savedInstanceState)
         // Opened from the launcher while the console runs: back to it, no second boot.
         if (HarborConsole.active && (NativeLibrary.isRunning() || NativeLibrary.isPaused())) {
+            if (EmulationActivity.liveScreens == 0) {
+                // Android closed the console's screen while the console kept running: a new screen
+                // has no game to show ("No bootable game present!"), so start over in a fresh process.
+                Log.info("[Harbor] start: the console runs without its screen; restarting")
+                HarborConsole.restartProcess(this)
+                finish()
+                return
+            }
             Log.info("[Harbor] start: the console is running; returning to it")
             startActivity(
                 Intent(this, EmulationActivity::class.java)

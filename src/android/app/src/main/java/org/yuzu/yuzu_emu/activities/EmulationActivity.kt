@@ -150,6 +150,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         ThemeHelper.setTheme(this)
 
         super.onCreate(savedInstanceState)
+        liveScreens++
 
         NativeConfig.reloadGlobalConfig()
 
@@ -315,6 +316,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             super.onDestroy()
             return
         }
+        liveScreens--
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)
@@ -1156,6 +1158,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         // How long a Volume Down press waits for a second one (a double press is sleep).
         private const val HARBOR_DOUBLE_PRESS_MS = 300L
         private const val ASUS_VID = 0x0b05
+
+        /** Emulation screens created and not yet destroyed (main thread only). */
+        var liveScreens = 0
+            private set
 
         /** The emulation screen while it is resumed (HarborKeyService hands it controller keys). */
         @Volatile
