@@ -8,7 +8,6 @@
 #include <array>
 #include <cstring>
 
-#include <openssl/sha.h>
 
 #include "core/file_sys/fs_save_data_types.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -150,40 +149,10 @@ Result IRemoteStorageController::GetSecondarySave(Out<bool> out_has_secondary_sa
 
 Result IRemoteStorageController::GetDataNewnessByApplicationId(Out<u8> out_newness,
                                                               u64 application_id) {
-    // The sysmodule (0x1d32e0): with no cloud archive, 0 when the local save exists and 1 when it
-    // does not; with both, 0 when the cloud archive is the local save's commit and 1 otherwise.
-    // Harbor compares the archive's commit id (encoded_digest) with the save's extra data, as a
-    // fresh backup or restore leaves them equal.
-    const auto archives = OpenPak::Olsc::ArchiveCache::Instance().Get(uid);
-    const auto latest =
-        archives ? OpenPak::Olsc::LatestFor(*archives, application_id) : std::nullopt;
-
-    const auto controller = system.GetFileSystemController().OpenSaveDataController();
-    const auto attribute = FileSys::SaveDataAttribute::Make(
-        application_id, FileSys::SaveDataType::Account, user.AsU128(),
-        FileSys::InvalidSystemSaveDataId, 0, FileSys::SaveDataRank::Primary);
-    const bool local = controller->SaveDataExists(FileSys::SaveDataSpaceId::User, attribute);
-    u64 local_commit = 0;
-    if (local) {
-        FileSys::SaveDataExtraData extra{};
-        if (controller->ReadSaveDataExtraData(&extra, FileSys::SaveDataSpaceId::User, attribute)
-                .IsSuccess()) {
-            local_commit = static_cast<u64>(extra.commit_id);
-            if (local_commit == 0) {
-                // A save without a commit id goes by its extra data's digest, as fs exports it.
-                std::array<u8, 32> digest{};
-                SHA256(reinterpret_cast<const u8*>(&extra), sizeof(extra), digest.data());
-                std::memcpy(&local_commit, digest.data(), 8);
-            }
-        }
-    }
-    if (!latest) {
-        *out_newness = local ? 0 : 1;
-    } else {
-        *out_newness = local && latest->commit_id == local_commit ? 0 : 1;
-    }
-    LOG_DEBUG(Service_OLSC, "called, app={:016X} in_cloud={} local={} newness={}", application_id,
-              latest.has_value(), local, *out_newness);
+    // 0x1d32e0 against the title's SeriesInfo (olsc-autonomy.md §4.1): 0 in sync, 1 cloud newer,
+    // 2 local newer, 3 conflict.
+    *out_newness = queue->Newness(user, application_id);
+    LOG_DEBUG(Service_OLSC, "called, app={:016X} newness={}", application_id, *out_newness);
     R_SUCCEED();
 }
 
@@ -218,8 +187,11 @@ Result IRemoteStorageController::CreateSaveDataArchiveCacheUpdationTask(
     Out<SharedPointer<IAsyncResult>> out_task) {
     // 0x224760: no input, an IAsyncResult out. "Update List" on the Save Data Cloud page.
     LOG_INFO(Service_OLSC, "called");
-    *out_task = std::make_shared<IAsyncResult>(system, worker, [who = uid]() -> Result {
-        if (!OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
+    *out_task = std::make_shared<IAsyncResult>(system, worker, [who = uid, user = user,
+                                                                queue = queue]() -> Result {
+        if (OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
+            queue->Repair(user); // after every cache update (0x1dfca0)
+        } else {
             // A console without its server fails here with a network error; which one is not
             // established, so the list stays as it was and the task succeeds.
             LOG_UNKNOWN_CONTRACT(Service_OLSC,

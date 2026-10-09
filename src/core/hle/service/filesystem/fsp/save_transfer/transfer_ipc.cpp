@@ -224,7 +224,7 @@ ISaveDataTransferManagerVersion2::ISaveDataTransferManagerVersion2(Core::System&
         {16, D<&ISaveDataTransferManagerVersion2::SetKeySeedPackage>, "SetKeySeedPackage"},
         {17, nullptr, "SetLocalKeySeedPackage"},
         {32, D<&ISaveDataTransferManagerVersion2::OpenSaveDataFullExporter>, "OpenSaveDataFullExporter"},
-        {33, nullptr, "OpenSaveDataDiffExporter"},
+        {33, D<&ISaveDataTransferManagerVersion2::OpenSaveDataDiffExporter>, "OpenSaveDataDiffExporter"},
         {34, nullptr, "OpenSaveDataExporterByContext"},
         {63, D<&ISaveDataTransferManagerVersion2::OpenSaveDataImporter>, "OpenSaveDataImporter"},
         {68, nullptr, "OpenSaveDataImporterByContext"},
@@ -253,6 +253,16 @@ Result ISaveDataTransferManagerVersion2::OpenSaveDataFullExporter(
     u64 save_data_id) {
     std::shared_ptr<Exporter> exporter;
     R_TRY(manager.OpenFullExporter(&exporter, space, save_data_id));
+    *out_exporter = std::make_shared<IDivisionExporter>(system, std::move(exporter));
+    R_SUCCEED();
+}
+
+Result ISaveDataTransferManagerVersion2::OpenSaveDataDiffExporter(
+    Out<SharedPointer<IDivisionExporter>> out_exporter,
+    InBuffer<BufferAttr_HipcMapAlias> initial_data, FileSys::SaveDataSpaceId space,
+    u64 save_data_id) {
+    std::shared_ptr<Exporter> exporter;
+    R_TRY(manager.OpenDiffExporter(&exporter, initial_data, space, save_data_id));
     *out_exporter = std::make_shared<IDivisionExporter>(system, std::move(exporter));
     R_SUCCEED();
 }

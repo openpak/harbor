@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace OpenPak::Olsc::Transfer {
@@ -28,6 +29,7 @@ enum class Error : std::uint32_t {
     None = 0,
     Cancelled = 0,
     PartitionCountDiffers = 301,
+    SeriesBaseMissing = 2123,
     LocalSaveNotFound = 2000,
     PolicyForbidden = 2001,
     LocalSaveChanged = 2021,
@@ -50,14 +52,22 @@ struct HttpResponse {
     std::string body;
 };
 
-/// The console protocol's REST transport, as one user (bearer and sign-in are its business).
+using Headers = std::vector<std::pair<std::string, std::string>>;
+
+/// The console protocol's REST transport, as one user. The bearer, X-Device-Token and X-NSA-ID
+/// every request carries (0x1e7d10) are its business; `headers` are the per-request ones
+/// (X-SDA-ID, X-Ignorable).
 class Rest {
 public:
     virtual ~Rest() = default;
-    /// A request to `host` (e.g. storage.hac.lp1.scsi.srv.nintendo.net); `body` empty and
-    /// `json` false sends an empty POST body as the console does.
+    /// A request to `host` (e.g. storage.hac.lp1.scsi.srv.nintendo.net); an empty `body` on a
+    /// POST is sent as the console sends it (an empty body).
     virtual HttpResponse Request(const std::string& method, const std::string& host,
-                                 const std::string& path, const std::string& body) = 0;
+                                 const std::string& path, const std::string& body,
+                                 const Headers& headers = {}) = 0;
+    /// The dauth device token for olsc's client (the policy request's `dtoken`); empty when dauth
+    /// refused.
+    virtual std::string DeviceToken() = 0;
     /// A blob GET or PUT to a signed URL from a component (https://host/path?query).
     virtual HttpResponse Blob(const std::string& method, const std::string& url,
                               std::span<const std::uint8_t> body) = 0;
@@ -71,6 +81,8 @@ public:
     virtual std::vector<std::uint16_t> ChunkIds() = 0;
     virtual std::optional<Bytes> Chunk(std::uint16_t id) = 0;
     virtual void SetAad(const Aad& aad) = 0;
+    /// GetImportInitialDataAad (80): a diff exporter's base archive AAD until SetAad.
+    virtual Aad ImportAad() = 0;
     virtual Key KeySeed() = 0;
     virtual std::optional<Key> InitialDataMac() = 0;
     virtual bool Finalize() = 0;
@@ -103,6 +115,9 @@ public:
     virtual Key Challenge() = 0;
     virtual bool SetKeySeedPackage(std::span<const std::uint8_t> package) = 0;
     virtual std::unique_ptr<Exporter> OpenFullExporter() = 0;
+    /// OpenSaveDataDiffExporter (33) against the previous archive's 8 KiB initial data; needs
+    /// that archive's key seed package first.
+    virtual std::unique_ptr<Exporter> OpenDiffExporter(std::span<const std::uint8_t> meta) = 0;
     virtual std::unique_ptr<Importer> OpenImporter(std::span<const std::uint8_t> meta) = 0;
 };
 
@@ -117,13 +132,15 @@ struct Outcome {
     std::string detail; ///< for the log (no ids of the user)
 };
 
-/// A full upload (olsc-transfer.md §2.2). `series_id` 0 picks a random one.
+/// An upload (olsc-transfer.md §2.2): a delta against the title's fixed archive when the cloud
+/// has one (§2.3), else a full upload. `series_id` 0 picks a random one for a full upload.
 Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_id,
                Progress* progress);
 
-/// A download of `archive_id` (olsc-transfer.md §3.1).
+/// A download of `archive_id` (olsc-transfer.md §3.1). `launch_version` is the installed
+/// application's launch version >> 16 (the policy request's version).
 Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t archive_id,
-                 Progress* progress);
+                 std::uint32_t launch_version, Progress* progress);
 
 // Encoders the console uses (base64url without padding; MD5 for component digests).
 std::string Base64Url(std::span<const std::uint8_t> data);

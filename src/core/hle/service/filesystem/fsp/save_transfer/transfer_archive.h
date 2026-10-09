@@ -77,7 +77,14 @@ public:
     bool SetDivisionCount(int count);
     int DivisionCount() const;
 
-    /// Data chunk ids then the meta chunk, the order an iterator gives them.
+    /// A diff export against the previous archive's initial data (OpenSaveDataDiffExporter):
+    /// its division count and AAD, and every chunk whose plaintext hashes as the base's keeps the
+    /// base's hash, size and MAC and is not exported again (the server hands the base's bytes
+    /// over). False when the base's division count is out of range.
+    bool SetBase(const InitialDataContent& base);
+
+    /// The chunks to send, data then meta, the order an iterator gives them (a diff export
+    /// leaves out the unchanged ones).
     std::vector<u16> ChunkIds() const;
 
     /// A chunk's bytes: header ∥ AES-GCM(raw deflate(slice)) ∥ tag for data chunks; the
@@ -102,6 +109,7 @@ private:
     Key128 meta_iv{};
     std::vector<std::optional<std::vector<u8>>> chunks;
     std::vector<std::pair<std::size_t, std::size_t>> slices;
+    std::vector<bool> unchanged;
 };
 
 /// The importer's archive side: the initial data, then each data chunk checked and inflated.

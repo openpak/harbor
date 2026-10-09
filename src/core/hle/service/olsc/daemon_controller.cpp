@@ -7,13 +7,14 @@
 #include "common/redact.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/olsc/daemon_controller.h"
+#include "core/hle/service/olsc/transfer_runner.h"
 #include "core/openpak/olsc.h"
 
 namespace Service::OLSC {
 
-IDaemonController::IDaemonController(Core::System& system_,
-                                     std::shared_ptr<OpenPak::Olsc::DaemonSettings> settings_)
-    : ServiceFramework{system_, "IDaemonController"}, settings{std::move(settings_)} {
+IDaemonController::IDaemonController(Core::System& system_, std::shared_ptr<TransferQueue> queue_)
+    : ServiceFramework{system_, "IDaemonController"}, queue{std::move(queue_)},
+      settings{queue->Settings()} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IDaemonController::GetApplicationAutoTransferSetting>, "GetApplicationAutoTransferSetting"},
@@ -50,6 +51,11 @@ Result IDaemonController::SetApplicationAutoTransferSetting(
              Common::Redact(params.user_id), params.application_id, params.is_enabled);
     settings->SetApplicationAutoTransfer(params.user_id.RawString(), params.application_id,
                                          params.is_enabled);
+    if (!params.is_enabled) {
+        // 0x1eff00: the title's queued automatic tasks go.
+        queue->RemoveQueued(params.user_id, params.application_id, 0);
+        queue->RemoveQueued(params.user_id, params.application_id, 1);
+    }
     R_SUCCEED();
 }
 
@@ -65,6 +71,9 @@ Result IDaemonController::SetGlobalAutoUploadSetting(SetGlobalSettingParameters 
     LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
              params.is_enabled);
     settings->SetGlobalAutoUpload(params.user_id.RawString(), params.is_enabled);
+    if (!params.is_enabled) {
+        queue->RemoveQueued(params.user_id, std::nullopt, 0); // 0x1aa5e0
+    }
     R_SUCCEED();
 }
 
@@ -72,7 +81,8 @@ Result IDaemonController::RunTransferTaskAutonomyRegistration(Common::UUID user_
                                                               u64 application_id) {
     LOG_INFO(Service_OLSC, "called, user_id={} application_id={:016X}", Common::Redact(user_id),
              application_id);
-    // No transfer tasks run (Save Data Cloud transfers are not implemented): nothing to register.
+    // 0x1f0330: the user's periodic autonomy sweep is due now.
+    queue->MakeDue(user_id);
     R_SUCCEED();
 }
 
@@ -88,6 +98,9 @@ Result IDaemonController::SetGlobalAutoDownloadSetting(SetGlobalSettingParameter
     LOG_INFO(Service_OLSC, "called, user_id={} is_enabled={}", Common::Redact(params.user_id),
              params.is_enabled);
     settings->SetGlobalAutoDownload(params.user_id.RawString(), params.is_enabled);
+    if (!params.is_enabled) {
+        queue->RemoveQueued(params.user_id, std::nullopt, 1); // 0x1aa720
+    }
     R_SUCCEED();
 }
 
