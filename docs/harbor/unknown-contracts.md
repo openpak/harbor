@@ -51,7 +51,7 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | ns IContentManagementInterface 71 (taken as GetStorageSize) | "(STUBBED)" log, not an unknown contract | ns |
 | ns 4096, 935, 936, 4008, 4023, 4058, 4084, 4089, 4042, ns:vm 3100, ns:ec | logged on Eden (see the table); 4008 now answers an IAsyncValue as 23.0.1 does; 4074 and ROACD 28 now answer as 23.0.1 ns does (logged) | done |
 | caps:a 18 GetAppletProgramIdTable and other caps:a commands | caps:a 17/110/120 logged; 18 answered without a log | caps |
-| pctl 1459 layout; 1406/2015 time report; 1455; 2017's owner argument; transport failure 2142-2003; picture cut to fit; 2012 string shape | 1204, 1205, 2012, 2017 and 2142-2003 logged on Eden; 1406, 1455, 1459 not | pctl |
+| pctl 1406/2015 time report; 1455; 2017's owner argument; transport failure 2142-2003 (1459/1460, 2009-2012 and 2025 now follow 23.0.1 RE: research/g3pctl-mii/notes.md) | 1204, 1205, 2017 and 2142-2003 logged on Eden; 1406, 1455 not | pctl |
 | notif:s 1500/1510 layout | implemented with a debug log | glue |
 | set:sys 157 SetPctlReadyFlag layout (8 bytes kept as written) | 156 logged; 157 not | set |
 | ssl CaCertificateId 0xFFFFFFFE | not reviewed | ssl |
@@ -169,6 +169,7 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1366` | IApplicationManagerInterface 1508; returning an event that never signals |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1375` | IApplicationManagerInterface 935; returning success |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1386` | IApplicationManagerInterface 2366; Nintendo network-install work is unavailable, completed unchanged |
+| ns | `src/core/hle/service/ns/application_manager_interface.cpp` (Unknown2367) | IApplicationManagerInterface 2367; Nintendo network-install work is unavailable, completed unchanged (Delete User of a linked user) |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1407` | IApplicationManagerInterface 4008; completed unchanged, work buffer {:#x} bytes{} (no transfer memory) |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1423` | IApplicationManagerInterface 4074: accepted, no account content state refresh queued (the key's meaning is not established) |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1435` | IApplicationManagerInterface 905 RequestApplicationUpdate {:016X} ({}): not emulated: no update download is forced |
@@ -176,7 +177,6 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1448` | IApplicationManagerInterface 4084; returning success |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1453` | IApplicationManagerInterface 4096; returning success |
 | ns | `src/core/hle/service/ns/application_manager_interface.cpp:1459` | IApplicationManagerInterface 4089; returning false and an empty 0x50-byte record |
-| ns | `src/core/hle/service/ns/application_manager_interface.cpp:1467` | ns:am2 4105; returning success, no linked-account work queued |
 | ns | `src/core/hle/service/ns/ecommerce_interface.cpp:159` | ns:ec 0 RequestLinkDevice: no OpenPak device link, completes |
 | ns | `src/core/hle/service/ns/ecommerce_interface.cpp:169` | ns:ec 4 RequestUnlinkDevice: no OpenPak device link, completes |
 | ns | `src/core/hle/service/ns/ecommerce_interface.cpp:178` | ns:ec 1 RequestCleanupAllPreInstalledApplications: nothing pre-installed, completes |
@@ -201,8 +201,7 @@ Eden-side site, and what Eden does instead (2026-10-08):
 | pctl | `src/core/hle/service/pctl/parental_control_service.cpp:848` | pctl 1471 NotifyWrongPinCodeInputManyTimes: no event is recorded or uploaded; answered success |
 | pctl | `src/core/hle/service/pctl/parental_control_service.cpp:1162` | pctl Finish before the work is done; answered 2142-0221, slot kept |
 | pctl | `src/core/hle/service/pctl/parental_control_service.cpp:1209` | pctl 2017's owner argument is not sent |
-| pctl | `src/core/hle/service/pctl/parental_control_service.cpp:1339` | pctl 2010: a {}-byte picture in a {}-byte buffer; cut |
-| pctl | `src/core/hle/service/pctl/parental_control_service.cpp:1363` | pctl 2012 answers the picture's HTTP media type, nickname-style |
+| pctl | `src/core/hle/service/pctl/pctl_pairing.cpp` (FetchMii) | pctl: the owner is unknown or has no picture URL; nothing fetched |
 | pctl | `src/core/hle/service/pctl/pctl_pairing.cpp:434` | pctl moon {} could not reach the server; answered 2142-2003 |
 | pctl | `src/core/hle/service/pctl/pctl_pairing.cpp:837` | pctl: the owner has no picture URL; answered an empty picture |
 | set | `src/core/hle/service/set/factory_settings_server.cpp:193` | set:cal GetSslKey (size={}); the wrapped block |
