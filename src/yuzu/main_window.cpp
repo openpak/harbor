@@ -677,11 +677,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
             .dock = [this] { OnToggleDockedMode(); },
         });
 
-    // Harness runs use the system password store too (console mode installs it before OpenPak
-    // connects), so every stream tests the real credential path.
-    if (harbor_control) {
-        FrontendCommon::InstallSecretStore();
-    }
+    // Every start decides the password store before the console runs: the calibration reads its
+    // device key only once that is known (console mode installs it again, a no-op, before OpenPak).
+    FrontendCommon::InstallSecretStore();
 
     if (QStringList args = QApplication::arguments(); args.size() >= 2) {
         QList<QByteArray> qba{};
@@ -825,6 +823,7 @@ void MainWindow::HarborConsoleStep(int done) {
     if (harbor_stopped_page) {
         harbor_stopped_page->hide();
     }
+    HarborConsoleMenu::WarnIfLocked(this);
     LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
     if (!emulation_running && harbor_stopped_page) {
         LOG_ERROR(Frontend, "harbor: the HOME menu could not be loaded");
