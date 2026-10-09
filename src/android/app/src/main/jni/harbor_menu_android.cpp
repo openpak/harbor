@@ -16,6 +16,7 @@
 #include "common/logging.h"
 #include "frontend_common/joycon_rails.h"
 #include "harbor_setup/menu.h"
+#include "harbor_setup/menu_input.h"
 #include "harbor_setup_android.h"
 #include "native.h"
 
