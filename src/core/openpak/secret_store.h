@@ -41,6 +41,11 @@ void SetSecretStore(std::shared_ptr<SecretStore> store);
 /// Whether a host store is installed.
 bool HasSecretStore();
 
+/// The frontend has decided: a store is installed, or this host has none (secrets in memory
+/// only). Until then a secret that is not found is not known to be missing.
+void SetSecretStoreDecided();
+bool SecretStoreDecided();
+
 /// Through the host store, or the process-memory fallback when none is installed. Keys are short
 /// ASCII names such as "device-<server>-<uid>"; values are opaque (JSON today).
 std::optional<std::string> LoadSecret(std::string_view key, bool* unreadable = nullptr);
