@@ -1086,8 +1086,10 @@ public:
                                     std::shared_ptr<OpenPak::AsyncWorker> worker_)
         : ServiceFramework{system_, "IManagerForApplication"}, user_id{user_id_},
           worker{std::move(worker_)} {
-        // nn::account::OpenUser (OpenPreselectedUser included) holds this object for as long as
-        // the user is open, so the user it names is an open user (ListOpenUsers) meanwhile.
+        // 23.0.1 acc opens the user in the caller's context when it creates this object
+        // (0x085AFFF0 -> 0x085B9B40) and closes it when the object goes (0x085B07B0 ->
+        // 0x085B9E90); nn::account::OpenUser and OpenPreselectedUser hold it while the user is
+        // open.
         system.GetProfileManager().OpenUserForApplication(user_id);
         // clang-format off
         static const FunctionInfo functions[] = {

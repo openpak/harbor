@@ -63,7 +63,8 @@ ProfileManager::ProfileManager() {
     OpenCurrentUser();
 }
 
-void ProfileManager::ReloadForSession(bool home_session) {
+void ProfileManager::ReloadForSession(bool home_session_) {
+    home_session = home_session_;
     RemoveAllProfiles();
     stored_opened_profiles = {};
     last_opened_user = Common::InvalidUUID;
@@ -318,7 +319,7 @@ std::size_t ProfileManager::GetUserCount() const {
 
 std::size_t ProfileManager::GetOpenUserCount() const {
     return std::count_if(profiles.begin(), profiles.end(),
-                         [](const ProfileInfo& p) { return p.IsOpen(); });
+                         [this](const ProfileInfo& p) { return IsUserOpen(p); });
 }
 
 /// Checks if a user id exists in our profile manager
@@ -354,6 +355,15 @@ void ProfileManager::CloseUser(UUID uuid) {
     profiles[*idx].is_open = false;
 }
 
+// 23.0.1 acc keeps the open users per application context: the IManagerForApplication from
+// GetBaasAccountManagerForApplication opens its user in the caller's context and closing it
+// closes the user; ListOpenUsers lists the users open in the contexts and GetLastOpenedUser the
+// last user opened. A console opens users only that way, so in a HOME session the users Eden
+// opens itself (the current user, a newly registered one) only count as the last opened.
+bool ProfileManager::IsUserOpen(const ProfileInfo& profile) const {
+    return profile.application_open_count > 0 || (!home_session && profile.is_open);
+}
+
 void ProfileManager::OpenUserForApplication(UUID uuid) {
     const auto idx = GetUserIndex(uuid);
     if (!idx) {
@@ -384,8 +394,8 @@ UserIDArray ProfileManager::GetAllUsers() const {
 /// needed for GetOpenUsers and we need to ensure the rest of the output buffer is zero'd out
 UserIDArray ProfileManager::GetOpenUsers() const {
     UserIDArray output{};
-    std::ranges::transform(profiles, output.begin(), [](const ProfileInfo& p) {
-        if (p.IsOpen())
+    std::ranges::transform(profiles, output.begin(), [this](const ProfileInfo& p) {
+        if (IsUserOpen(p))
             return p.user_uuid;
         return Common::InvalidUUID;
     });
@@ -402,8 +412,8 @@ UUID ProfileManager::GetLastOpenedUser() const {
 /// Gets the list of stored opened users.
 UserIDArray ProfileManager::GetStoredOpenedUsers() const {
     UserIDArray output{};
-    std::ranges::transform(stored_opened_profiles, output.begin(), [](const ProfileInfo& p) {
-        if (p.IsOpen())
+    std::ranges::transform(stored_opened_profiles, output.begin(), [this](const ProfileInfo& p) {
+        if (IsUserOpen(p))
             return p.user_uuid;
         return Common::InvalidUUID;
     });
@@ -418,7 +428,7 @@ void ProfileManager::StoreOpenedUsers() {
     size_t profile_index{};
     stored_opened_profiles = {};
     std::for_each(profiles.begin(), profiles.end(), [&](const auto& profile) {
-        if (profile.IsOpen()) {
+        if (IsUserOpen(profile)) {
             stored_opened_profiles[profile_index++] = profile;
         }
     });
