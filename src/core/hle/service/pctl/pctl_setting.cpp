@@ -349,6 +349,69 @@ std::optional<int> TodaysLimit(const PlayTimerBlock& timer, int day_of_week) {
     return timer[regulation + 6] | (timer[regulation + 7] << 8);
 }
 
+PlayTimerDisplay DisplayInfo(const PlayTimerBlock& timer, bool pin_set, bool temporarily_unlocked,
+                             bool ignore_temporary_unlock, const PlayTimerNow& now, bool for_1459) {
+    constexpr std::int64_t NsPerSecond = 1'000'000'000;
+    PlayTimerDisplay out;
+    if (!for_1459) {
+        if (!pin_set) {
+            out.state = 7;
+            return out;
+        }
+        if (temporarily_unlocked && !ignore_temporary_unlock) {
+            out.state = 5;
+            return out;
+        }
+        if (timer[0] == 0) {
+            out.state = 6;
+            return out;
+        }
+    } else if (!pin_set || timer[0] == 0) {
+        return out;
+    }
+
+    const std::size_t regulation = timer[2] == 0 ? 4 : 0xc + 8 * static_cast<std::size_t>(now.day_of_week);
+    const auto limit = TodaysLimit(timer, now.day_of_week);
+    const int now_seconds = now.hour * 3600 + now.minute * 60 + now.second;
+
+    std::optional<std::int64_t> remaining_ns;
+    if (limit) {
+        remaining_ns = std::int64_t{*limit} * 60 * NsPerSecond - now.played_ns;
+    }
+    bool bedtime_passed = false;
+    std::optional<std::int64_t> bedtime;
+    if (timer[regulation] != 0) {
+        const int start = timer[regulation + 3] * 3600 + timer[regulation + 4] * 60;
+        const int end = timer[regulation + 1] * 3600 + timer[regulation + 2] * 60;
+        // Bedtime runs from its start to its end, past midnight when the end comes first.
+        const bool inside = start <= end ? (now_seconds >= start && now_seconds < end)
+                                         : (now_seconds >= start || now_seconds < end);
+        if (inside) {
+            bedtime_passed = true;
+        } else {
+            const int until = (start - now_seconds + 86400) % 86400;
+            bedtime = now.posix + until;
+        }
+    }
+
+    const bool used_up = bedtime_passed || (remaining_ns && *remaining_ns <= 0);
+    if (used_up) {
+        out.state = for_1459 ? 0 : 3;
+        return out;
+    }
+    if (bedtime && (!remaining_ns || (*bedtime - now.posix) * NsPerSecond <= *remaining_ns)) {
+        out.state = 1;
+        out.bedtime = *bedtime;
+        out.remaining_ns = for_1459 ? 0 : (*bedtime - now.posix) * NsPerSecond;
+        return out;
+    }
+    if (remaining_ns) {
+        out.state = 2;
+        out.remaining_ns = *remaining_ns;
+    }
+    return out;
+}
+
 } // namespace Rules
 
 std::string SerializeState(const Setting& setting) {

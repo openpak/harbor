@@ -418,6 +418,42 @@ void LocalState() {
           "a full list refuses a new title but still changes a listed one");
 }
 
+// 1459/1460 (research/g3pctl-mii/notes.md section 5): what qlaunch's play-timer pill reads.
+void DisplayInfoCheck() {
+    pctl::PlayTimerBlock timer{};
+    rules::PlayTimerNow now{.day_of_week = 3, .hour = 14, .minute = 0, .second = 0,
+                            .posix = 1'000'000, .played_ns = 0};
+    Check(rules::DisplayInfo(timer, false, false, true, now, false).state == 7,
+          "display: no PIN hides the pill (7)");
+    Check(rules::DisplayInfo(timer, true, false, true, now, false).state == 6,
+          "display: PIN, no play timer (6)");
+    Check(rules::DisplayInfo(timer, true, true, false, now, false).state == 5,
+          "display: temporarily unlocked (5) unless ignored");
+    timer[0] = 1;            // enabled, DAILY
+    timer[4 + 5] = 1;        // time to play enabled
+    timer[4 + 6] = 60;       // 60 minutes
+    auto shown = rules::DisplayInfo(timer, true, false, true, now, false);
+    Check(shown.state == 2 && shown.remaining_ns == 3'600'000'000'000 && shown.bedtime == 0,
+          "display: 60 min left, nothing played (2, 3.6e12 ns)");
+    now.played_ns = 3'600'000'000'000;
+    Check(rules::DisplayInfo(timer, true, false, true, now, false).state == 3,
+          "display: limit used up (3)");
+    Check(rules::DisplayInfo(timer, true, false, true, now, true).state == 0,
+          "display: 1459 reads a used-up day as 0");
+    now.played_ns = 0;
+    timer[4] = 1;            // bedtime 14:30 to 07:00
+    timer[4 + 1] = 7;
+    timer[4 + 3] = 14;
+    timer[4 + 4] = 30;
+    shown = rules::DisplayInfo(timer, true, false, true, now, false);
+    Check(shown.state == 1 && shown.bedtime == now.posix + 1800 &&
+              shown.remaining_ns == 1'800'000'000'000,
+          "display: bedtime before the limit's end (1)");
+    now.hour = 15;
+    Check(rules::DisplayInfo(timer, true, false, true, now, false).state == 3,
+          "display: inside bedtime (3)");
+}
+
 int main() {
     Structs();
     Search();
@@ -430,6 +466,7 @@ int main() {
     Mask();
     Slots();
     LocalState();
+    DisplayInfoCheck();
     if (failures != 0) {
         std::printf("pctl_check: %d check(s) failed\n", failures);
         return 1;

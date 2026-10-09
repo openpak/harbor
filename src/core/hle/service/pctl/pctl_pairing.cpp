@@ -3,6 +3,7 @@
 
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -59,7 +60,7 @@ struct Globals {
     std::mutex mutex;
     std::map<std::string, std::unique_ptr<Pairing>> pairings;
     std::weak_ptr<OpenPak::AsyncWorker> worker;
-    std::map<int, std::function<void()>> listeners;
+    std::map<int, std::function<void(bool)>> listeners;
     int next_listener = 1;
 };
 
@@ -69,8 +70,8 @@ Globals& GetGlobals() {
 }
 
 /// Raise every listener; each is a HostEvent raise (thread-safe, never blocks).
-void NotifyChanged() {
-    std::vector<std::function<void()>> listeners;
+void NotifyChanged(bool pairing_gone = false) {
+    std::vector<std::function<void(bool)>> listeners;
     {
         auto& globals = GetGlobals();
         std::lock_guard lock{globals.mutex};
@@ -79,7 +80,7 @@ void NotifyChanged() {
         }
     }
     for (const auto& listener : listeners) {
-        listener();
+        listener(pairing_gone);
     }
 }
 
@@ -150,9 +151,13 @@ struct Pairing::Impl {
     // Unlocked with the PIN until reverted or the next boot (pctl keeps this in memory too).
     bool temporarily_unlocked = false;
 
-    std::string mii_url;
-    std::vector<std::uint8_t> mii;
-    std::string mii_content_type;
+    // pctl's icon cache, per owner (its NA id): the URL a picture came from, and the picture.
+    struct Picture {
+        std::string url;
+        std::vector<std::uint8_t> bytes;
+        std::string content_type;
+    };
+    std::map<std::uint64_t, Picture> pictures;
 
     // The background sync.
     bool synced_this_run = false;
@@ -204,7 +209,7 @@ void Pairing::SetWorker(std::weak_ptr<OpenPak::AsyncWorker> worker) {
     globals.worker = std::move(worker);
 }
 
-int Pairing::AddListener(std::function<void()> listener) {
+int Pairing::AddListener(std::function<void(bool)> listener) {
     auto& globals = GetGlobals();
     std::lock_guard lock{globals.mutex};
     const int id = globals.next_listener++;
@@ -545,9 +550,25 @@ std::optional<Moon::Owner> Pairing::FirstOwner() const {
     return impl->found_owners.front();
 }
 
-std::pair<std::vector<std::uint8_t>, std::string> Pairing::Mii() const {
+std::optional<std::pair<std::vector<std::uint8_t>, std::string>> Pairing::Mii(
+    std::uint64_t nintendo_account_id) const {
     std::lock_guard lock{impl->mutex};
-    return {impl->mii, impl->mii_content_type};
+    const auto owner = std::find_if(impl->found_owners.begin(), impl->found_owners.end(),
+                                    [&](const Moon::Owner& o) {
+                                        return o.nintendo_account_id == nintendo_account_id;
+                                    });
+    if (owner == impl->found_owners.end()) {
+        return std::nullopt;
+    }
+    // pctl answers an owner with no picture URL from the cache too: an empty picture.
+    if (owner->mii_url.empty()) {
+        return std::make_pair(std::vector<std::uint8_t>{}, std::string{});
+    }
+    const auto cached = impl->pictures.find(nintendo_account_id);
+    if (cached == impl->pictures.end() || cached->second.url != owner->mii_url) {
+        return std::nullopt;
+    }
+    return std::make_pair(cached->second.bytes, cached->second.content_type);
 }
 
 void Pairing::SetPin(std::string pin) {
@@ -813,7 +834,11 @@ Moon::Description Pairing::Synchronize(bool* changed_out) {
 
     if (changed) {
         NotifyChanged();
-        // pctl's 4000 after a sync that brought a new setting.
+    }
+    // pctl's 4000 after a sync that changed what is in force. Not on a document that differs only
+    // in text (the first sync of a boot re-reads it; a console setter drops the kept text), which
+    // showed a "settings changed" notice at every start.
+    if (mask != 0) {
         SendSettingsChanged(mask);
     }
     {
@@ -830,19 +855,23 @@ Moon::Description Pairing::Synchronize(bool* changed_out) {
     return Moon::Success;
 }
 
-Moon::Description Pairing::FetchMii() {
-    const auto owner = FirstOwner();
-    const std::string url = owner ? owner->mii_url : std::string{};
-    if (url.empty()) {
-        LOG_UNKNOWN_CONTRACT(Service_PCTL,
-                             "pctl: the owner has no picture URL; answered an empty picture");
+Moon::Description Pairing::FetchMii(std::uint64_t nintendo_account_id) {
+    if (Mii(nintendo_account_id)) {
         return Moon::Success;
     }
+    std::string url;
     {
         std::lock_guard lock{impl->mutex};
-        if (impl->mii_url == url && !impl->mii.empty()) {
-            return Moon::Success;
+        for (const auto& owner : impl->found_owners) {
+            if (owner.nintendo_account_id == nintendo_account_id) {
+                url = owner.mii_url;
+            }
         }
+    }
+    if (url.empty()) {
+        LOG_UNKNOWN_CONTRACT(Service_PCTL,
+                             "pctl: the owner is unknown or has no picture URL; nothing fetched");
+        return Moon::Success;
     }
     constexpr std::string_view scheme = "https://";
     if (url.substr(0, scheme.size()) != scheme) {
@@ -866,16 +895,27 @@ Moon::Description Pairing::FetchMii() {
     if (reply.status != 200) {
         return Refused("picture", reply);
     }
+    // pctl's downloader stops past 0x18000 bytes (23.0.1 0x08562B00); qlaunch draws only a
+    // 128x128 PNG (research/g3pctl-mii/notes.md).
+    constexpr std::size_t MaxPicture = 0x18000;
+    if (reply.body.size() > MaxPicture) {
+        LOG_WARNING(Service_PCTL, "pctl: the owner's picture is {} bytes, over pctl's {}; not kept",
+                    reply.body.size(), MaxPicture);
+        return Unreachable;
+    }
     std::lock_guard lock{impl->mutex};
-    impl->mii_url = url;
-    impl->mii.assign(reply.body.begin(), reply.body.end());
-    impl->mii_content_type = reply.content_type.substr(0, reply.content_type.find(';'));
+    auto& picture = impl->pictures[nintendo_account_id];
+    picture.url = url;
+    picture.bytes.assign(reply.body.begin(), reply.body.end());
+    picture.content_type = reply.content_type.substr(0, reply.content_type.find(';'));
     return Moon::Success;
 }
 
 void Pairing::ForgetPairing() {
+    bool was_paired;
     {
         std::lock_guard lock{impl->mutex};
+        was_paired = impl->active;
         impl->paired_device = 0;
         impl->active = false;
         impl->setting_etag.clear();
@@ -890,7 +930,7 @@ void Pairing::ForgetPairing() {
         impl->temporarily_unlocked = false;
         impl->SaveLocked();
     }
-    NotifyChanged();
+    NotifyChanged(was_paired);
 }
 
 void Pairing::SyncSoon() {
