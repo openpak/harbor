@@ -94,11 +94,22 @@ public:
                                   OutBuffer<BufferAttr_HipcMapAlias> out_buffer,
                                   u64 application_id,
                                   InBuffer<BufferAttr_HipcMapAlias> logo_path_buffer);
-    Result Unknown4022(OutCopyHandle<Kernel::KReadableEvent> out_event);
     Result Unknown4023(Out<UnknownTryPopRecord> out_record);
-    Result Unknown4042(OutInterface<IAsyncResult> out_interface,
-                       OutCopyHandle<Kernel::KReadableEvent> out_event,
-                       u64 arg1, u64 arg2);
+
+    // [Harbor] Virtual Game Cards on a console that owns none (virtual_game_cards.h). The async
+    // commands answer by the object type 23.0.1 ns hands out for each; inputs are not needed.
+    Result GetVgcNotificationEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    void VgcAsyncResult(HLERequestContext& ctx);
+    void VgcAsyncValue(HLERequestContext& ctx);
+    void VgcAsyncData(HLERequestContext& ctx);
+    void VgcOperation(HLERequestContext& ctx);
+    void VgcUserFlag(HLERequestContext& ctx);
+    void VgcHasReceivedGuidance(HLERequestContext& ctx);
+    void VgcMarkGuidanceReceived(HLERequestContext& ctx);
+    void VgcTransferState(HLERequestContext& ctx);
+    void VgcNoOutput(HLERequestContext& ctx);
+    void Vgc4050(HLERequestContext& ctx);
+    void Vgc4054(HLERequestContext& ctx);
     Result Unknown4053();
     Result Unknown4105();
 
@@ -150,6 +161,7 @@ private:
     Event unknown1508_event;
     Event async_completed_event;
     Event unknown4008_event;
+    Event vgc_notification_event;
 };
 
 } // namespace Service::NS

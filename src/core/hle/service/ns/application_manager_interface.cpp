@@ -22,6 +22,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/hle/service/ns/content_management_interface.h"
 #include "core/hle/service/ns/read_only_application_control_data_interface.h"
+#include "core/hle/service/ns/virtual_game_cards.h"
 #include "core/file_sys/patch_manager.h"
 #include "frontend_common/firmware_manager.h"
 #include "core/launch_timestamp_cache.h"
@@ -364,7 +365,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
       gamecard_attachment_event{service_context}, sd_card_removed_event{service_context},
       application_shell_event{service_context}, unknown518_event{service_context},
       unknown1508_event{service_context}, async_completed_event{service_context},
-      unknown4008_event{service_context} {
+      unknown4008_event{service_context}, vgc_notification_event{service_context} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IApplicationManagerInterface::ListApplicationRecord>, "ListApplicationRecord"},
@@ -723,93 +724,99 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {3105, nullptr, "GetApplicationStartupMovie"}, //18.0.0+
         {4000, nullptr, "Unknown4000"}, //20.0.0+
         {4004, nullptr, "Unknown4004"}, //20.0.0+
-        {4006, nullptr, "Unknown4006"}, //20.0.0+
-        {4007, nullptr, "Unknown4007"}, //20.0.0+
+        {4006, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4006"}, //20.0.0+
+        {4007, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4007"}, //20.0.0+
         {4008, D<&IApplicationManagerInterface::Unknown4008>, "Unknown4008"}, //20.0.0+
-        {4009, nullptr, "Unknown4009"}, //20.0.0+
-        {4010, nullptr, "Unknown4010"}, //20.0.0+
-        {4011, nullptr, "Unknown4011"}, //20.0.0+
-        {4012, nullptr, "Unknown4012"}, //20.0.0+
-        {4013, nullptr, "Unknown4013"}, //20.0.0+
-        {4015, nullptr, "Unknown4015"}, //20.0.0+
-        {4017, nullptr, "Unknown4017"}, //20.0.0+
-        {4019, nullptr, "Unknown4019"}, //20.0.0+
-        {4020, nullptr, "Unknown4020"}, //20.0.0+
-        {4021, nullptr, "Unknown4021"}, //20.0.0+
-        {4022, D<&IApplicationManagerInterface::Unknown4022>, "Unknown4022"}, //20.0.0+
+        {4009, &IApplicationManagerInterface::VgcAsyncData, "Unknown4009"}, //20.0.0+
+        {4010, &IApplicationManagerInterface::VgcAsyncData, "Unknown4010"}, //20.0.0+
+        {4011, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4011"}, //20.0.0+
+        {4012, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4012"}, //20.0.0+
+        {4013, &IApplicationManagerInterface::VgcAsyncData, "Unknown4013"}, //20.0.0+
+        {4015, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4015"}, //20.0.0+
+        {4017, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4017"}, //20.0.0+
+        {4019, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4019"}, //20.0.0+
+        {4020, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4020"}, //20.0.0+
+        {4021, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4021"}, //20.0.0+
+        {4022, D<&IApplicationManagerInterface::GetVgcNotificationEvent>, "Unknown4022"}, //20.0.0+
         {4023, D<&IApplicationManagerInterface::Unknown4023>, "Unknown4023"}, //20.0.0+
-        {4024, nullptr, "Unknown4024"}, //20.0.0+
-        {4025, nullptr, "Unknown4025"}, //20.0.0+
-        {4026, nullptr, "Unknown4026"}, //20.0.0+
-        {4027, nullptr, "Unknown4027"}, //20.0.0+
-        {4028, nullptr, "Unknown4028"}, //20.0.0+
-        {4029, nullptr, "Unknown4029"}, //20.0.0+
-        {4030, nullptr, "Unknown4030"}, //20.0.0+
-        {4031, nullptr, "Unknown4031"}, //20.0.0+
-        {4032, nullptr, "Unknown4032"}, //20.0.0+
-        {4033, nullptr, "Unknown4033"}, //20.0.0+
+        {4024, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4024"}, //20.0.0+
+        {4025, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4025"}, //20.0.0+
+        {4026, &IApplicationManagerInterface::VgcOperation, "Unknown4026"}, //20.0.0+
+        {4027, &IApplicationManagerInterface::VgcOperation, "Unknown4027"}, //20.0.0+
+        {4028, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4028"}, //20.0.0+
+        {4029, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4029"}, //20.0.0+
+        {4030, &IApplicationManagerInterface::VgcAsyncData, "Unknown4030"}, //20.0.0+
+        {4031, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4031"}, //20.0.0+
+        {4032, &IApplicationManagerInterface::VgcUserFlag, "Unknown4032"}, //20.0.0+
+        {4033, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4033"}, //20.0.0+
         {4034, nullptr, "Unknown4034"}, //20.0.0+
-        {4035, nullptr, "Unknown4035"}, //20.0.0+
-        {4037, nullptr, "Unknown4037"}, //20.0.0+
-        {4038, nullptr, "Unknown4038"}, //20.0.0+
+        {4035, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4035"}, //20.0.0+
+        {4037, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4037"}, //20.0.0+
+        {4038, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4038"}, //20.0.0+
         {4039, nullptr, "Unknown4039"}, //20.0.0+
-        {4040, nullptr, "Unknown4040"}, //20.0.0+
-        {4041, nullptr, "Unknown4041"}, //20.0.0+
-        {4042, D<&IApplicationManagerInterface::Unknown4042>, "Unknown4042"}, //20.0.0+
-        {4043, nullptr, "Unknown4043"}, //20.0.0+
-        {4044, nullptr, "Unknown4044"}, //20.0.0+
-        {4045, nullptr, "Unknown4045"}, //20.0.0+
+        {4040, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4040"}, //20.0.0+
+        {4041, &IApplicationManagerInterface::VgcAsyncData, "Unknown4041"}, //20.0.0+
+        {4042, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4042"}, //20.0.0+
+        {4043, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4043"}, //20.0.0+
+        {4044, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4044"}, //20.0.0+
+        {4045, &IApplicationManagerInterface::VgcAsyncData, "Unknown4045"}, //20.0.0+
         {4046, nullptr, "Unknown4046"}, //20.0.0+
-        {4049, nullptr, "Unknown4049"}, //20.0.0+
-        {4050, nullptr, "Unknown4050"}, //20.0.0+
-        {4051, nullptr, "Unknown4051"}, //20.0.0+
-        {4052, nullptr, "Unknown4052"}, //20.0.0+
+        {4049, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4049"}, //20.0.0+
+        {4050, &IApplicationManagerInterface::Vgc4050, "Unknown4050"}, //20.0.0+
+        {4051, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4051"}, //20.0.0+
+        {4052, &IApplicationManagerInterface::VgcAsyncData, "Unknown4052"}, //20.0.0+
         {4053, D<&IApplicationManagerInterface::Unknown4053>, "Unknown4053"}, //20.0.0+
-        {4054, nullptr, "Unknown4054"}, //20.0.0+
-        {4055, nullptr, "Unknown4055"}, //20.0.0+
-        {4056, nullptr, "Unknown4056"}, //20.0.0+
+        {4054, &IApplicationManagerInterface::Vgc4054, "Unknown4054"}, //20.0.0+
+        {4055, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4055"}, //20.0.0+
+        {4056, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4056"}, //20.0.0+
         {4057, nullptr, "Unknown4057"}, //20.0.0+
         {4058, D<&IApplicationManagerInterface::Unknown4058>, "Unknown4058"}, //20.0.0+
         {4059, nullptr, "Unknown4059"}, //20.0.0+
         {4060, nullptr, "Unknown4060"}, //20.0.0+
-        {4061, nullptr, "Unknown4061"}, //20.0.0+
-        {4062, nullptr, "Unknown4062"}, //20.0.0+
+        {4061, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4061"}, //20.0.0+
+        {4062, &IApplicationManagerInterface::VgcUserFlag, "Unknown4062"}, //20.0.0+
         {4063, nullptr, "Unknown4063"}, //20.0.0+
         {4064, nullptr, "Unknown4064"}, //20.0.0+
-        {4065, nullptr, "Unknown4065"}, //20.0.0+
+        {4065, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4065"}, //20.0.0+
         {4066, nullptr, "Unknown4066"}, //20.0.0+
         {4067, nullptr, "Unknown4067"}, //20.0.0+
-        {4068, nullptr, "Unknown4068"}, //20.0.0+
-        {4069, nullptr, "Unknown4069"}, //20.0.0+
-        {4070, nullptr, "Unknown4070"}, //20.0.0+
-        {4071, nullptr, "Unknown4071"}, //20.0.0+
-        {4072, nullptr, "Unknown4072"}, //20.0.0+
-        {4073, nullptr, "Unknown4073"}, //20.0.0+
+        {4068, &IApplicationManagerInterface::VgcAsyncData, "Unknown4068"}, //20.0.0+
+        {4069, &IApplicationManagerInterface::VgcAsyncData, "Unknown4069"}, //20.0.0+
+        {4070, &IApplicationManagerInterface::VgcAsyncData, "Unknown4070"}, //20.0.0+
+        {4071, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4071"}, //20.0.0+
+        {4072, &IApplicationManagerInterface::VgcHasReceivedGuidance, "Unknown4072"}, //20.0.0+
+        {4073, &IApplicationManagerInterface::VgcMarkGuidanceReceived, "Unknown4073"}, //20.0.0+
         {4074, D<&IApplicationManagerInterface::RequestSyncAccountContentState>, "Unknown4074"}, //20.0.0+
-        {4075, nullptr, "Unknown4075"}, //20.0.0+
-        {4076, nullptr, "Unknown4076"}, //20.0.0+
+        {4075, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4075"}, //20.0.0+
+        {4076, &IApplicationManagerInterface::VgcAsyncData, "Unknown4076"}, //20.0.0+
         {4077, nullptr, "Unknown4077"}, //20.0.0+
         {4078, nullptr, "Unknown4078"}, //20.0.0+
-        {4079, nullptr, "Unknown4079"}, //20.0.0+
-        {4080, nullptr, "Unknown4080"}, //20.0.0+
+        {4079, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4079"}, //20.0.0+
+        {4080, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4080"}, //20.0.0+
         {4081, nullptr, "Unknown4081"}, //20.0.0+
-        {4083, nullptr, "Unknown4083"}, //20.0.0+
+        {4083, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4083"}, //20.0.0+
         {4084, D<&IApplicationManagerInterface::Unknown4084>, "Unknown4084"}, //20.0.0+
-        {4085, nullptr, "Unknown4085"}, //20.0.0+
-        {4086, nullptr, "Unknown4086"}, //20.0.0+
-        {4087, nullptr, "Unknown4087"}, //20.0.0+
-        {4088, D<&IApplicationManagerInterface::Unknown4022>, "Unknown4088"}, //20.0.0+
+        {4085, &IApplicationManagerInterface::VgcNoOutput, "Unknown4085"}, //20.0.0+
+        {4086, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4086"}, //20.0.0+
+        {4087, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4087"}, //20.0.0+
+        {4088, D<&IApplicationManagerInterface::GetVgcNotificationEvent>, "Unknown4088"}, //20.0.0+
         {4089, D<&IApplicationManagerInterface::Unknown4089>, "Unknown4089"}, //20.0.0+
-        {4090, nullptr, "Unknown4090"}, //20.0.0+
-        {4091, nullptr, "Unknown4091"}, //20.0.0+
-        {4092, nullptr, "Unknown4092"}, //20.0.0+
-        {4093, nullptr, "Unknown4093"}, //20.0.0+
+        {4090, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4090"}, //20.0.0+
+        {4091, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4091"}, //20.0.0+
+        {4092, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4092"}, //20.0.0+
+        {4093, &IApplicationManagerInterface::VgcTransferState, "Unknown4093"}, //20.0.0+
         {4094, nullptr, "Unknown4094"}, //20.0.0+
-        {4095, nullptr, "Unknown4095"}, //20.0.0+
+        {4095, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4095"}, //20.0.0+
         {4096, D<&IApplicationManagerInterface::Unknown4096>, "Unknown4096"}, //20.0.0+
         {4097, nullptr, "Unknown4097"}, //20.0.0+
         {4099, nullptr, "Unknown4099"}, //21.0.0+
+        {4100, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4100"}, //23.0.0+
+        {4103, &IApplicationManagerInterface::VgcNoOutput, "Unknown4103"}, //23.0.0+
+        {4104, &IApplicationManagerInterface::VgcUserFlag, "Unknown4104"}, //23.0.0+
         {4105, D<&IApplicationManagerInterface::Unknown4105>, "Unknown4105"}, //23.0.0+
+        {4107, &IApplicationManagerInterface::VgcAsyncData, "Unknown4107"}, //23.0.0+
+        {4108, &IApplicationManagerInterface::VgcAsyncResult, "Unknown4108"}, //23.0.0+
+        {4109, &IApplicationManagerInterface::VgcAsyncValue, "Unknown4109"}, //23.0.0+
         {5000, nullptr, "Unknown5000"}, //18.0.0+
         {5001, nullptr, "Unknown5001"}, //18.0.0+
         {9999, nullptr, "GetApplicationCertificate"}, //10.0.0-10.2.0
@@ -1301,14 +1308,6 @@ Result IApplicationManagerInterface::RequestDownloadApplicationControlDataInBack
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4022(
-    OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_WARNING(Service_NS, "(STUBBED) called");
-    unknown_event.Signal(system.Kernel());
-    *out_event = unknown_event.GetHandle();
-    R_SUCCEED();
-}
-
 Result IApplicationManagerInterface::Unknown4023(Out<UnknownTryPopRecord> out_record) {
     // Pairs with the 4022 event: a try-pop answering (bool, 0x50-byte record), as the Ryujinx
     // Harbor does. The shape is inferred from the client proxy stub, not proven.
@@ -1319,15 +1318,107 @@ Result IApplicationManagerInterface::Unknown4023(Out<UnknownTryPopRecord> out_re
     R_SUCCEED();
 }
 
-Result IApplicationManagerInterface::Unknown4042(OutInterface<IAsyncResult> out_interface,
-                                                 OutCopyHandle<Kernel::KReadableEvent> out_event,
-                                                 u64 arg1, u64 arg2) {
-    LOG_UNKNOWN_CONTRACT(Service_NS, "IApplicationManagerInterface 4042 (Virtual Game Cards), "
-                                     "arg1={:016X} arg2={:016X}; IAsyncResult on the shared event",
-                         arg1, arg2);
-    *out_event = unknown_event.GetHandle();
-    *out_interface = std::make_shared<IAsyncResult>(system, &unknown_event);
+// [Harbor] Virtual Game Cards. 23.0.1 ns answers these from its per-user VGC record, synced from
+// the server (nim 2025); OpenPak serves no licences, so the console holds the default record: no
+// cards, no linked devices, every flag false (research/vgc-re/notes.md §2, §4). Shapes are verified
+// against 23.0.1 ns and qlaunch; what each command means is mostly inferred, so each logs an
+// unknown contract once.
+
+Result IApplicationManagerInterface::GetVgcNotificationEvent(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    // 4022 and 4088: qlaunch's interval job waits on the event, then pops (4023, 4089) until the
+    // pop answers false. Nothing is ever queued, so the event never signals; a signalled one made
+    // the job pop in a loop.
+    Vgc::LogOnce(4022, "notification event (4022, 4088), never signalled");
+    *out_event = vgc_notification_event.GetHandle();
     R_SUCCEED();
+}
+
+void IApplicationManagerInterface::VgcAsyncResult(HLERequestContext& ctx) {
+    Vgc::LogOnce(ctx.GetCommand(), "no VGCs; answered a completed IAsyncResult (Get success)");
+    Vgc::ReplyCompleted(system, ctx, Vgc::ICompletedAsync::Kind::Result);
+}
+
+void IApplicationManagerInterface::VgcAsyncValue(HLERequestContext& ctx) {
+    Vgc::LogOnce(ctx.GetCommand(), "no VGCs; answered a completed, empty IAsyncValue");
+    Vgc::ReplyCompleted(system, ctx, Vgc::ICompletedAsync::Kind::Value);
+}
+
+void IApplicationManagerInterface::VgcAsyncData(HLERequestContext& ctx) {
+    // The lists (4008/4009 cards in 0x40-byte entries, 4010 devices in 0x200-byte entries, ...):
+    // size 0 is the empty list qlaunch shows as such.
+    Vgc::LogOnce(ctx.GetCommand(), "no VGCs; answered a completed, empty IAsyncData");
+    Vgc::ReplyCompleted(system, ctx, Vgc::ICompletedAsync::Kind::Data);
+}
+
+void IApplicationManagerInterface::VgcOperation(HLERequestContext& ctx) {
+    Vgc::LogOnce(ctx.GetCommand(), "answered an object whose 0-2 complete at once");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<Vgc::IOperation>(ctx, system, ctx.GetCommand());
+}
+
+void IApplicationManagerInterface::VgcUserFlag(HLERequestContext& ctx) {
+    // (Uid) -> bool. 4032 online_license.is_available and 4062 activity.has_inserted come from the
+    // record (0x08721780, 0x08721A00), 4104 from a RAM list of users 4103 marks (0x08729C8C):
+    // all false here.
+    Vgc::LogOnce(ctx.GetCommand(), "per-user flag; answered false");
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(false);
+}
+
+void IApplicationManagerInterface::VgcHasReceivedGuidance(HLERequestContext& ctx) {
+    // 4072 (Uid) -> bool activity.has_received_guidance (0x087217C8). Real ns answers 2016-4109
+    // before the account's first sync and qlaunch then runs 4033; with nothing to sync the record
+    // is the default one, so this answers as after that sync.
+    IPC::RequestParser rp{ctx};
+    const auto user_id = rp.PopRaw<Common::UUID>();
+    const bool received = Vgc::HasReceivedGuidance(user_id);
+    Vgc::LogOnce(ctx.GetCommand(), "has_received_guidance from the default record");
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(received);
+}
+
+void IApplicationManagerInterface::VgcMarkGuidanceReceived(HLERequestContext& ctx) {
+    // 4073 (Uid) -> IAsyncResult: the VGC page's fetch job sends it once the guidance has been
+    // shown (qlaunch 0x08F889C0); ns sets the flag in the record and uploads it (nim 2026).
+    IPC::RequestParser rp{ctx};
+    const auto user_id = rp.PopRaw<Common::UUID>();
+    Vgc::SetReceivedGuidance(user_id);
+    Vgc::LogOnce(ctx.GetCommand(), "guidance marked received; nothing uploaded");
+    Vgc::ReplyCompleted(system, ctx, Vgc::ICompletedAsync::Kind::Result);
+}
+
+void IApplicationManagerInterface::VgcTransferState(HLERequestContext& ctx) {
+    // 4093 (Uid) -> IAsyncValue of 8 bytes; qlaunch sets a global flag when byte 0 is 1
+    // (0x08F8B9F0). Zero: nothing to report.
+    Vgc::LogOnce(ctx.GetCommand(), "answered 8 zero bytes");
+    Vgc::ReplyCompleted(system, ctx, Vgc::ICompletedAsync::Kind::Value, std::vector<u8>(8));
+}
+
+void IApplicationManagerInterface::VgcNoOutput(HLERequestContext& ctx) {
+    // 4085 (0x20 bytes in) and 4103 (Uid, bool): nothing out. qlaunch aborts if 4103 fails.
+    Vgc::LogOnce(ctx.GetCommand(), "answered success");
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
+void IApplicationManagerInterface::Vgc4050(HLERequestContext& ctx) {
+    // (u64) -> (u32, out buffer): a count and entries; none here.
+    Vgc::LogOnce(ctx.GetCommand(), "answered count 0");
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push<u32>(0);
+}
+
+void IApplicationManagerInterface::Vgc4054(HLERequestContext& ctx) {
+    // () -> 0x22 raw bytes; zeroed.
+    Vgc::LogOnce(ctx.GetCommand(), "answered 0x22 zero bytes");
+    IPC::ResponseBuilder rb{ctx, 2 + 9};
+    rb.Push(ResultSuccess);
+    rb.PushRaw(std::array<u8, 0x24>{});
 }
 
 Result IApplicationManagerInterface::Unknown4053() {
