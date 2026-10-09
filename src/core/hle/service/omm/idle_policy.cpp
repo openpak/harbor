@@ -18,6 +18,7 @@
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/frontend/emulated_devices.h"
 #include "hid_core/hid_core.h"
+#include "common/harbor_crash.h"
 
 namespace Service::OMM {
 
@@ -177,6 +178,7 @@ std::chrono::nanoseconds IdlePolicy::DimTime(const Settings& settings,
 
 IdlePolicy::IdlePolicy(Core::System& system)
     : m_system{system}, m_context{system, "idle:sys"}, m_auto_power_down_event{m_context} {
+    HARBOR_CRUMB("omm: idle policy start");
     m_last_activity = std::chrono::steady_clock::now();
     m_tick_event = Core::Timing::CreateEvent(
         "idle:Tick",
@@ -192,6 +194,7 @@ IdlePolicy::IdlePolicy(Core::System& system)
     }
     // A new session starts at full brightness, whatever the last one ended with.
     m_system.GetAppletManager().OnDimChanged(false);
+    HARBOR_CRUMB("omm: idle policy started");
 }
 
 IdlePolicy::~IdlePolicy() {
@@ -214,6 +217,7 @@ bool IdlePolicy::IsDimmed() {
 }
 
 void IdlePolicy::LoadAndApplySettings() {
+    HARBOR_CRUMB("omm: LoadAndApplySettings");
     auto set_sys =
         m_system.ServiceManager().GetService<Set::ISystemSettingsServer>("set:sys", false);
     if (!set_sys) {
@@ -289,6 +293,7 @@ bool IdlePolicy::PollInput() {
 }
 
 void IdlePolicy::Tick() {
+    HARBOR_CRUMB_ONCE("omm: first idle Tick");
     auto& applet_manager = m_system.GetAppletManager();
     auto* window_system = applet_manager.GetWindowSystem();
     if (!applet_manager.IsHomeSession() || window_system == nullptr) {

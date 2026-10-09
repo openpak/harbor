@@ -20,6 +20,7 @@
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/vfs/vfs_vector.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "common/harbor_crash.h"
 
 namespace Service::FileSystem::SaveTransfer {
 
@@ -69,6 +70,7 @@ struct Package2Header {
 static_assert(sizeof(Package2Header) == 0x200);
 
 void Ctr(const Key128& key, const Key128& iv, u8* data, std::size_t size) {
+    HARBOR_CRUMB_ONCE("fs: first OpenSSL AES-CTR");
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     int len = 0;
     EVP_DecryptInit_ex(ctx, EVP_aes_128_ctr(), nullptr, key.data(), iv.data());
@@ -199,6 +201,7 @@ std::optional<FsKeySources> FsKeySourcesFromNand(const FileSys::RegisteredCache&
 }
 
 std::optional<FsKeySources> InstalledFsKeySources(Core::System& system) {
+    HARBOR_CRUMB("fs: key-source lookup");
     static std::mutex mutex;
     static std::optional<FsKeySources> cached;
     std::lock_guard lock{mutex};

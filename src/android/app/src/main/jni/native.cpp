@@ -107,6 +107,7 @@ extern "C" {
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/shader_notify.h"
 #include "network/announce_multiplayer_session.h"
+#include "common/harbor_crash.h"
 
 #define jconst [[maybe_unused]] const auto
 #define jauto [[maybe_unused]] auto
@@ -2019,7 +2020,7 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_updatePowerState(
         jint percentage,
         jboolean isCharging,
         jboolean hasBattery) {
-
+    HARBOR_CRUMB_ONCE("psm: first updatePowerState from Java");
     g_battery_percentage.store(percentage, std::memory_order_relaxed);
     g_is_charging.store(isCharging, std::memory_order_relaxed);
     g_has_battery.store(hasBattery, std::memory_order_relaxed);

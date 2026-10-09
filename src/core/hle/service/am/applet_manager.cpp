@@ -22,6 +22,7 @@
 #include "core/hle/service/am/window_system.h"
 #include "hid_core/hid_types.h"
 #include "core/hle/service/am/process_creation.h"
+#include "common/harbor_crash.h"
 
 namespace Service::AM {
 
@@ -317,6 +318,7 @@ void AppletManager::PowerButtonShortPress() {
 }
 
 void AppletManager::SetSleepHandler(std::function<void(bool)> handler) {
+    HARBOR_CRUMB("am: SetSleepHandler");
     std::scoped_lock lk{m_sleep_lock};
     m_sleep_handler = std::move(handler);
 }
@@ -330,6 +332,7 @@ void AppletManager::OnSleepStateChanged(bool sleeping) {
 }
 
 void AppletManager::SetDimHandler(std::function<void(bool)> handler) {
+    HARBOR_CRUMB("am: SetDimHandler");
     std::scoped_lock lk{m_sleep_lock};
     m_dim_handler = std::move(handler);
 }
@@ -376,6 +379,7 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     const bool home_session = m_home_session.load();
     if (home_session) {
         LOG_INFO(Service_AM, "HOME session: firmware library applets, overlay applet on");
+        ::Common::HarborCrash::LogSignalHandlers("at the HOME session start");
     }
 
     const auto launch_overlay = [&] {
@@ -389,8 +393,10 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
                                     "system pop-ups will not show");
             return;
         }
+        HARBOR_CRUMB("am: overlay applet load start");
         auto overlay_process =
             CreateProcess(m_system, static_cast<u64>(AppletProgramId::OverlayDisplay), 0, 0);
+        HARBOR_CRUMB("am: overlay applet process created");
         if (!overlay_process) {
             LOG_WARNING(Service_AM, "am: overlay applet {:016x} not started; system pop-ups will not show",
                         static_cast<u64>(AppletProgramId::OverlayDisplay));
@@ -405,6 +411,7 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
         overlay_applet->home_button_short_pressed_blocked = false;
         overlay_applet->home_button_long_pressed_blocked = false;
         (void)m_window_system->TrackApplet(overlay_applet, false);
+        HARBOR_CRUMB("am: overlay applet Run");
         overlay_applet->process->Run();
         LOG_INFO(Service_AM, "am: overlay applet {:016x} started as pid {}",
                  overlay_applet->program_id, overlay_applet->aruid.pid);
@@ -416,6 +423,7 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
         launch_overlay();
     }
 
+    HARBOR_CRUMB("am: root applet (qlaunch) applet creation");
     const auto& params = m_pending_parameters;
     auto applet = std::make_shared<Applet>(m_system, std::move(m_pending_process),
                                            params.applet_id == AppletId::Application);

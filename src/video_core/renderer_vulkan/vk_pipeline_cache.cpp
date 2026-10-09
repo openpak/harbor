@@ -47,6 +47,7 @@
 
 #ifdef __ANDROID__
 #include "../../android/app/src/main/jni/android_settings.h"
+#include "common/harbor_crash.h"
 #endif
 
 namespace Vulkan {
@@ -1021,6 +1022,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
 void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                                  const vk::PipelineCache& pipeline_cache,
                                                  u32 cache_version) try {
+    HARBOR_CRUMB("renderer: pipeline cache serialize");
     std::ofstream file(filename, std::ios::binary);
     file.exceptions(std::ifstream::failbit);
     if (!file.is_open()) {

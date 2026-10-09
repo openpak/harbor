@@ -20,6 +20,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "common/harbor_crash.h"
 
 namespace AudioCore::Sink {
 
@@ -28,6 +29,7 @@ std::atomic<f32> console_output_gain{1.0f};
 } // namespace
 
 void SetConsoleOutputGain(f32 gain) {
+    HARBOR_CRUMB_ONCE("audio: first SetConsoleOutputGain");
     console_output_gain.store(std::clamp(gain, 0.0f, 1.0f), std::memory_order_relaxed);
 }
 
@@ -36,6 +38,7 @@ f32 GetConsoleOutputGain() {
 }
 
 void SinkStream::AppendBuffer(SinkBuffer& buffer, std::span<s16> samples) {
+    HARBOR_CRUMB_ONCE("audio: first sink buffer appended");
     if (type == StreamType::In)
         return;
 

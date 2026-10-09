@@ -12,10 +12,12 @@
 #include "core/hle/service/service.h"
 #include "core/launch_timestamp_cache.h"
 #include "frontend_common/play_time_manager.h"
+#include "common/harbor_crash.h"
 
 namespace Service::NS {
 
 IQueryService::IQueryService(Core::System& system_) : ServiceFramework{system_, "pdm:qry"} {
+    HARBOR_CRUMB("pdm: pdm:qry created");
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, nullptr, "QueryAppletEvent"},

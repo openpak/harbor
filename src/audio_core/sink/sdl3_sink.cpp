@@ -15,6 +15,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "core/core.h"
+#include "common/harbor_crash.h"
 
 namespace AudioCore::Sink {
 
@@ -243,10 +244,12 @@ SDLSink::~SDLSink() = default;
 
 SinkStream* SDLSink::AcquireSinkStream(Core::System& system, u32 system_channels_,
                                        const std::string&, StreamType type) {
+    HARBOR_CRUMB("audio: SDL stream creation");
     system_channels = system_channels_;
     SinkStreamPtr& stream = sink_streams.emplace_back(std::make_unique<SDLSinkStream>(
         device_channels, system_channels, output_device, input_device, type, system));
     stream->SetDeviceVolume(device_volume);
+    HARBOR_CRUMB("audio: SDL stream created");
     return stream.get();
 }
 

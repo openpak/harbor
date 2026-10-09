@@ -13,6 +13,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "core/core.h"
+#include "common/harbor_crash.h"
 
 #ifdef _WIN32
 #include <objbase.h>
@@ -258,10 +259,12 @@ CubebSink::~CubebSink() {
 
 SinkStream* CubebSink::AcquireSinkStream(Core::System& system, u32 system_channels_,
                                          const std::string& name, StreamType type) {
+    HARBOR_CRUMB("audio: cubeb stream creation");
     system_channels = system_channels_;
     SinkStreamPtr& stream = sink_streams.emplace_back(std::make_unique<CubebSinkStream>(
         ctx, device_channels, system_channels, output_device, input_device, name, type, system));
     stream->SetDeviceVolume(device_volume);
+    HARBOR_CRUMB("audio: cubeb stream created");
 
     return stream.get();
 }

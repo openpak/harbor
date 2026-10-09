@@ -25,6 +25,7 @@
 #include "core/openpak/async_worker.h"
 #include "core/openpak/olsc.h"
 #include "core/openpak/session.h"
+#include "common/harbor_crash.h"
 
 namespace Service::OLSC {
 
@@ -349,6 +350,7 @@ void TransferQueue::OnApplicationExited(Core::System& system, u64 application_id
 }
 
 TransferQueue::TransferQueue(Core::System& system_) : system{system_} {
+    HARBOR_CRUMB("olsc: transfer runner start");
     thread = std::jthread([this](std::stop_token stop) { Run(stop); });
 }
 
@@ -690,8 +692,11 @@ void TransferQueue::Autonomy() {
 }
 
 void TransferQueue::Run(std::stop_token stop) {
+    HARBOR_CRUMB("olsc: transfer runner thread runs");
     while (!stop.stop_requested()) {
+        HARBOR_CRUMB_ONCE("olsc: first boot pass (Autonomy)");
         Autonomy();
+        HARBOR_CRUMB_ONCE("olsc: first boot pass done");
         TransferTask task;
         {
             std::unique_lock lock{mutex};

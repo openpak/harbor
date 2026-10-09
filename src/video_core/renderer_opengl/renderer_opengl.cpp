@@ -28,6 +28,7 @@
 #include "video_core/renderer_opengl/gl_shader_util.h"
 #include "video_core/renderer_opengl/renderer_opengl.h"
 #include "video_core/textures/decoders.h"
+#include "common/harbor_crash.h"
 
 namespace OpenGL {
 namespace {
@@ -186,6 +187,7 @@ void RendererOpenGL::Composite(std::span<const Tegra::FramebufferConfig> framebu
     gpu.RendererFrameEndNotify();
     rasterizer.TickFrame();
 
+    HARBOR_CRUMB_ONCE("renderer: first OpenGL SwapBuffers");
     context->SwapBuffers();
     render_window.OnFrameDisplayed();
 }

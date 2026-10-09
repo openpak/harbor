@@ -19,6 +19,7 @@
 #include "core/hle/service/sm/sm.h"
 #include "common/redact.h"
 #include "common/settings.h"
+#include "common/harbor_crash.h"
 #include <algorithm>
 
 namespace Service::Audio {
@@ -92,6 +93,7 @@ IAudioController::IAudioController(Core::System& system_)
 
     RegisterHandlers(functions);
 
+    HARBOR_CRUMB("audctl: IAudioController created");
     // A new session starts at the console's full volume; audctl lowers it in a HOME session.
     AudioCore::Sink::SetConsoleOutputGain(1.0f);
 
@@ -286,6 +288,7 @@ static std::optional<Set::AudioVolumeTarget> VolumeRecordFor(Set::AudioOutputMod
 }
 
 void IAudioController::RestoreStoredVolume(Set::AudioOutputModeTarget target) {
+    HARBOR_CRUMB("audctl: volume restore");
     const auto record = VolumeRecordFor(target);
     if (!record || !m_set_sys) {
         return;
