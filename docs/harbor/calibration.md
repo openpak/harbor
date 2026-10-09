@@ -83,9 +83,20 @@ alphanumerics with a check digit" test.
 - Later boots: verify every check, find the device key, open the ECC key. Log: `calibration:
   loaded (32768 bytes, checks pass, device key present)`.
 - Binary fails a check: kept as `prodinfo.bin.invalid`, a new one is made.
-- Device key missing (NAND restored on another host, password store reset, or no store so the
-  key lived in memory only): same serial, addresses and device id, new key pairs and a new
-  device key (certificates then need signing again). Logged as a warning.
+- Keys are never replaced on their own (2026-10-09, after a phone start that ran before the
+  password store was installed replaced a console's key pairs). `Calibration::Keys()`:
+  - `StoreUnavailable`: the frontend has not decided the password store yet
+    (`OpenPak::SecretStoreDecided()`), or the store could not be read. Nothing is made or
+    replaced; the binary's identity is used, and the key is looked up again once the store is
+    decided (or after 30 s for a read error). A NAND with no binary waits too.
+  - `NotOnThisHost`: the store answered, and the key is absent or not this console's. The console
+    runs but does not sign in to OpenPak (no self-signed stand-in either); the frontend says so at
+    console start and points to Restore console or Make this a new console.
+  - `BackupPending`: a restored NAND carrying its sealed key; Restore console asks the passphrase.
+- Every frontend start decides the store first: Qt calls `InstallSecretStore` at window start;
+  Android's start goes through `HarborStartActivity` (which installs it before OpenPak), and an
+  `EmulationActivity` that Android recreates on its own after the process died is sent there
+  instead of booting the console directly (the start path behind the phone's run).
 - A copied NAND is the same console (same as restoring a console's NAND backup). See decisions.
 
 ## Certificates (owner approved an OpenPak device CA, 2026-10-08)
