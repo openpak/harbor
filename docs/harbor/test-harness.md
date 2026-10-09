@@ -20,7 +20,14 @@ that makes a `--qlaunch` run connect to OpenPak at boot; never the owner's data,
 Nintendo name fails closed and the account sign-in shows 2810-1006), writes a minimal `qt-config.ini` (no first-run prompts,
 vsync Immediate, null audio, line-flushed log, no pause or confirm dialogs, Handheld
 connected and Player 1 not, so a title sees one controller), and starts `harbor --qlaunch` in handheld mode (the 23.0.1 starter stops at "remove the
-console from the dock" when docked; `--docked` selects docked, re-applied on every start; `--auto-sleep` lets the run dim and auto-sleep, which harness runs otherwise never do). `--fresh`
+console from the dock" when docked; `--docked` selects docked, re-applied on every start; `--auto-sleep` lets the run dim and auto-sleep, which harness runs otherwise never do).
+`--console` starts console mode (`--harbor-console`), as the owner runs Harbor: the setup wizard
+while `<run>/user/harbor-setup.json` is not complete, then HOME, whose Restart restarts the console
+in the same process and Turn Off closes Harbor. Every window Harbor opens carries the harness app id
+(Qt's through `HARBOR_CONTROL`, the Borealis wizard's through `SDL_APP_ID`), so the wizard, the crash
+and stopped pages and every dialog stay on the hidden workspace. To skip the wizard, write a
+completed record (`keys_present`, `firmware_version`, `game_dirs`, `dlc_dirs`, `update_dirs`,
+`"completed": true`). `--fresh`
 wipes only `<run>/user/` (refused unless the path is under `$SCR/run/`). It prints the pid and the
 Hyprland stable window id. Files in the run directory: `stdout.log`, `pid`, `window`, `control`
 (the FIFO), `launch.sh`; the emulator log is `user/log/eden_log.txt`.
@@ -153,8 +160,8 @@ first screen differ.
 - Exit after a HOME session used to crash in `Service::Event`'s destructor (the general channel's
   event outlived the kernel); the event now goes with the session, so a `quit` exits normally, with
   no core dump. A core dump after `quit` is a real crash.
-- Harness runs start in `--qlaunch` mode, not console mode: HOME's Restart and Turn Off end the
-  session but do not restart or close Harbor (the window stays on its last screen); `quit` then.
+- Runs start in `--qlaunch` mode unless `--console` is given: there HOME's Restart and Turn Off end
+  the session but do not restart or close Harbor (the window stays on its last screen); `quit` then.
 - Guest memory reads from a non-core host thread (the thread dump, F12) used to index past
   `rasterizer_read_areas` in `core/memory.cpp` and crash; this branch clamps the index.
 - `quit` closes the window; `confirmStop` is set to never ask. If a modal guest dialog is open,
