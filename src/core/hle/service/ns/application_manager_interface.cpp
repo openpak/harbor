@@ -536,7 +536,7 @@ IApplicationManagerInterface::IApplicationManagerInterface(Core::System& system_
         {902, nullptr, "EnableApplicationAutoUpdate"},
         {903, nullptr, "DisableApplicationAutoUpdate"},
         {904, D<&IApplicationManagerInterface::TouchApplication>, "TouchApplication"},
-        {905, nullptr, "RequestApplicationUpdate"},
+        {905, D<&IApplicationManagerInterface::RequestApplicationUpdate>, "RequestApplicationUpdate"},
         {906, D<&IApplicationManagerInterface::IsApplicationUpdateRequested>, "IsApplicationUpdateRequested"},
         {907, nullptr, "WithdrawApplicationUpdateRequest"},
         {908, nullptr, "ListApplicationRecordInstalledContentMeta"},
@@ -1423,6 +1423,19 @@ Result IApplicationManagerInterface::RequestSyncAccountContentState(std::array<u
     LOG_UNKNOWN_CONTRACT(Service_NS,
                          "IApplicationManagerInterface 4074: accepted, no account content state "
                          "refresh queued (the key's meaning is not established)");
+    R_SUCCEED();
+}
+
+// 905: (u32, u64 application id) -> Result only, from ns 23.0.1's own client proxy (0x178bfc:
+// the u32 first, the id at the next 8-byte boundary). The error applet sends it for 2124-3001
+// ("A software update is required") so that a console downloads the patch at the next launch.
+// OpenPak never forces an update: the player chooses, and the title still launches and plays
+// offline at its installed version, so the request is accepted and nothing is recorded.
+Result IApplicationManagerInterface::RequestApplicationUpdate(u32 reason, u64 application_id) {
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "IApplicationManagerInterface 905 RequestApplicationUpdate {:016X} ({}): "
+                         "not emulated: no update download is forced",
+                         application_id, reason);
     R_SUCCEED();
 }
 
