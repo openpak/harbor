@@ -45,9 +45,9 @@ bool HasSecretStore() {
     return Store() != nullptr;
 }
 
-std::optional<std::string> LoadHostSecret(std::string_view key) {
+std::optional<std::string> LoadHostSecret(std::string_view key, bool* unreadable) {
     if (const auto store = Store()) {
-        return store->Load(key);
+        return store->Load(key, unreadable);
     }
     Secrets& s = Get();
     std::lock_guard lock{s.mutex};
@@ -167,13 +167,17 @@ void SetSecretNamespace(std::function<std::string()> resolve) {
     s.resolve_namespace = std::move(resolve);
 }
 
-std::optional<std::string> LoadSecret(std::string_view key) {
+std::optional<std::string> LoadSecret(std::string_view key, bool* unreadable) {
     const std::string ns = Namespace();
-    if (auto secret = LoadHostSecret(Namespaced(ns, key)); secret || ns.empty()) {
+    bool failed = false;
+    if (auto secret = LoadHostSecret(Namespaced(ns, key), &failed); secret || failed || ns.empty()) {
+        if (failed && unreadable) {
+            *unreadable = true;
+        }
         return secret;
     }
     // An entry from before namespacing: it becomes this console's, once.
-    auto legacy = LoadHostSecret(key);
+    auto legacy = LoadHostSecret(key, unreadable);
     if (legacy && StoreHostSecret(Namespaced(ns, key), *legacy)) {
         IndexAdd(ns, key);
         EraseHostSecret(key);

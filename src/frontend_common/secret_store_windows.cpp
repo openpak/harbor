@@ -50,7 +50,7 @@ DATA_BLOB Blob(std::string_view bytes) {
 
 class CredentialSecretStore final : public OpenPak::SecretStore {
 public:
-    std::optional<std::string> Load(std::string_view key) override {
+    std::optional<std::string> Load(std::string_view key, bool* unreadable) override {
         const std::wstring target = Target(key);
         PCREDENTIALW credential = nullptr;
         if (CredReadW(target.c_str(), CRED_TYPE_GENERIC, 0, &credential)) {
@@ -62,9 +62,12 @@ public:
         if (GetLastError() != ERROR_NOT_FOUND) {
             LOG_WARNING(Frontend, "harbor: Credential Manager could not be read (error {})",
                         GetLastError());
+            if (unreadable) {
+                *unreadable = true;
+            }
             return std::nullopt;
         }
-        return LoadFile(key);
+        return LoadFile(key, unreadable);
     }
 
     bool Store(std::string_view key, std::string_view secret) override {
@@ -100,7 +103,7 @@ public:
     }
 
 private:
-    static std::optional<std::string> LoadFile(std::string_view key) {
+    static std::optional<std::string> LoadFile(std::string_view key, bool* unreadable) {
         std::ifstream file(FileOf(key), std::ios::binary);
         if (!file) {
             return std::nullopt;
@@ -113,6 +116,9 @@ private:
                                 CRYPTPROTECT_UI_FORBIDDEN, &out)) {
             LOG_WARNING(Frontend, "harbor: a sealed secret could not be opened (error {})",
                         GetLastError());
+            if (unreadable) {
+                *unreadable = true;
+            }
             return std::nullopt;
         }
         std::string value(reinterpret_cast<const char*>(out.pbData), out.cbData);

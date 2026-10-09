@@ -43,13 +43,17 @@ public:
     KeystoreSecretStore(jclass secrets_, jmethodID load_, jmethodID store_, jmethodID erase_)
         : secrets{secrets_}, load{load_}, store{store_}, erase{erase_} {}
 
-    std::optional<std::string> Load(std::string_view key) override {
+    std::optional<std::string> Load(std::string_view key, bool* unreadable) override {
         std::optional<std::string> out;
         OnJavaThread([&](JNIEnv* env) {
             jstring jkey = Common::Android::ToJString(env, key);
             auto value = static_cast<jstring>(env->CallStaticObjectMethod(secrets, load, jkey));
+            // HarborSecrets.load answers null for "none" and throws for a secret it cannot open.
             const bool failed = ClearException(env);
             env->DeleteLocalRef(jkey);
+            if (failed && unreadable) {
+                *unreadable = true;
+            }
             if (!failed && value) {
                 out = Common::Android::GetJString(env, value);
             }

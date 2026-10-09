@@ -23,8 +23,10 @@ class SecretStore {
 public:
     virtual ~SecretStore() = default;
 
-    /// The secret under `key`, or nothing when there is none (or the store could not be read).
-    virtual std::optional<std::string> Load(std::string_view key) = 0;
+    /// The secret under `key`, or nothing when there is none. When the store holds something it
+    /// cannot read now (locked, unreachable, undecryptable) it also answers nothing and sets
+    /// `*unreadable`: a caller must then never replace the entry as if it were missing.
+    virtual std::optional<std::string> Load(std::string_view key, bool* unreadable = nullptr) = 0;
 
     /// Keep `secret` under `key`, replacing any. False when it could not be kept.
     virtual bool Store(std::string_view key, std::string_view secret) = 0;
@@ -41,7 +43,7 @@ bool HasSecretStore();
 
 /// Through the host store, or the process-memory fallback when none is installed. Keys are short
 /// ASCII names such as "device-<server>-<uid>"; values are opaque (JSON today).
-std::optional<std::string> LoadSecret(std::string_view key);
+std::optional<std::string> LoadSecret(std::string_view key, bool* unreadable = nullptr);
 bool StoreSecret(std::string_view key, std::string_view secret);
 void EraseSecret(std::string_view key);
 
@@ -60,7 +62,7 @@ void EraseSecretNamespace(const std::string& ns);
 
 /// Host-wide entries outside any console's namespace: the console's own device key, which names
 /// the namespace and so cannot live inside it.
-std::optional<std::string> LoadHostSecret(std::string_view key);
+std::optional<std::string> LoadHostSecret(std::string_view key, bool* unreadable = nullptr);
 bool StoreHostSecret(std::string_view key, std::string_view secret);
 void EraseHostSecret(std::string_view key);
 

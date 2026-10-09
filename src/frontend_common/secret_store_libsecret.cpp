@@ -75,7 +75,7 @@ std::optional<std::string> Decode(const std::string& stored) {
 
 class LibsecretStore final : public OpenPak::SecretStore {
 public:
-    std::optional<std::string> Load(std::string_view key) override {
+    std::optional<std::string> Load(std::string_view key, bool* unreadable) override {
         const std::string account{key};
         for (int attempt = 1; attempt <= Attempts; attempt++) {
             bool missing = false;
@@ -90,6 +90,9 @@ public:
             LOG_WARNING(Frontend, "harbor: the password store answered an empty or failed read "
                                   "(attempt {} of {})",
                         attempt, Attempts);
+        }
+        if (unreadable) {
+            *unreadable = true;
         }
         return std::nullopt;
     }

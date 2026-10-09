@@ -523,19 +523,29 @@ std::string DeviceSecretKey(const Endpoint& endpoint, const std::string& uid) {
     return fmt::format("device-{}-{}", endpoint.key, uid);
 }
 
-void LoadDeviceAccount(const Endpoint& endpoint, const std::string& uid, std::string& id,
+/// False when the store holds a device account it cannot read (locked, undecryptable, damaged):
+/// that is not "none", and the account must never be replaced by a new one because of it. True
+/// with `id` empty when there is none.
+bool LoadDeviceAccount(const Endpoint& endpoint, const std::string& uid, std::string& id,
                        std::string& password) {
-    const auto secret = LoadSecret(DeviceSecretKey(endpoint, uid));
+    bool unreadable = false;
+    const auto secret = LoadSecret(DeviceSecretKey(endpoint, uid), &unreadable);
+    if (unreadable) {
+        LOG_WARNING(WebService, "[OpenPak] The secret store could not read a device account");
+        return false;
+    }
     if (!secret || secret->empty()) {
-        return;
+        return true;
     }
     const nlohmann::json parsed = nlohmann::json::parse(*secret, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) {
-        LOG_WARNING(WebService, "[OpenPak] Ignoring an unreadable device account");
-        return;
+        LOG_WARNING(WebService, "[OpenPak] A stored device account is damaged; it is kept, not "
+                                "replaced");
+        return false;
     }
     id = Text(parsed, "id");
     password = Text(parsed, "password");
+    return true;
 }
 
 void SaveDeviceAccount(const Endpoint& endpoint, const std::string& uid, const std::string& id,
@@ -758,8 +768,11 @@ bool SignIn(State& state, const std::string& uid, const std::string& account_id_
         login.device_password = identity->device_password;
         loaded = identity->loaded;
     }
-    if (!loaded) {
-        LoadDeviceAccount(endpoint, uid, login.device_id, login.device_password);
+    if (!loaded && !LoadDeviceAccount(endpoint, uid, login.device_id, login.device_password)) {
+        // Making a new device account here would unlink the user (the chain stores it over the
+        // one it could not read). Fail this sign-in and read again on the next one.
+        error = "the stored device account could not be read";
+        return false;
     }
 
     const bool ok = RunChain(endpoint, uid, application_id, application_version,
@@ -1642,7 +1655,9 @@ bool HasDeviceAccount(const std::string& uid) {
     }
     std::string id;
     std::string password;
-    LoadDeviceAccount(endpoint, uid, id, password);
+    if (!LoadDeviceAccount(endpoint, uid, id, password)) {
+        return true; // there is one; it could not be read just now
+    }
     return !id.empty() && !password.empty();
 }
 

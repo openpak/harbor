@@ -71,14 +71,19 @@ object HarborSecrets {
         }
     }
 
+    /**
+     * The secret, or null when there is none. A secret that exists but cannot be opened (no
+     * Keystore key, a failed read, a changed byte) throws instead: the native side must tell that
+     * apart from "none", or it would replace a linked device account with a new one.
+     */
     @JvmStatic
     @Synchronized
     fun load(name: String): String? {
-        val secretKey = key ?: return null
         val file = fileOf(name)
         if (!file.exists()) {
             return null
         }
+        val secretKey = key ?: throw IllegalStateException("the Keystore key is unavailable")
         return try {
             val blob = file.readBytes()
             val ivLength = blob[0].toInt()
@@ -90,7 +95,7 @@ object HarborSecrets {
             String(plain, Charsets.UTF_8).also { plain.fill(0) }
         } catch (e: Exception) {
             Log.warning("[Harbor] OpenPak: a secret could not be opened")
-            null
+            throw e
         }
     }
 

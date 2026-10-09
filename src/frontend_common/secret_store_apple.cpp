@@ -49,7 +49,7 @@ class KeychainSecretStore final : public OpenPak::SecretStore {
 public:
     explicit KeychainSecretStore(bool data_protection_) : data_protection{data_protection_} {}
 
-    std::optional<std::string> Load(std::string_view key) override {
+    std::optional<std::string> Load(std::string_view key, bool* unreadable) override {
         CF<CFMutableDictionaryRef> query{Query(key)};
         CFDictionarySetValue(query.get(), kSecReturnData, kCFBooleanTrue);
         CFDictionarySetValue(query.get(), kSecMatchLimit, kSecMatchLimitOne);
@@ -61,6 +61,9 @@ public:
         }
         if (status != errSecSuccess || !result || CFGetTypeID(result) != CFDataGetTypeID()) {
             LOG_WARNING(Frontend, "harbor: the keychain could not be read (OSStatus {})", status);
+            if (unreadable) {
+                *unreadable = true;
+            }
             return std::nullopt;
         }
         const auto data = static_cast<CFDataRef>(result);

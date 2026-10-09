@@ -40,6 +40,7 @@
 #include "core/openpak/olsc.h"
 #include "core/openpak/olsc_transfer.h"
 #include "core/openpak/platform.h"
+#include "core/openpak/secret_store.h"
 
 namespace np = OpenPak::NetworkProfile;
 
@@ -957,6 +958,44 @@ void RedactChecks() {
           "RedactUrl drops a fragment");
 }
 
+// A store that holds "device-x" but cannot read it, and a pre-namespace "legacy" entry.
+class UnreadableStore final : public OpenPak::SecretStore {
+public:
+    std::optional<std::string> Load(std::string_view key, bool* unreadable) override {
+        if (key.ends_with("device-x")) {
+            if (unreadable) {
+                *unreadable = true;
+            }
+            return std::nullopt;
+        }
+        return key == "legacy" ? std::optional<std::string>{"old"} : std::nullopt;
+    }
+    bool Store(std::string_view key, std::string_view) override {
+        stored.emplace_back(key);
+        return true;
+    }
+    void Erase(std::string_view) override {}
+    std::vector<std::string> stored;
+};
+
+// A secret the store holds but cannot read is not "none": the session must never replace a
+// linked device account because of it (session.cpp LoadDeviceAccount).
+void SecretChecks() {
+    const auto store = std::make_shared<UnreadableStore>();
+    OpenPak::SetSecretStore(store);
+    OpenPak::SetSecretNamespace([] { return std::string{"ns"}; });
+    bool unreadable = false;
+    Check(!OpenPak::LoadSecret("device-x", &unreadable) && unreadable,
+          "an unreadable secret reports unreadable through the namespace");
+    Check(store->stored.empty(), "an unreadable secret is not migrated or rewritten");
+    unreadable = false;
+    Check(!OpenPak::LoadSecret("missing", &unreadable) && !unreadable,
+          "a missing secret is only missing");
+    Check(OpenPak::LoadSecret("legacy") == "old", "a pre-namespace entry still loads");
+    OpenPak::SetSecretNamespace({});
+    OpenPak::SetSecretStore(nullptr);
+}
+
 int SelfTest(bool online) {
     const auto dir = std::filesystem::current_path() / "user" / "openpak-selftest";
     std::error_code ec;
@@ -982,6 +1021,7 @@ int SelfTest(bool online) {
     SaveTransferChecks(dir);
     SaveArchiveChecks();
     TransferFlowChecks();
+    SecretChecks();
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {
