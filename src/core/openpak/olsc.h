@@ -160,12 +160,24 @@ public:
     std::optional<SeriesInfo> Series(const std::string& uid, std::uint64_t application_id) const;
     void SetSeries(const std::string& uid, std::uint64_t application_id, SeriesInfo info);
 
+    /// The ErrorHistoryDatabase: the last failed transfer of a user's title (olsc-error-info.md
+    /// §1): set when a task fails, removed when the next one for the title succeeds.
+    struct LastError {
+        std::uint8_t task_type = 0;
+        std::int64_t time = 0;   ///< POSIX time of the failure
+        std::uint32_t result = 0; ///< the task's Result
+    };
+    std::optional<LastError> LastErrorOf(const std::string& uid, std::uint64_t application_id) const;
+    void SetLastError(const std::string& uid, std::uint64_t application_id, LastError error);
+    void RemoveLastError(const std::string& uid, std::uint64_t application_id);
+
 private:
     struct User {
         std::optional<bool> auto_upload;
         std::optional<bool> auto_download;
         std::map<std::uint64_t, bool> auto_transfer;
         std::map<std::uint64_t, SeriesInfo> series;
+        std::map<std::uint64_t, LastError> errors;
     };
 
     void Load();

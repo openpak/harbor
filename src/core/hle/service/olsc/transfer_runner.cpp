@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 
 #include <fmt/format.h>
@@ -279,6 +280,12 @@ std::optional<LocalSaveState> ReadLocalSave(Core::System& system, const Common::
         SHA256(reinterpret_cast<const u8*>(&extra), sizeof(extra), digest.data());
         std::memcpy(&state.commit_id, digest.data(), 8);
         extra.commit_id = static_cast<s64>(state.commit_id);
+        if (extra.timestamp == 0) {
+            // fs stamps every save it creates (and commits); one Harbor never stamped gets its
+            // first time now, so its backups carry a saved time the HOME menu can show.
+            extra.timestamp = static_cast<s64>(std::time(nullptr));
+            state.timestamp = extra.timestamp;
+        }
         controller->WriteSaveDataExtraData(FileSys::SaveDataSpaceId::User, attribute, extra);
     }
     return state;
@@ -772,6 +779,13 @@ void TransferQueue::Execute(TransferTask& task) {
                            ? 0
                            : static_cast<u32>(Result{ErrorModule::OLSC,
                                                      static_cast<u32>(outcome.error)}.raw);
+    // The ErrorHistoryDatabase (0x1b0530): a failure is the title's last error, a success clears it.
+    if (outcome.error == tr::Error::None) {
+        Settings()->RemoveLastError(uid, task.application_id);
+    } else {
+        Settings()->SetLastError(uid, task.application_id,
+                                 {task.type, static_cast<s64>(std::time(nullptr)), task.last_result});
+    }
     if (outcome.error == tr::Error::None) {
         LOG_INFO(Service_OLSC, "save data cloud: task {} done", task.id);
     } else {
