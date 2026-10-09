@@ -426,10 +426,27 @@ DaemonSettings::DaemonSettings(std::filesystem::path file_) : file{std::move(fil
     Load();
 }
 
+std::uint8_t Newness(const std::optional<SeriesInfo>& synced,
+                     const std::optional<std::uint64_t>& local_commit,
+                     const std::optional<ArchiveInfo>& cloud) {
+    if (!cloud) {
+        return local_commit ? 2 : 3;
+    }
+    if (!local_commit) {
+        return 1;
+    }
+    const SeriesInfo si = synced.value_or(SeriesInfo{});
+    if (cloud->series_id == si.series_id && cloud->commit_id == si.commit_id) {
+        return *local_commit == si.commit_id ? 0 : 2;
+    }
+    return *local_commit == si.commit_id && cloud->series_id == si.series_id ? 1 : 3;
+}
+
 bool DaemonSettings::GlobalAutoUpload(const std::string& uid) const {
     std::lock_guard lock{mutex};
     const auto it = users.find(uid);
-    return it != users.end() && it->second.auto_upload;
+    return it != users.end() ? it->second.auto_upload.value_or(DefaultAutoUpload)
+                             : DefaultAutoUpload;
 }
 
 void DaemonSettings::SetGlobalAutoUpload(const std::string& uid, bool enabled) {
@@ -441,7 +458,8 @@ void DaemonSettings::SetGlobalAutoUpload(const std::string& uid, bool enabled) {
 bool DaemonSettings::GlobalAutoDownload(const std::string& uid) const {
     std::lock_guard lock{mutex};
     const auto it = users.find(uid);
-    return it != users.end() && it->second.auto_download;
+    return it != users.end() ? it->second.auto_download.value_or(DefaultAutoDownload)
+                             : DefaultAutoDownload;
 }
 
 void DaemonSettings::SetGlobalAutoDownload(const std::string& uid, bool enabled) {
@@ -452,19 +470,42 @@ void DaemonSettings::SetGlobalAutoDownload(const std::string& uid, bool enabled)
 
 bool DaemonSettings::ApplicationAutoTransfer(const std::string& uid,
                                              std::uint64_t application_id) const {
-    std::lock_guard lock{mutex};
-    const auto it = users.find(uid);
-    if (it == users.end()) {
-        return false;
+    {
+        std::lock_guard lock{mutex};
+        const auto it = users.find(uid);
+        if (it != users.end()) {
+            const auto app = it->second.auto_transfer.find(application_id);
+            if (app != it->second.auto_transfer.end()) {
+                return app->second;
+            }
+        }
     }
-    const auto app = it->second.auto_transfer.find(application_id);
-    return app != it->second.auto_transfer.end() && app->second;
+    // A title without its own entry follows the user's global settings (0x1ce4c0).
+    return GlobalAutoUpload(uid) || GlobalAutoDownload(uid);
 }
 
 void DaemonSettings::SetApplicationAutoTransfer(const std::string& uid,
                                                 std::uint64_t application_id, bool enabled) {
     std::lock_guard lock{mutex};
     users[uid].auto_transfer[application_id] = enabled;
+    Save();
+}
+
+std::optional<SeriesInfo> DaemonSettings::Series(const std::string& uid,
+                                                 std::uint64_t application_id) const {
+    std::lock_guard lock{mutex};
+    const auto it = users.find(uid);
+    if (it == users.end()) {
+        return std::nullopt;
+    }
+    const auto app = it->second.series.find(application_id);
+    return app != it->second.series.end() ? std::optional{app->second} : std::nullopt;
+}
+
+void DaemonSettings::SetSeries(const std::string& uid, std::uint64_t application_id,
+                               SeriesInfo info) {
+    std::lock_guard lock{mutex};
+    users[uid].series[application_id] = info;
     Save();
 }
 
@@ -485,8 +526,23 @@ void DaemonSettings::Load() {
             continue;
         }
         User user;
-        user.auto_upload = value.value("auto_upload", false);
-        user.auto_download = value.value("auto_download", false);
+        if (const auto v = value.find("auto_upload"); v != value.end() && v->is_boolean()) {
+            user.auto_upload = v->get<bool>();
+        }
+        if (const auto v = value.find("auto_download"); v != value.end() && v->is_boolean()) {
+            user.auto_download = v->get<bool>();
+        }
+        if (const auto apps = value.find("series"); apps != value.end() && apps->is_object()) {
+            for (const auto& [app, pair] : apps->items()) {
+                if (pair.is_array() && pair.size() == 2 && pair[0].is_number_unsigned() &&
+                    pair[1].is_number_unsigned() && !app.empty() && app.size() <= 16 &&
+                    std::all_of(app.begin(), app.end(),
+                                [](char c) { return std::isxdigit(c) != 0; })) {
+                    user.series[std::stoull(app, nullptr, 16)] = {pair[0].get<std::uint64_t>(),
+                                                                  pair[1].get<std::uint64_t>()};
+                }
+            }
+        }
         if (const auto apps = value.find("auto_transfer"); apps != value.end() && apps->is_object()) {
             for (const auto& [app, enabled] : apps->items()) {
                 if (enabled.is_boolean() && !app.empty() && app.size() <= 16 &&
@@ -508,9 +564,18 @@ void DaemonSettings::Save() const {
         for (const auto& [app, enabled] : user.auto_transfer) {
             apps[fmt::format("{:016x}", app)] = enabled;
         }
-        list[uid] = {{"auto_upload", user.auto_upload},
-                     {"auto_download", user.auto_download},
-                     {"auto_transfer", apps}};
+        nlohmann::json series = nlohmann::json::object();
+        for (const auto& [app, info] : user.series) {
+            series[fmt::format("{:016x}", app)] = {info.series_id, info.commit_id};
+        }
+        nlohmann::json entry = {{"auto_transfer", apps}, {"series", series}};
+        if (user.auto_upload) {
+            entry["auto_upload"] = *user.auto_upload;
+        }
+        if (user.auto_download) {
+            entry["auto_download"] = *user.auto_download;
+        }
+        list[uid] = entry;
     }
     const nlohmann::json json = {{"version", 1}, {"users", list}};
     if (!Platform::CreateParentDirs(file) || !Platform::WriteAtomically(file, json.dump(2))) {
