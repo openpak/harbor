@@ -53,10 +53,6 @@ struct ProfileInfo {
     /// Live application handles on the user (acc IManagerForApplication); the user is open while
     /// any is held.
     u32 application_open_count{};
-
-    bool IsOpen() const {
-        return is_open || application_open_count > 0;
-    }
 };
 
 struct ProfileBase {
@@ -148,6 +144,10 @@ private:
     void RemoveAllProfiles();
 
     bool is_save_needed{};
+    /// A HOME session: only applications open users (see IsUserOpen).
+    bool home_session{};
+
+    bool IsUserOpen(const ProfileInfo& profile) const;
     std::array<ProfileInfo, MAX_USERS> profiles{};
     std::array<ProfileInfo, MAX_USERS> stored_opened_profiles{};
     std::size_t user_count{};
