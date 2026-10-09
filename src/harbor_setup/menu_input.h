@@ -206,10 +206,10 @@ InputStore& HarborInputStore();
 /// Binds the Power button from the store for this console session (call when a console boots).
 void StartPowerKey(Core::System& system);
 
-/// As a console remembers pads: whenever a controller connects or comes back, on whichever player
-/// it lands (a pad the frontend binds, or one a player was already mapped to), its saved mapping
-/// is applied. Checks once a second; stops with StopControllerWatcher.
-void StartControllerWatcher(MenuHost& host);
-void StopControllerWatcher();
+/// As a console remembers pads: a controller that connects or comes back, on whichever player it
+/// lands (a pad the frontend binds, or one a player was already mapped to), gets its saved mapping.
+/// One look at every player; call it on the frontend's UI thread (where the input configuration
+/// changes) when a device connects, or on a timer. Only acts while the console runs.
+void CheckControllers(MenuHost& host);
 
 } // namespace HarborSetup

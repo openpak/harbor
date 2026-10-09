@@ -8,6 +8,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QStyleHints>
+#include <QTimer>
 #include <QWidget>
 
 #include <fmt/format.h>
@@ -23,6 +24,7 @@
 #include "qt_common/config/qt_config.h"
 #include "qt_common/config/uisettings.h"
 #include "qt_common/qt_common.h"
+#include "harbor_setup/menu_input.h"
 #include "yuzu/harbor_menu.h"
 #ifdef HAS_LSFG
 #include "yuzu/harbor_frame_gen.h"
@@ -49,6 +51,11 @@ HarborMenu::HarborMenu(QWidget* window_, InputCommon::InputSubsystem& input_, Ho
     show_device_line = ReadFlag("show_device_line");
     HarborSetup::MenuSetHost(*this);
     WatchChord();
+    // A known pad that connects gets its saved mapping back: a look once a second, on the GUI
+    // thread, where the input configuration changes.
+    auto* pads = new QTimer(window);
+    QObject::connect(pads, &QTimer::timeout, window, [this] { HarborSetup::CheckControllers(*this); });
+    pads->start(1000);
 }
 
 HarborMenu::~HarborMenu() {

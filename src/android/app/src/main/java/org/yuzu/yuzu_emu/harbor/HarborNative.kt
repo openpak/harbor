@@ -115,6 +115,12 @@ object HarborNative {
     /** Once a console boots: the Harbor menu's host and the mapped Power button (harbor_menu_android.cpp). */
     external fun initMenu()
 
+    /**
+     * On the UI thread when a controller connects, changes or goes, and as the menu opens: the
+     * device list the menu shows, and a known pad's saved mapping applied again.
+     */
+    external fun checkControllers()
+
     /** Opens the Harbor menu on the console's screen: 0 the menu, 1 Settings, 2 frame generation, 3 controllers. */
     external fun openMenu(page: Int)
 

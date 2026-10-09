@@ -6,7 +6,9 @@
 
 #include <jni.h>
 
+#include <functional>
 #include <mutex>
+#include <vector>
 #include <sstream>
 
 #include "common/android/android_common.h"
@@ -59,8 +61,26 @@ int Number(const std::string& what, int fallback) {
     }
 }
 
+// InputCommon's Android devices are Java objects the UI thread adds and removes: the menu's thread
+// reads a copy taken on the UI thread (HarborNative.checkControllers).
+std::mutex devices_mutex;
+std::vector<Common::ParamPackage> devices;
+
 class AndroidMenuHost final : public HarborSetup::MenuHost {
 public:
+    std::vector<Common::ParamPackage> InputDevices() override {
+        std::scoped_lock lk{devices_mutex};
+        return devices;
+    }
+    void MenuThreadFrame(const std::function<void()>& frame) override {
+        // The menu's thread stays attached to the VM: its JNI local references go with each frame.
+        JNIEnv* env = Common::Android::GetEnvForThread();
+        const bool framed = env->PushLocalFrame(64) == JNI_OK;
+        frame();
+        if (framed) {
+            env->PopLocalFrame(nullptr);
+        }
+    }
     bool IsAndroid() const override {
         return true;
     }
@@ -186,6 +206,8 @@ public:
     }
 };
 
+AndroidMenuHost* menu_host = nullptr;
+
 } // namespace
 
 extern "C" {
@@ -200,8 +222,26 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIE
         bridge_call =
             env->GetStaticMethodID(bridge, "call", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
         static AndroidMenuHost host;
+        menu_host = &host;
         HarborSetup::MenuSetHost(host);
     });
+}
+
+/// On the UI thread when a controller connects, changes or goes, and as the menu opens: the device
+/// list the menu shows, and a known pad's saved mapping applied (HarborSetup::CheckControllers).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_checkControllers(JNIEnv*, jobject) {
+    if (!bridge) {
+        return;
+    }
+    auto& session = EmulationSession::GetInstance();
+    {
+        auto list = session.GetInputSubsystem().GetInputDevices();
+        std::scoped_lock lk{devices_mutex};
+        devices = std::move(list);
+    }
+    if (menu_host) {
+        HarborSetup::CheckControllers(*menu_host);
+    }
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_openMenu(JNIEnv* env, jobject, jint page) {
