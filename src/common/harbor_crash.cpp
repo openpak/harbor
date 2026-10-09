@@ -78,6 +78,22 @@ std::string g_host_home;
 std::string g_host_user;
 bool g_host_identity_set = false;
 
+// Lines written before the logger exists (desktop: Install runs before it) wait for it.
+std::mutex g_notes_mutex;
+std::vector<std::string> g_notes;
+bool g_logger_ready = false;
+
+void Note(std::string line) {
+    {
+        std::scoped_lock lk{g_notes_mutex};
+        if (!g_logger_ready) {
+            g_notes.push_back(std::move(line));
+            return;
+        }
+    }
+    LOG_INFO(Common, "{}", line);
+}
+
 void LoadHostIdentity() {
     if (g_host_identity_set) {
         return;
@@ -973,8 +989,8 @@ void OpenCrumbsLocked() {
                 end = previous.size();
             }
             if (end > begin) {
-                LOG_INFO(Common, "harbor: last run crumb: {}",
-                         std::string_view{previous}.substr(begin, end - begin));
+                Note(fmt::format("harbor: last run crumb: {}",
+                                 std::string_view{previous}.substr(begin, end - begin)));
             }
             begin = end + 1;
         }
@@ -1007,8 +1023,8 @@ void PrepareFaultDumpLocked() {
                 end = previous.size();
             }
             if (end > at) {
-                LOG_INFO(Common, "harbor: native fault: {}",
-                         Scrub(std::string_view{previous}.substr(at, end - at)));
+                Note(fmt::format("harbor: native fault: {}",
+                                 Scrub(std::string_view{previous}.substr(at, end - at))));
             }
             at = end + 1;
         }
@@ -1227,6 +1243,18 @@ namespace {
 std::atomic<unsigned> g_crumb_run{1};
 } // namespace
 
+void LoggerReady() {
+    std::vector<std::string> notes;
+    {
+        std::scoped_lock lk{g_notes_mutex};
+        g_logger_ready = true;
+        notes.swap(g_notes);
+    }
+    for (const auto& line : notes) {
+        LOG_INFO(Common, "{}", line);
+    }
+}
+
 void NewCrumbRun() {
     g_crumb_run.fetch_add(1);
 }
@@ -1286,8 +1314,8 @@ void LogSignalHandlers(std::string_view when) {
         struct sigaction chain {};
         Common::SigAction(sig, nullptr, &kernel);
         ::sigaction(sig, nullptr, &chain);
-        LOG_INFO(Common, "harbor: signal handlers {}: {} kernel={} chain={}", when, sig,
-                 describe(kernel), describe(chain));
+        Note(fmt::format("harbor: signal handlers {}: {} kernel={} chain={}", when, sig,
+                         describe(kernel), describe(chain)));
     }
 #endif
 }

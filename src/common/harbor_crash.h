@@ -110,6 +110,10 @@ void DiscardFaultDump(long start);
 /// The next start copies crumbs.txt into eden_log.txt ("harbor: last run crumb: ...").
 void Breadcrumb(std::string_view what);
 
+/// The logger exists: lines Harbor noted before it (last run's crumbs and fault dump, the signal
+/// handlers at start-up) are logged now. Called by Common::Log::Initialize.
+void LoggerReady();
+
 /// A new emulation run: every "once" crumb may log again.
 void NewCrumbRun();
 /// The current run's number (for HARBOR_CRUMB_ONCE).
