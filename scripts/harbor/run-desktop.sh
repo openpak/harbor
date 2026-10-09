@@ -81,6 +81,22 @@ for k in prod title; do
     ln -sfn "$HOME/.switch/$k.keys" "$RUN/user/keys/$k.keys"
 done
 
+# OpenPak: a run with no user/openpak/ never connects, so every Nintendo name fails closed and the
+# account sign-in page shows 2810-1006. A new run gets the shared test template: the public server
+# settings (server.json) and the news-test-boot marker that makes a --qlaunch run connect at boot.
+# Never copied from the owner's data. The CA, network profile and ceiling are fetched at boot, and
+# the console identity comes from the run's own calibration.
+TEMPLATE="$SCR/run/_openpak-template"
+if [ ! -f "$TEMPLATE/server.json" ]; then
+    mkdir -p "$TEMPLATE"
+    printf '{\n    "website": "https://openpak.org"\n}\n' > "$TEMPLATE/server.json"
+    : > "$TEMPLATE/news-test-boot"
+fi
+if [ ! -d "$RUN/user/openpak" ]; then
+    mkdir -p "$RUN/user/openpak"
+    cp -n "$TEMPLATE/server.json" "$TEMPLATE/news-test-boot" "$RUN/user/openpak/"
+fi
+
 # Config: written once per user/ dir so no first-run prompt appears. Keys written with
 # "\default=false" override Eden's defaults; everything else keeps them.
 CONFIG="$RUN/user/config/qt-config.ini"

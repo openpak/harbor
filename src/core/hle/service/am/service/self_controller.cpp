@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/redact.h"
 #include "common/logging.h"
 #include "core/hle/result.h"
 #include "core/hle/service/am/am_results.h"
@@ -151,7 +152,8 @@ Result ISelfController::LeaveFatalSection() {
 
 Result ISelfController::GetLibraryAppletLaunchableEvent(
     OutCopyHandle<Kernel::KReadableEvent> out_event) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // A library applet can always be launched here: the event is signalled at once.
+    LOG_DEBUG(Service_AM, "called");
 
     m_applet->library_applet_launchable_event.Signal(system.Kernel());
     *out_event = m_applet->library_applet_launchable_event.GetHandle();
@@ -215,7 +217,8 @@ Result ISelfController::SetRestartMessageEnabled(bool enabled) {
 
 Result ISelfController::SetScreenShotAppletIdentityInfo(
     AppletIdentityInfo screen_shot_applet_identity_info) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Kept per applet: captures and the overlay name this identity.
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->screen_shot_identity = screen_shot_applet_identity_info;
@@ -235,7 +238,7 @@ Result ISelfController::SetOutOfFocusSuspendingEnabled(bool enabled) {
 
 Result ISelfController::SetAlbumImageOrientation(
     Capture::AlbumImageOrientation album_image_orientation) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, orientation={}", album_image_orientation);
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ISelfController 19 SetAlbumImageOrientation: kept per applet; captures are not rotated (orientation={})", album_image_orientation);
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->album_image_orientation = album_image_orientation;
@@ -276,7 +279,7 @@ Result ISelfController::CreateManagedDisplayLayer(Out<u64> out_layer_id) {
 
 Result ISelfController::CreateManagedDisplaySeparableLayer(Out<u64> out_layer_id,
                                                            Out<u64> out_recording_layer_id) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_DEBUG(Service_AM, "called");
 
     std::scoped_lock lk{m_applet->lock};
     R_RETURN(m_applet->display_layer_manager.CreateManagedDisplaySeparableLayer(
@@ -284,12 +287,12 @@ Result ISelfController::CreateManagedDisplaySeparableLayer(Out<u64> out_layer_id
 }
 
 Result ISelfController::SetHandlesRequestToDisplay(bool enable) {
-    LOG_WARNING(Service_AM, "(STUBBED) called, enable={}", enable);
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ISelfController 50 SetHandlesRequestToDisplay: accepted, enable={}: the request-to-display flow is not emulated", enable);
     R_SUCCEED();
 }
 
 Result ISelfController::ApproveToDisplay() {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ISelfController 51 ApproveToDisplay: accepted: the request-to-display flow is not emulated");
     R_SUCCEED();
 }
 
@@ -380,13 +383,14 @@ Result ISelfController::IsAutoSleepDisabled(Out<bool> out_is_auto_sleep_disabled
 }
 
 Result ISelfController::IsIlluminanceAvailable(Out<bool> out_is_illuminance_available) {
-    LOG_WARNING(Service_AM, "(stubbed)");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "ISelfController 67 IsIlluminanceAvailable: answered false: no ambient light sensor here");
     *out_is_illuminance_available = false;
     R_SUCCEED();
 }
 
 Result ISelfController::SetInputDetectionPolicy(InputDetectionPolicy input_detection_policy) {
-    LOG_WARNING(Service_AM, "(STUBBED) called");
+    // Accepted: every input counts as activity here.
+    LOG_DEBUG(Service_AM, "called");
     R_SUCCEED();
 }
 
@@ -412,7 +416,8 @@ Result ISelfController::GetAccumulatedSuspendedTickChangedEvent(
 }
 
 Result ISelfController::SetAlbumImageTakenNotificationEnabled(bool enabled) {
-    LOG_WARNING(Service_AM, "(STUBBED) called. enabled={}", enabled);
+    // Kept per applet.
+    LOG_DEBUG(Service_AM, "called, enabled={}", enabled);
 
     // This service call sets an internal flag whether a notification is shown when an image is
     // captured. Currently we do not support capturing images via the capture button, so this can be
@@ -438,7 +443,8 @@ Result ISelfController::SaveCurrentScreenshot(Capture::AlbumReportOption album_r
 }
 
 Result ISelfController::SetRecordVolumeMuted(bool muted) {
-    LOG_WARNING(Service_AM, "(STUBBED) called. muted={}", muted);
+    // Kept per applet; nothing is recorded here.
+    LOG_DEBUG(Service_AM, "called, muted={}", muted);
 
     std::scoped_lock lk{m_applet->lock};
     m_applet->record_volume_muted = muted;

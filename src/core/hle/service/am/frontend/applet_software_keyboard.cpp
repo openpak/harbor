@@ -938,7 +938,7 @@ void SoftwareKeyboard::RequestSetCustomizedDictionaries(std::span<const u8> requ
 }
 
 void SoftwareKeyboard::RequestUnsetCustomizedDictionaries(std::span<const u8> request_data) {
-    LOG_WARNING(Service_AM, "(STUBBED) Processing Request: UnsetCustomizedDictionaries");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "swkbd UnsetCustomizedDictionaries: answered done (dictionaries are not used by the host keyboard)");
 
     ReplyUnsetCustomizedDictionaries();
 }

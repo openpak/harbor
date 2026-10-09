@@ -19,6 +19,10 @@ namespace Core {
 class System;
 }
 
+namespace FileSys {
+class RegisteredCache;
+}
+
 namespace Service::FileSystem::SaveTransfer {
 
 /// The FS .rodata constants the cloud-backup keys need.
@@ -38,6 +42,9 @@ std::optional<FsKeySources> FindFsKeySources(std::span<const u8> package2);
 /// KeyIndex::Stream and ignored otherwise. nullopt when a key is missing.
 std::optional<Key128> DeriveTransferKey(const FsKeySources& sources, KeyIndex index,
                                         int key_generation, const Key128& source = {});
+
+/// The sources in the BootImagePackage (0100000000000819) of a system NAND's contents.
+std::optional<FsKeySources> FsKeySourcesFromNand(const FileSys::RegisteredCache& system_nand);
 
 /// This console's sources, found once from the installed firmware.
 std::optional<FsKeySources> InstalledFsKeySources(Core::System& system);

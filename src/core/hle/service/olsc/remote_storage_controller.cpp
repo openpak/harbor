@@ -5,7 +5,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 
+#include <openssl/sha.h>
+
+#include "core/file_sys/fs_save_data_types.h"
+#include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/save_data_controller.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "common/redact.h"
 #include "core/hle/kernel/k_event.h"
@@ -143,14 +150,40 @@ Result IRemoteStorageController::GetSecondarySave(Out<bool> out_has_secondary_sa
 
 Result IRemoteStorageController::GetDataNewnessByApplicationId(Out<u8> out_newness,
                                                               u64 application_id) {
-    // The sysmodule (0x1d32e0) answers 0 when the cloud and the local save agree and 1 when they
-    // differ. Harbor cannot compare digests without the transfer exporter, so an archive in the
-    // cloud reads as different.
+    // The sysmodule (0x1d32e0): with no cloud archive, 0 when the local save exists and 1 when it
+    // does not; with both, 0 when the cloud archive is the local save's commit and 1 otherwise.
+    // Harbor compares the archive's commit id (encoded_digest) with the save's extra data, as a
+    // fresh backup or restore leaves them equal.
     const auto archives = OpenPak::Olsc::ArchiveCache::Instance().Get(uid);
-    const bool in_cloud =
-        archives && OpenPak::Olsc::LatestFor(*archives, application_id).has_value();
-    LOG_DEBUG(Service_OLSC, "called, app={:016X} in_cloud={}", application_id, in_cloud);
-    *out_newness = in_cloud ? 1 : 0;
+    const auto latest =
+        archives ? OpenPak::Olsc::LatestFor(*archives, application_id) : std::nullopt;
+
+    const auto controller = system.GetFileSystemController().OpenSaveDataController();
+    const auto attribute = FileSys::SaveDataAttribute::Make(
+        application_id, FileSys::SaveDataType::Account, user.AsU128(),
+        FileSys::InvalidSystemSaveDataId, 0, FileSys::SaveDataRank::Primary);
+    const bool local = controller->SaveDataExists(FileSys::SaveDataSpaceId::User, attribute);
+    u64 local_commit = 0;
+    if (local) {
+        FileSys::SaveDataExtraData extra{};
+        if (controller->ReadSaveDataExtraData(&extra, FileSys::SaveDataSpaceId::User, attribute)
+                .IsSuccess()) {
+            local_commit = static_cast<u64>(extra.commit_id);
+            if (local_commit == 0) {
+                // A save without a commit id goes by its extra data's digest, as fs exports it.
+                std::array<u8, 32> digest{};
+                SHA256(reinterpret_cast<const u8*>(&extra), sizeof(extra), digest.data());
+                std::memcpy(&local_commit, digest.data(), 8);
+            }
+        }
+    }
+    if (!latest) {
+        *out_newness = local ? 0 : 1;
+    } else {
+        *out_newness = local && latest->commit_id == local_commit ? 0 : 1;
+    }
+    LOG_DEBUG(Service_OLSC, "called, app={:016X} in_cloud={} local={} newness={}", application_id,
+              latest.has_value(), local, *out_newness);
     R_SUCCEED();
 }
 

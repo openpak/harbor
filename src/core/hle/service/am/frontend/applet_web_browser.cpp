@@ -320,7 +320,7 @@ void WebBrowser::Execute() {
     }
 
     if (Settings::values.disable_web_applet) {
-        LOG_WARNING(Service_AM, "(STUBBED) called, Web Browser Applet is disabled. shim_kind={}",
+        LOG_WARNING(Service_AM, "web applet disabled in the settings; closed. shim_kind={}",
                     web_arg_header.shim_kind);
         WebBrowserExit(WebExitReason::EndButtonPressed);
         return;
@@ -551,12 +551,12 @@ void WebBrowser::InitializeWifi() {}
 void WebBrowser::InitializeLobby() {}
 
 void WebBrowser::ExecuteShop() {
-    LOG_WARNING(Service_AM, "(STUBBED) called, Shop Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet shop shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 
 void WebBrowser::ExecuteLogin() {
-    LOG_WARNING(Service_AM, "(STUBBED) called, Login Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet login shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 
@@ -594,7 +594,7 @@ void WebBrowser::ExecuteOffline() {
 }
 
 void WebBrowser::ExecuteShare() {
-    LOG_WARNING(Service_AM, "(STUBBED) called, Share Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet share shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 
@@ -611,19 +611,19 @@ void WebBrowser::ExecuteWeb() {
 }
 
 void WebBrowser::ExecuteWifi() {
-    LOG_WARNING(Service_AM, "(STUBBED) called, Wifi Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet wifi shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 
 void WebBrowser::ExecuteLobby() {
-    LOG_WARNING(Service_AM, "(STUBBED) called, Lobby Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet lobby shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 
 void WebBrowser::InitializeLhub() {}
 
 void WebBrowser::ExecuteLhub() {
-    LOG_INFO(Service_AM, "(STUBBED) called, Lhub Applet is not implemented");
+    LOG_UNKNOWN_CONTRACT(Service_AM, "web applet lhub shim: no host frontend; closed as by the end button");
     WebBrowserExit(WebExitReason::EndButtonPressed);
 }
 

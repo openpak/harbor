@@ -40,6 +40,7 @@ struct ArchiveInfo {
     std::uint32_t launch_required_version = 0;
     std::uint64_t previous_id = 0;
     std::uint64_t series_id = 0;
+    std::uint64_t commit_id = 0;   ///< encoded_digest's first 8 bytes: the save's commit id
     std::uint64_t saved_at = 0;    ///< saved_at_as_unixtime
     std::uint64_t finished_at = 0; ///< finished_at_as_unixtime
     std::uint8_t platform_key_generation = 0;

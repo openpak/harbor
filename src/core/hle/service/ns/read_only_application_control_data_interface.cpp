@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+#include "common/redact.h"
 #include "common/stb.h"
 #include "common/logging.h"
 #include "common/settings.h"
@@ -151,6 +152,7 @@ IReadOnlyApplicationControlDataInterface::IReadOnlyApplicationControlDataInterfa
         {19, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData3>, "GetApplicationControlData"},
         {20, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData4>, "GetApplicationControlData4"}, //21.0.0+
         {23, D<&IReadOnlyApplicationControlDataInterface::GetApplicationControlData3>, "GetApplicationControlData"}, //23.0.0+
+        {28, D<&IReadOnlyApplicationControlDataInterface::RequestApplicationControlDataDownload>, "RequestApplicationControlDataDownload"}, //23.0.0+
     };
     // clang-format on
 
@@ -342,6 +344,22 @@ Result IReadOnlyApplicationControlDataInterface::ConvertLanguageCodeToApplicatio
     }
 
     *out_application_language = *application_language;
+    R_SUCCEED();
+}
+
+// 23.0.1 ns (handler 0x1805d4, impl 0x15e294): in {u8 flag, u64 application id}, no output. ns
+// queues a background download of that title's control data (name, icon) into its cache and
+// answers at once; only a full queue fails. qlaunch asks for every title whose control data and
+// icon it lacks (an account's titles right after "Importing a User") and ignores the answer.
+// Nintendo's control-data download is not reached from here, so nothing is queued; the name is
+// Harbor's (the firmware's is not known).
+Result IReadOnlyApplicationControlDataInterface::RequestApplicationControlDataDownload(
+    u8 flag, u64 application_id) {
+    LOG_UNKNOWN_CONTRACT(Service_NS,
+                         "IReadOnlyApplicationControlDataInterface 28 for {:016X}, flag {}: "
+                         "answered success, no control-data download queued (the flag's meaning "
+                         "is not established)",
+                         application_id, flag);
     R_SUCCEED();
 }
 

@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include <openssl/sha.h>
+
 #include "common/logging.h"
 #include "common/redact.h"
 #include "core/core.h"
@@ -377,6 +379,12 @@ void TransferQueue::Execute(TransferTask& task) {
             save.data_size = static_cast<s64>(info->save_image_size);
             save.saved_at = extra.timestamp;
             save.commit_id = static_cast<u64>(extra.commit_id);
+            if (save.commit_id == 0) {
+                // As fs exports a save without a commit id (0x8d3f0): its extra data's digest.
+                std::array<u8, 32> digest{};
+                SHA256(reinterpret_cast<const u8*>(&extra), sizeof(extra), digest.data());
+                std::memcpy(&save.commit_id, digest.data(), 8);
+            }
             save.acd_index = 0;
             save.launch_required_version = 0;
             ManagerFs fs{system, task.user, info->save_id_unknown};

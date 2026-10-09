@@ -217,15 +217,29 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
     // with the same scaling and letterboxing. Screenshots show what is on the screen.
     const auto host_frame = VideoCore::HostScreen::Current();
     std::array<Tegra::FramebufferConfig, 1> host_layer{};
-    std::vector<Tegra::FramebufferConfig> with_overlay;
-    if (host_frame) {
+    std::vector<Tegra::FramebufferConfig> composed;
+    if (VideoCore::HostScreen::Blackout()) {
+        // Harbor's sleep: black, the console's picture not shown.
+        host_layer[0] = VideoCore::HostScreen::MakeShadeLayer();
+        framebuffers = host_layer;
+    } else if (host_frame) {
         host_layer[0] = VideoCore::HostScreen::MakeLayer(*host_frame);
         framebuffers = host_layer;
-    } else if (const auto overlay = VideoCore::HostScreen::CurrentOverlay(); overlay && !framebuffers.empty()) {
-        // The host overlay (the FPS line) on top of the console's own layers.
-        with_overlay.assign(framebuffers.begin(), framebuffers.end());
-        with_overlay.push_back(VideoCore::HostScreen::MakeOverlayLayer(*overlay));
-        framebuffers = with_overlay;
+    } else {
+        // On top of the console's own layers: the host overlay (the FPS line), then idle's
+        // dimming over everything.
+        const auto overlay = VideoCore::HostScreen::CurrentOverlay();
+        const bool dimmed = VideoCore::HostScreen::DimLevel() > 0.0f;
+        if (!framebuffers.empty() && (overlay || dimmed)) {
+            composed.assign(framebuffers.begin(), framebuffers.end());
+            if (overlay) {
+                composed.push_back(VideoCore::HostScreen::MakeOverlayLayer(*overlay));
+            }
+            if (dimmed) {
+                composed.push_back(VideoCore::HostScreen::MakeShadeLayer());
+            }
+            framebuffers = composed;
+        }
     }
 
     RenderScreenshot(framebuffers);

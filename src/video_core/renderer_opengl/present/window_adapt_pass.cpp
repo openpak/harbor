@@ -9,6 +9,7 @@
 
 #include "common/settings.h"
 #include "video_core/framebuffer_config.h"
+#include "video_core/host_screen.h"
 #include "video_core/host_shaders/opengl_present_vert.h"
 #include "video_core/renderer_opengl/gl_device.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
@@ -91,9 +92,11 @@ void WindowAdaptPass::DrawToFramebuffer(ProgramManager& program_manager, std::li
     glBindSampler(0, sampler.handle);
 
     // Update background color before drawing
-    glClearColor(Settings::values.bg_red.GetValue() / 255.0f,
-                 Settings::values.bg_green.GetValue() / 255.0f,
-                 Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
+    // Harbor's sleep blacks the letterbox too.
+    const bool black = VideoCore::HostScreen::Blackout();
+    glClearColor(black ? 0.0f : Settings::values.bg_red.GetValue() / 255.0f,
+                 black ? 0.0f : Settings::values.bg_green.GetValue() / 255.0f,
+                 black ? 0.0f : Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
 
     glClear(GL_COLOR_BUFFER_BIT);
 

@@ -405,7 +405,9 @@ void WriteOutArgument(bool is_domain, CallArguments& args, u8* raw_data, HLERequ
         } else if constexpr (ArgumentTraits<ArgType>::Type == ArgumentType::OutLargeData) {
             constexpr size_t BufferSize = sizeof(typename ArgType::Type);
 
-            ASSERT(ctx.CanWriteBuffer(OutBufferIndex));
+            ASSERT_MSG(ctx.CanWriteBuffer(OutBufferIndex),
+                       "the guest sent no out buffer {} for command {:#x} ({})", OutBufferIndex,
+                       u32(ctx.GetCommand()), ctx.Description());
             if constexpr (ArgType::Attr & BufferAttr_HipcAutoSelect) {
                 ctx.WriteBuffer(std::get<ArgIndex>(args), OutBufferIndex);
             } else if constexpr (ArgType::Attr & BufferAttr_HipcMapAlias) {

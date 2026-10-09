@@ -129,6 +129,8 @@ IdlePolicy::IdlePolicy(Core::System& system)
         });
     m_system.CoreTiming().ScheduleLoopingEvent(TickPeriod, TickPeriod, m_tick_event);
     g_idle_policy = this;
+    // A new session starts at full brightness, whatever the last one ended with.
+    m_system.GetAppletManager().OnDimChanged(false);
 }
 
 IdlePolicy::~IdlePolicy() {

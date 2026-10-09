@@ -38,6 +38,11 @@ public:
     void Start();
     void Stop();
 
+    /// The play times in the file as last saved, for readers outside the frontend (pdm, am). Only
+    /// the frontend's PlayTimeManager writes the file; a reader never keeps a copy that could be
+    /// written back over newer times.
+    static PlayTimeDatabase ReadSaved();
+
     static std::string GetReadablePlayTime(u64 time_seconds);
     static std::string GetPlayTimeHours(u64 time_seconds);
     static std::string GetPlayTimeMinutes(u64 time_seconds);
