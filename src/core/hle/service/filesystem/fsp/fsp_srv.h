@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <span>
+#include <string>
 #include "core/file_sys/fs_save_data_types.h"
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/filesystem/fsp/fsp_types.h"
@@ -105,6 +106,7 @@ private:
         OutBuffer<BufferAttr_HipcMapAlias> out_buffer);
     FileSys::SaveDataAttribute ResolveExtraDataAttribute(
         FileSys::SaveDataAttribute attribute) const;
+    std::string DescribeUser(const FileSys::UserId& user_id) const;
     Result FindSaveDataById(FileSys::SaveDataAttribute* out_attribute,
                             FileSys::SaveDataSpaceId space_id, u64 save_data_id) const;
     Result QuerySaveDataTotalSize(Out<s64> out_size, s64 data_size, s64 journal_size);
