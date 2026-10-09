@@ -84,6 +84,10 @@ struct User {
     std::string screen_name; ///< The masked address the console shows, "Nintendo Account (...)".
     std::string email;
     std::string login_id;
+    std::string gender;
+    std::string language;
+    std::string region;
+    std::string timezone; ///< $.timezone.id
 };
 /// users/me's answer, or nothing when it has no usable id.
 std::optional<User> ParseUsersMe(std::string_view body);
@@ -102,11 +106,23 @@ struct NasUserNames {
     std::string screen_name;
     std::string email;
     std::string login_id;
+    std::string gender;   ///< +0x1f1[8]
+    std::string language; ///< +0x1fc[8]
+    std::string region;   ///< +0x208[4]
+    std::string timezone; ///< +0x20c[0x40]
 };
 std::array<std::uint8_t, NasUserBaseSize> NasUserBase(std::string_view nickname,
                                                       std::string_view birthday,
                                                       std::string_view country,
                                                       const NasUserNames& names = {});
+
+// nn::account::nas::NasUserBaseForApplication, as IManagerForApplication 130/136 hand it out:
+// 0x68 bytes, copied from NasUserBase by the account module (23.0.1, 0x1fa5c0): 0x0 birthday[0x10],
+// 0x10 gender[8], 0x18 language[8], 0x20 country[4], 0x24 region[4], 0x28 timezone[0x40]. No
+// nickname. The command's u64 output is the Nintendo Account id.
+inline constexpr std::size_t NasUserBaseForApplicationSize = 0x68;
+std::array<std::uint8_t, NasUserBaseForApplicationSize> NasUserBaseForApplication(
+    std::string_view birthday, std::string_view country, const NasUserNames& names = {});
 
 /// IAdministrator 290's buffer on 23.0.1 (impl 0x085A6C00, builder 0x08605C80):
 /// "https://accounts.nintendo.com/app/profile?id_token_hint=" and the token, NUL terminated, in a

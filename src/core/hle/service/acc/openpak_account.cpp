@@ -159,10 +159,12 @@ std::map<std::string, oauth::NasUserNames>& NamesCache() {
 }
 
 void KeepNames(const std::string& uid, const oauth::User& me) {
-    oauth::NasUserNames names{me.screen_name, me.email, me.login_id};
-    const nlohmann::json doc{{"screenName", names.screen_name},
-                             {"email", names.email},
-                             {"loginId", names.login_id}};
+    oauth::NasUserNames names{me.screen_name, me.email, me.login_id, me.gender,
+                              me.language,    me.region, me.timezone};
+    const nlohmann::json doc{{"screenName", names.screen_name}, {"email", names.email},
+                             {"loginId", names.login_id},       {"gender", names.gender},
+                             {"language", names.language},      {"region", names.region},
+                             {"timezone", names.timezone}};
     if (!OpenPak::StoreSecret(NamesKey(uid), doc.dump())) {
         LOG_WARNING(Service_ACC, "acc: the Nintendo Account names were not kept");
     }
@@ -185,7 +187,8 @@ oauth::NasUserNames LoadNames(const std::string& uid) {
                        ? doc.at(key).get<std::string>()
                        : std::string{};
         };
-        names = {text("screenName"), text("email"), text("loginId")};
+        names = {text("screenName"), text("email"),  text("loginId"), text("gender"),
+                 text("language"),   text("region"), text("timezone")};
     }
     std::scoped_lock lock{NamesMutex()};
     NamesCache()[uid] = names;

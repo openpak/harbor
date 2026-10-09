@@ -222,6 +222,12 @@ std::optional<User> ParseUsersMe(std::string_view body) {
     user.screen_name = Text(parsed, "screenName");
     user.email = Text(parsed, "email");
     user.login_id = Text(parsed, "loginId");
+    user.gender = Text(parsed, "gender");
+    user.language = Text(parsed, "language");
+    user.region = Text(parsed, "region");
+    if (const auto zone = parsed.find("timezone"); zone != parsed.end() && zone->is_object()) {
+        user.timezone = Text(*zone, "id");
+    }
     return user;
 }
 
@@ -237,9 +243,29 @@ std::array<std::uint8_t, NasUserBaseSize> NasUserBase(std::string_view nickname,
     field(0x81, 0x100, names.email);
     field(0x181, 0x20, names.login_id);
     field(0x1a1, 0x40, nickname);
+    field(0x1f1, 8, names.gender);
+    field(0x1fc, 8, names.language);
+    field(0x208, 4, names.region);
+    field(0x20c, 0x40, names.timezone);
     field(0x1e1, 0x10, birthday);
     field(0x204, 4, country);
     out[0x251] = out[0x252] = out[0x253] = 0b010;
+    return out;
+}
+
+std::array<std::uint8_t, NasUserBaseForApplicationSize> NasUserBaseForApplication(
+    std::string_view birthday, std::string_view country, const NasUserNames& names) {
+    std::array<std::uint8_t, NasUserBaseForApplicationSize> out{};
+    // Fixed-width fields as the module copies them: no room kept for a terminator.
+    const auto field = [&out](std::size_t offset, std::size_t size, std::string_view value) {
+        std::copy_n(value.begin(), std::min(value.size(), size), out.begin() + offset);
+    };
+    field(0x0, 0x10, birthday);
+    field(0x10, 8, names.gender);
+    field(0x18, 8, names.language);
+    field(0x20, 4, country);
+    field(0x24, 4, names.region);
+    field(0x28, 0x40, names.timezone);
     return out;
 }
 

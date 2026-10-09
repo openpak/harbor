@@ -1125,24 +1125,40 @@ private:
         LoadIdTokenCacheFor(ctx, user_id);
     }
 
+    // 130/136: (u64 Nintendo Account id, NasUserBaseForApplication 0x68, work buffer >= 0x800).
+    // The account module (23.0.1, 0x1fa5c0) reads the users/me cache into the work buffer
+    // (NasUserBase at its head) and copies birthday, gender, language, country, region and
+    // timezone out of it; MK8D shows the country as the player's flag.
     void GetNintendoAccountUserResourceCacheForApplication(HLERequestContext& ctx) {
-        LOG_WARNING(Service_ACC, "(STUBBED) called");
-
-        // The same account id GetAccountId answers, in the reply and at the head of the buffer.
-        const u64 account_id = NetworkServiceAccountIdOf(user_id);
-
-        std::vector<u8> nas_user_base_for_application(0x68);
-        std::memcpy(nas_user_base_for_application.data(), &account_id, sizeof(account_id));
-        ctx.WriteBuffer(nas_user_base_for_application);
-
-        if (ctx.CanWriteBuffer(1)) {
-            std::vector<u8> unknown_out_buffer(ctx.GetWriteBufferSize(1));
-            ctx.WriteBuffer(unknown_out_buffer, 1);
+        // The module's answer for a work buffer under 0x800.
+        constexpr Result ResultWorkBufferTooSmall{ErrorModule::Account, 31};
+        if (ctx.CanWriteBuffer(1) && ctx.GetWriteBufferSize(1) < 0x800) {
+            PushResult(ctx, ResultWorkBufferTooSmall);
+            return;
+        }
+        std::optional<OpenPakAccount::NintendoAccountInfo> account;
+        if (const Result result = NintendoAccountOf(user_id, account); result.IsError()) {
+            LOG_DEBUG(Service_ACC, "called, not linked");
+            PushResult(ctx, result);
+            return;
         }
 
+        const auto for_application = NintendoAccountOAuth::NasUserBaseForApplication(
+            account->birthday, account->country, account->names);
+        ctx.WriteBuffer(for_application.data(), for_application.size());
+        if (ctx.CanWriteBuffer(1)) {
+            std::vector<u8> work(ctx.GetWriteBufferSize(1));
+            const auto base = NintendoAccountOAuth::NasUserBase(
+                account->nickname, account->birthday, account->country, account->names);
+            std::memcpy(work.data(), base.data(), base.size());
+            ctx.WriteBuffer(work, 1);
+        }
+
+        // The account's data stays out of the log.
+        LOG_DEBUG(Service_ACC, "called, linked account data written");
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
-        rb.PushRaw<u64>(account_id);
+        rb.PushRaw<u64>(account->id);
     }
 
     void CreateAuthorizationRequest(HLERequestContext& ctx) {
