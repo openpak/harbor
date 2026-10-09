@@ -1,0 +1,102 @@
+# SPDX-FileCopyrightText: 2026 tobagin
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Compile check of the Harbor desktop (the Qt frontend with the Borealis setup and Harbor menu) on
+# Windows (MSVC) and macOS (Apple Clang, Homebrew).
+#
+# - Manual runs only: the repository is private, so these GitHub-hosted runners cost minutes. The
+#   owner starts it from the Actions tab and picks one platform or both.
+# - Compile coverage, not a release: it builds the harbor executable and the two Harbor setup tools
+#   and keeps nothing (no workflow artifacts, the organisation's artifact quota).
+# - Linux is built locally and by release.yml on the self-hosted runner.
+name: Desktop ports (compile check)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Which desktop to build'
+        type: choice
+        options: [both, windows, macos]
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harbor-desktop-ports-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # What Harbor builds: the Qt frontend and the setup's runner and self-check.
+  TARGETS: yuzu harbor_setup_run harbor_setup_selftest
+
+jobs:
+  windows:
+    name: Windows (MSVC)
+    if: inputs.platform == 'both' || inputs.platform == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      # Eden's shader build needs the SDK's glslang on Windows (docs/Deps.md).
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+
+      - name: MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Ninja
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            choco install ninja -y --no-progress
+          }
+          ninja --version
+
+      # MSVC's defaults bundle Qt, SDL3, FFmpeg, OpenSSL and the CPM dependencies.
+      - name: Configure
+        shell: pwsh
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DYUZU_TESTS=OFF
+          -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF
+          -DENABLE_QT_TRANSLATION=OFF -DYUZU_ROOM_STANDALONE=OFF
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build --target $($env:TARGETS -split ' ')
+
+  macos:
+    name: macOS (Apple Clang)
+    if: inputs.platform == 'both' || inputs.platform == 'macos'
+    runs-on: macos-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Homebrew set from docs/Deps.md (without cmake and Catch2: the runner has cmake, tests
+      # are off).
+      - name: Dependencies
+        run: |
+          brew update
+          brew install autoconf automake boost ffmpeg fmt glslang hidapi libtool libusb lz4 ninja \
+            nlohmann-json openssl pkg-config qt@6 sdl3 speexdsp zlib zstd molten-vk vulkan-loader \
+            spirv-tools
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DYUZU_TESTS=OFF \
+            -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF -DENABLE_QT_TRANSLATION=OFF -DYUZU_ROOM_STANDALONE=OFF
+
+      - name: Build
+        run: |
+          # shellcheck disable=SC2086 # TARGETS is a word list
+          cmake --build build -j"$(sysctl -n hw.ncpu)" --target $TARGETS
