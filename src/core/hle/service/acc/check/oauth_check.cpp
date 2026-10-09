@@ -121,8 +121,14 @@ void CheckLayouts(const std::string& url) {
           "136: the nickname at 0x1a1, cut to 0x3f and NUL terminated");
     Check(At(base, 0x1e1) == "1990-01-02" && At(base, 0x204) == "GB",
           "136: the birthday at 0x1e1 and the country at 0x204");
-    Check(base[0x251] == 2 && base[0x252] == 2 && base[0x253] == 2 && base[0] == 0,
+    Check(base[0x251] == 2 && base[0x252] == 2 && base[0x253] == 2 && base[0] == 0 &&
+              base[1] == 0 && base[0x81] == 0 && base[0x181] == 0,
           "136: the three consents read userConfirmed, the rest is zero");
+    const auto named = oauth::NasUserBase("n", "1990-01-02", "GB",
+                                          {"ab***@ex***", "a@example.org", std::string(0x30, 'l')});
+    Check(At(named, 0x1) == "ab***@ex***" && At(named, 0x81) == "a@example.org" &&
+              At(named, 0x181) == std::string(0x1f, 'l') && At(named, 0x1a1) == "n",
+          "136: screenName at 0x1, email at 0x81, loginId at 0x181 cut to 0x1f (23.0.1)");
 
     const auto view = oauth::UserResourceViewUrl("hdr.payload.sig", 0x1000);
     Check(view && *view == "https://accounts.nintendo.com/app/profile?id_token_hint=hdr.payload.sig",
@@ -215,10 +221,13 @@ int main() {
 
     const auto me = oauth::ParseUsersMe(
         R"({"id":"0123456789abcdef","nickname":"Tester","birthday":"1990-01-02","country":"GB",
-            "iconUri":"https://cdn.example/1/x"})");
+            "iconUri":"https://cdn.example/1/x","screenName":"te***@ex***",
+            "email":"t@example.org","loginId":null})");
     Check(me && me->id == 0x0123456789abcdefULL && me->nickname == "Tester" &&
-              me->birthday == "1990-01-02" && me->country == "GB",
-          "users/me gives id, nickname, birthday, country");
+              me->birthday == "1990-01-02" && me->country == "GB" &&
+              me->screen_name == "te***@ex***" && me->email == "t@example.org" &&
+              me->login_id.empty(),
+          "users/me gives id, nickname, birthday, country, screenName, email; null loginId");
     Check(!oauth::ParseUsersMe(R"({"id":"not-hex"})"), "users/me with a bad id is nothing");
 
     Check(oauth::IsUsableBirthday("1990-01-02"), "YYYY-MM-DD is a usable birthday");

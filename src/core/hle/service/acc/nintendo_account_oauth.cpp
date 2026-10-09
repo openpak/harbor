@@ -219,16 +219,23 @@ std::optional<User> ParseUsersMe(std::string_view body) {
     user.birthday = Text(parsed, "birthday");
     user.country = Text(parsed, "country");
     user.icon_uri = Text(parsed, "iconUri");
+    user.screen_name = Text(parsed, "screenName");
+    user.email = Text(parsed, "email");
+    user.login_id = Text(parsed, "loginId");
     return user;
 }
 
 std::array<std::uint8_t, NasUserBaseSize> NasUserBase(std::string_view nickname,
                                                       std::string_view birthday,
-                                                      std::string_view country) {
+                                                      std::string_view country,
+                                                      const NasUserNames& names) {
     std::array<std::uint8_t, NasUserBaseSize> out{};
     const auto field = [&out](std::size_t offset, std::size_t size, std::string_view value) {
         std::copy_n(value.begin(), std::min(value.size(), size - 1), out.begin() + offset);
     };
+    field(0x1, 0x80, names.screen_name);
+    field(0x81, 0x100, names.email);
+    field(0x181, 0x20, names.login_id);
     field(0x1a1, 0x40, nickname);
     field(0x1e1, 0x10, birthday);
     field(0x204, 4, country);

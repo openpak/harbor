@@ -81,6 +81,9 @@ struct User {
     std::string birthday;
     std::string country;
     std::string icon_uri;
+    std::string screen_name; ///< The masked address the console shows, "Nintendo Account (...)".
+    std::string email;
+    std::string login_id;
 };
 /// users/me's answer, or nothing when it has no usable id.
 std::optional<User> ParseUsersMe(std::string_view body);
@@ -90,13 +93,20 @@ std::optional<User> ParseUsersMe(std::string_view body);
 bool IsUsableBirthday(std::string_view birthday);
 
 // nn::account::nas::NasUserBase, as IManagerForSystemService 136 hands it out: 0x270 bytes. Offsets
-// from the account module's cache reader (0x085c44a0): 0x1a1 nickname[0x40], 0x1e1 birthday[0x10],
-// 0x204 country[4], 0x251/0x252/0x253 targetMarketing/internalAnalysis/dataCollection
-// (0b010 = userConfirmed).
+// from the account module's cache reader (0x085c44a0) and, on 23.0.1, its users/me parser
+// (account 0x1c71e0): 0x1 screenName[0x80], 0x81 email[0x100], 0x181 loginId[0x20], 0x1a1
+// nickname[0x40], 0x1e1 birthday[0x10], 0x204 country[4], 0x251/0x252/0x253
+// targetMarketing/internalAnalysis/dataCollection (0b010 = userConfirmed).
 inline constexpr std::size_t NasUserBaseSize = 0x270;
+struct NasUserNames {
+    std::string screen_name;
+    std::string email;
+    std::string login_id;
+};
 std::array<std::uint8_t, NasUserBaseSize> NasUserBase(std::string_view nickname,
                                                       std::string_view birthday,
-                                                      std::string_view country);
+                                                      std::string_view country,
+                                                      const NasUserNames& names = {});
 
 /// IAdministrator 290's buffer on 23.0.1 (impl 0x085A6C00, builder 0x08605C80):
 /// "https://accounts.nintendo.com/app/profile?id_token_hint=" and the token, NUL terminated, in a

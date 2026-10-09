@@ -213,8 +213,8 @@ public:
             // contract on 22.5.0 and stays absent.
             {136, &IManagerForSystemService::GetNintendoAccountUserResourceCache, "GetNintendoAccountUserResourceCache"}, // 19.0.0+
             {140, nullptr, "GetNetworkServiceLicenseCache"}, // 5.0.0+
-            {141, nullptr, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
-            {142, nullptr, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
+            {141, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsync, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
+            {142, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
             {143, &IManagerForSystemService::GetNetworkServiceLicenseCacheEx, "GetNetworkServiceLicenseCacheEx"}, // 15.0.0+
             {150, nullptr, "CreateAuthorizationRequest"},
             {160, nullptr, "RequiresUpdateNetworkServiceAccountIdTokenCache"},
@@ -338,9 +338,13 @@ private:
         // PlayerSelect's "Sign In and Link" asks this right after creating the user, while the
         // setup's account is still being linked to it (OnFirmwareUserRegistered).
         OpenPak::WaitForFirmwareUserLink(uid);
-        if (OpenPak::Session::NetworkServiceAccountId(uid) != 0) {
+        // A user nobody has signed in this session (not the active one): a device account says
+        // nothing about a link, and answering "registered" for it made User Settings show an
+        // unlinked user as linked ("Nintendo Account ()"). The sign-in takes ~1.5 s.
+        if (OpenPakAccount::SignedInWithin(uid, std::chrono::seconds{5})) {
             return OpenPak::Session::Linked(uid);
         }
+        // Offline: what the console last knew of it here.
         return OpenPak::Session::HasDeviceAccount(uid);
     }
 
@@ -419,7 +423,8 @@ private:
         }
 
         const auto user =
-            NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday, account->country);
+            NintendoAccountOAuth::NasUserBase(account->nickname, account->birthday, account->country,
+                                              account->names);
         ctx.WriteBufferC(user.data(), user.size(), 0);
 
         // The account's data stays out of the log: it ends up in crash reports.
@@ -427,6 +432,35 @@ private:
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
         rb.Push(account->id);
+    }
+
+    // 141: () -> IAsyncContext; 142 is the same with a u32 seconds threshold in. The refresh of
+    // the cache 143 reads, which OpenPak always holds as Subscribed with no expiry: done at once
+    // for a linked user, and the module's answer for a user without a network service account
+    // otherwise. Unknown contract for the answer.
+    void RefreshNetworkServiceLicenseCacheAsync(HLERequestContext& ctx) {
+        LOG_WARNING(Service_ACC, "unknown contract: acc IAdministrator 141, an async context "
+                                 "already done");
+        PushLicenseRefresh(ctx);
+    }
+
+    void RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        const u32 seconds = rp.Pop<u32>();
+        LOG_WARNING(Service_ACC,
+                    "unknown contract: acc IAdministrator 142 ({} s), an async context already done",
+                    seconds);
+        PushLicenseRefresh(ctx);
+    }
+
+    void PushLicenseRefresh(HLERequestContext& ctx) {
+        const Result result = !OpenPakAccount::Enabled() || IsRegisteredAtBaas()
+                                  ? ResultSuccess
+                                  : ResultNetworkServiceAccountUnavailable;
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(ctx, system, worker,
+                                                 OpenPakAsyncContext::Done(result));
     }
 
     // 143: (u32 NetworkServiceLicenseKind, u32, u64 expiration). qlaunch 22.5.0 (+0x3173c0)
