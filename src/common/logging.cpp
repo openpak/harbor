@@ -404,6 +404,8 @@ void Initialize() {
         logging_instance->file_backend.emplace(log_dir / LOG_FILE);
 #endif
     }
+    // Harbor: what the crash-report set-up noted before the logger existed.
+    Common::HarborCrash::LoggerReady();
 }
 
 void Start() {
