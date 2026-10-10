@@ -129,6 +129,10 @@ public:
     /// RaiseTransferTaskPriority: a queued task moves to the front.
     void Raise(u64 task_id);
     std::optional<TransferTask> Current() const;
+    /// GetTransferTaskProgress: {total bytes, bytes done, throughput in bits/s}; the running
+    /// task's live counters, a queued or finished one's stored ones (throughput 0). Nullopt when
+    /// there is no such task.
+    std::optional<std::array<u64, 3>> ProgressOf(u64 task_id, u8 filter) const;
 
     void AddStartEvent(std::shared_ptr<OpenPak::HostEvent> event);
     void AddEndEvent(std::shared_ptr<OpenPak::HostEvent> event);
@@ -142,6 +146,7 @@ private:
     void Autonomy();
     std::deque<TransferTask>::iterator NextLocked(Clock::time_point now);
     Clock::time_point NextWakeLocked() const;
+    void LogWaitingLocked();
     void Execute(TransferTask& task);
     void Raise(std::vector<std::weak_ptr<OpenPak::HostEvent>>& events);
 
@@ -159,6 +164,10 @@ private:
     bool users_known{};
     Clock::time_point postponed_gate{};
     Clock::time_point retry_at{Clock::time_point::max()};
+    /// The running task's counters, written by the transfer as it goes, and when it started.
+    OpenPak::Olsc::Transfer::Progress live_progress;
+    Clock::time_point live_started{};
+    std::string waiting_logged;
     int execution_holds{};
     int autonomy_holds{};
     std::jthread thread;
