@@ -794,6 +794,31 @@ void HostMemory::ClearBackingRegion(size_t physical_offset, size_t length, u32 f
     std::memset(backing_base + physical_offset, fill_value, length);
 }
 
+void HostMemory::DecommitBackingRegion(size_t physical_offset, size_t length) {
+#if defined(__linux__)
+    static const uintptr_t host_page_size = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+    if (!backing_base || length == 0) {
+        return;
+    }
+    const uintptr_t begin =
+        AlignUp(reinterpret_cast<uintptr_t>(backing_base + physical_offset), host_page_size);
+    const uintptr_t end =
+        AlignDown(reinterpret_cast<uintptr_t>(backing_base + physical_offset + length),
+                  host_page_size);
+    if (end <= begin) {
+        return;
+    }
+    // The backing is a shared memfd: punching the hole frees the pages. A private fallback
+    // buffer is freed by dropping the pages instead.
+    if (madvise(reinterpret_cast<void*>(begin), end - begin, MADV_REMOVE) != 0) {
+        madvise(reinterpret_cast<void*>(begin), end - begin, MADV_DONTNEED);
+    }
+#else
+    (void)physical_offset;
+    (void)length;
+#endif
+}
+
 void HostMemory::EnableDirectMappedAddress() {
 #if !(defined(__OPENORBIS__) || defined(__managarm__))
     if (impl) {
