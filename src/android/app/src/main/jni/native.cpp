@@ -1539,13 +1539,23 @@ void Java_org_yuzu_yuzu_1emu_NativeLibrary_logDeviceInfo(JNIEnv* env, jclass cla
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_submitInlineKeyboardText(JNIEnv* env, jclass clazz,
                                                                     jstring j_text) {
+    // Harbor: a console session has no host keyboard (the firmware's own swkbd runs), and none exists
+    // before the first boot either; Android still delivers keys here, e.g. volume up.
+    auto* const keyboard = EmulationSession::GetInstance().SoftwareKeyboard();
+    if (keyboard == nullptr) {
+        return;
+    }
     const std::u16string input = Common::UTF8ToUTF16(Common::Android::GetJString(env, j_text));
-    EmulationSession::GetInstance().SoftwareKeyboard()->SubmitInlineKeyboardText(input);
+    keyboard->SubmitInlineKeyboardText(input);
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_submitInlineKeyboardInput(JNIEnv* env, jclass clazz,
                                                                      jint j_key_code) {
-    EmulationSession::GetInstance().SoftwareKeyboard()->SubmitInlineKeyboardInput(j_key_code);
+    auto* const keyboard = EmulationSession::GetInstance().SoftwareKeyboard();
+    if (keyboard == nullptr) {
+        return;
+    }
+    keyboard->SubmitInlineKeyboardInput(j_key_code);
 }
 
 void Java_org_yuzu_yuzu_1emu_NativeLibrary_initializeEmptyUserDirectory(JNIEnv* env,
