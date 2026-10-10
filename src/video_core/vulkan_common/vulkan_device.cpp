@@ -897,8 +897,10 @@ VkFormat Device::GetSupportedFormat(VkFormat wanted_format, VkFormatFeatureFlags
 void Device::ReportLoss() const {
     LOG_CRITICAL(Render_Vulkan, "Device loss occurred!");
 
-    // Wait for the log to flush and for Nsight Aftermath to dump the results
-    std::this_thread::sleep_for(std::chrono::seconds{15});
+    // Wait for the log to flush, and for Nsight Aftermath to dump its results when it runs.
+    // Without Aftermath 15 s only froze the screen before the crash.
+    std::this_thread::sleep_for(nsight_aftermath_tracker ? std::chrono::seconds{15}
+                                                         : std::chrono::seconds{1});
 }
 
 void Device::SaveShader(std::span<const u32> spirv) const {

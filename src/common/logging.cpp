@@ -324,7 +324,10 @@ struct LogcatBackend : public Backend {
             case Level::Info: return ANDROID_LOG_INFO;
             case Level::Warning: return ANDROID_LOG_WARN;
             case Level::Error: return ANDROID_LOG_ERROR;
-            case Level::Critical: return ANDROID_LOG_FATAL;
+            // Not ANDROID_LOG_FATAL: liblog makes the first FATAL line the process's abort
+            // message, so one soft (non-fatal) assert would stand in a later tombstone for the
+            // real reason, as an old host_memory assert hid an uncaught VK_ERROR_DEVICE_LOST.
+            case Level::Critical: return ANDROID_LOG_ERROR;
             case Level::Count:
             case Level::Trace: return ANDROID_LOG_VERBOSE;
             }
