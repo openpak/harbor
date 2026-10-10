@@ -6,7 +6,7 @@ input, screenshots and a guest thread dump. Nothing touches the owner's keyboard
 ## Usage
 
 ```
-scripts/harbor/run-desktop.sh <name> [--fresh] [--docked] [-- extra harbor args]
+scripts/harbor/run-desktop.sh <name> [--fresh] [--docked] [--console] [--netns auto|<address>] [-- extra harbor args]
 scripts/harbor/drive.sh [--layout us|uk|auto] <name> <command> [args...] [<command> ...]
 ```
 
@@ -142,6 +142,61 @@ drive.sh m1 pad unplug sleep 2 pad plug sleep 3                          # it co
 
 The pad's mapping is kept in `user/config/harbor-input.json`, by its GUID; the log says
 `harbor: player 1: a known controller came back, its saved mapping is applied` when it is applied again.
+
+## Two households on one PC (--netns)
+
+Two consoles started normally share this PC's LAN address and its NAT mapping, so a game's
+peer-to-peer connection between them never crosses a NAT: each peer's private station address is
+directly reachable, and two consoles binding the same UDP port collide. `--netns` gives a console
+its own household instead:
+
+```
+scripts/harbor/run-desktop.sh p2p-host --console --netns auto
+scripts/harbor/run-desktop.sh p2p-join --console --netns auto
+```
+
+- The console runs in its own user and network namespace (`unshare --user --map-current-user
+  --net`: the same uid, so files, D-Bus and the Wayland socket work as before; no root needed).
+- pasta joins the namespace and is the household's router: the console gets `192.168.N.2/24`,
+  gateway `192.168.N.1`, and its traffic leaves the PC from one LAN address of its own, the
+  uplink. No port is forwarded in either direction (`-t/-u/-T/-U none`), so only replies to flows
+  the console opened come back. pasta exits with the console. Its log is `<run>/pasta.log`; the
+  chosen addresses are in `<run>/household`; the network commands are in `<run>/launch.sh`.
+  `HARBOR_NETNS_PCAP=<file>` in run-desktop.sh's environment records the household's traffic (the
+  console's side of the NAT) for the peer-to-peer phase the server never sees. It holds the console's
+  own traffic: keep it under the run directory, never commit it, delete it when done.
+- `--netns auto` picks a LAN address of this PC on the router's subnet that is neither the default
+  route's source (the desktop and every console without `--netns` use that one) nor another
+  household's uplink; `--netns <address>` names one. Two households must not share an uplink:
+  pasta keeps the console's source port on the host when it can, so two consoles binding the same
+  port get one public mapping between them (measured: both saw the same STUN answer).
+  N is `100 + the uplink's last octet`.
+- This PC (n5air) has three: `10.87.0.2` (enp4s0, the default route: leave it to the desktop),
+  `10.87.0.3` (enp5s0) and `10.87.0.9` (macshim, the macvlan shim). So two households fit.
+- Inside, the console reports `192.168.N.2` (nifm takes the default route's source), names resolve
+  through the PC's resolver as before, and Harbor is the only process there: abstract Unix sockets
+  are per network namespace, so an X11 client inside cannot reach Xwayland (Harbor uses Wayland).
+
+What the router does with it, measured 2026-10-10 with a STUN probe from two households (the
+check is `scripts/harbor/household-check.sh 10.87.0.3 10.87.0.9`, `--oneway` for the filtering):
+
+| Property | Result |
+|---|---|
+| Mapping | endpoint-independent: one public port for two STUN servers; the port is rewritten (45000 -> 120xx) |
+| Filtering | address-dependent: a packet from a peer the household has not sent to is dropped |
+| Hairpin | works: a household sending to the other's public mapping arrives, with the sender's public mapping as the source |
+
+So the games' NAT probe sees a "moderate" NAT on each side and the punch has to go through the
+router's public address, as between two homes. What stays different from two real homes: both
+households share one public address (the router's), so the server sees two consoles behind one
+address (ticketless prudp pairing by address, a game that compares public addresses and tries the
+LAN path first), and the punch is a hairpin on this router rather than two independent NATs. No
+second internet path exists here (ZeroTier has no exit, NEX is IPv4 only), so that part cannot be
+removed on this PC.
+
+Copying a run directory copies the console's identity: the original and the copy must never run
+at the same time (nx-baas answers `device_id_in_use`). After quitting a console, wait 90 s
+(nx-baas `sessionLiveWindow`) before starting it again, or it is refused for that whole session.
 
 ## Thread dump and svcBreak
 
