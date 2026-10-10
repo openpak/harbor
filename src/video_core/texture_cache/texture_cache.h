@@ -2710,4 +2710,29 @@ void TextureCache<P>::OnGPUASRegister([[maybe_unused]] size_t map_id) {
     gpu_page_table_storage.emplace_back();
 }
 
+template <class P>
+void TextureCache<P>::OnGPUASUnregister([[maybe_unused]] size_t map_id, size_t storage_id) {
+    // DeleteImage marks the bound channel's render targets dirty; with no channel bound there is
+    // no channel left to draw anything, and the images go with the cache.
+    if (maxwell3d != nullptr) {
+        boost::container::small_vector<ImageId, 64> images;
+        for (auto [id, image] : slot_images) {
+            if (True(image->flags & ImageFlagBits::Registered) &&
+                image->gpu_page_table_id == storage_id) {
+                images.push_back(id);
+            }
+        }
+        for (const ImageId id : images) {
+            Image& image = slot_images[id];
+            if (True(image.flags & ImageFlagBits::Tracked)) {
+                UntrackImage(image, id);
+            }
+            UnregisterImage(id);
+            DeleteImage(id);
+        }
+    }
+    gpu_page_table_storage[storage_id * 2].clear();
+    gpu_page_table_storage[storage_id * 2 + 1].clear();
+}
+
 } // namespace VideoCommon

@@ -8,9 +8,11 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <list>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "common/assert.h"
 #include "common/settings.h"
@@ -66,13 +68,17 @@ struct GPU::Impl {
 
     std::shared_ptr<Control::ChannelState> CreateChannel(s32 channel_id) {
         auto channel_state = std::make_shared<Tegra::Control::ChannelState>(channel_id);
-        channels.emplace(channel_id, channel_state);
+        {
+            std::scoped_lock lk{channels_mutex};
+            channels.emplace(channel_id, channel_state);
+        }
         scheduler.DeclareChannel(channel_state);
         return channel_state;
     }
 
     void BindChannel(s32 channel_id) {
         if (bound_channel != channel_id) {
+            std::scoped_lock lk{channels_mutex};
             auto it = channels.find(channel_id);
             ASSERT(it != channels.end());
             bound_channel = channel_id;
@@ -86,17 +92,84 @@ struct GPU::Impl {
     }
 
     void InitChannel(Control::ChannelState& to_init, u64 program_id) {
-        to_init.Init(system, program_id);
-        to_init.BindRasterizer(renderer->ReadRasterizer());
-        renderer->ReadRasterizer()->InitializeChannel(to_init);
+        // The rasterizer's channel tables belong to the GPU thread, which may be drawing another
+        // process's channel right now (HOME and an application share the GPU).
+        RunOnGpuThread(
+            [this, &to_init, program_id] {
+                to_init.Init(system, program_id);
+                to_init.BindRasterizer(renderer->ReadRasterizer());
+                renderer->ReadRasterizer()->InitializeChannel(to_init);
+            },
+            true);
     }
 
     void InitAddressSpace(Tegra::MemoryManager& memory_manager) {
         memory_manager.BindRasterizer(renderer->ReadRasterizer());
     }
 
+    /// Closes a channel the way the GPU closes one whose process exited: its queued command
+    /// lists are dropped, the one running finishes, and the rasterizer forgets the channel. On
+    /// return the GPU thread no longer touches the channel or its address space.
     void ReleaseChannel(Control::ChannelState& to_release) {
-        UNIMPLEMENTED();
+        const s32 channel_id = to_release.bind_id;
+        scheduler.RemoveChannel(channel_id);
+        RunOnGpuThread([this, channel_id, &to_release] {
+            auto* const rasterizer = renderer->ReadRasterizer();
+            if (to_release.initialized) {
+                rasterizer->ReleaseChannel(channel_id);
+            }
+            std::scoped_lock lk{channels_mutex};
+            channels.erase(channel_id);
+            if (bound_channel != channel_id) {
+                return;
+            }
+            // Keep a live channel bound, as the caches expect one once any channel exists.
+            bound_channel = -1;
+            current_channel = nullptr;
+            for (auto& [other_id, other] : channels) {
+                if (other->initialized) {
+                    bound_channel = other_id;
+                    current_channel = other.get();
+                    rasterizer->BindChannel(*current_channel);
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Drops the rasterizer's state for a GPU address space that is being destroyed.
+    void ReleaseAddressSpace(Tegra::MemoryManager& memory_manager) {
+        RunOnGpuThread([this, as_id = memory_manager.GetID()] {
+            renderer->ReadRasterizer()->ReleaseAddressSpace(as_id);
+        });
+    }
+
+    /// Drops every cache entry (images, buffers, shaders, queries) over device memory that is
+    /// about to be unmapped for good because its process exited.
+    void ReleaseRegions(std::vector<std::pair<DAddr, u64>> regions) {
+        RunOnGpuThread([this, regions = std::move(regions)] {
+            auto* const rasterizer = renderer->ReadRasterizer();
+            for (const auto& [addr, size] : regions) {
+                rasterizer->ReleaseRegion(addr, size);
+            }
+        });
+    }
+
+    /// Runs func on the GPU thread between command lists, after everything queued before it, and
+    /// waits for it, so state the GPU thread owns changes in order with the command lists (sync
+    /// requests would not do: they also run at every draw, inside a list). Once the GPU thread
+    /// has stopped (emulation shutdown) func runs inline when run_if_stopped is set, else not at
+    /// all (the renderer goes with everything it holds).
+    template <typename Func>
+    void RunOnGpuThread(Func&& func, bool run_if_stopped = false) {
+        if (!gpu_thread_started.load(std::memory_order_acquire) ||
+            shutting_down.load(std::memory_order_acquire)) {
+            if (run_if_stopped) {
+                func();
+            }
+            return;
+        }
+        gpu_thread.RunInQueueOrder(std::function<void()>(std::forward<Func>(func)), is_async);
     }
 
     /// Binds a renderer to the GPU.
@@ -179,6 +252,7 @@ struct GPU::Impl {
     void Start() {
         Settings::UpdateGPUAccuracy();
         gpu_thread.StartThread(*renderer, renderer->Context(), scheduler);
+        gpu_thread_started.store(true, std::memory_order_release);
     }
 
     void NotifyShutdown() {
@@ -328,6 +402,7 @@ struct GPU::Impl {
     VideoCore::ShaderNotify shader_notify;
     /// When true, we are about to shut down emulation session, so terminate outstanding tasks
     std::atomic_bool shutting_down{};
+    std::atomic_bool gpu_thread_started{};
 
     std::array<std::atomic<u32>, Service::Nvidia::MaxSyncPoints> syncpoints{};
 
@@ -350,7 +425,9 @@ struct GPU::Impl {
 
     Tegra::Control::Scheduler scheduler;
     ::Common::unordered_map<s32, std::shared_ptr<Tegra::Control::ChannelState>> channels;
-    Tegra::Control::ChannelState* current_channel;
+    /// Channels are created on the nvdrv thread and bound and released on the GPU thread.
+    std::mutex channels_mutex;
+    Tegra::Control::ChannelState* current_channel{};
     s32 bound_channel{-1};
 
     std::deque<size_t> free_swap_counters;
@@ -383,6 +460,14 @@ void GPU::ReleaseChannel(Control::ChannelState& to_release) {
 
 void GPU::InitAddressSpace(Tegra::MemoryManager& memory_manager) {
     impl->InitAddressSpace(memory_manager);
+}
+
+void GPU::ReleaseAddressSpace(Tegra::MemoryManager& memory_manager) {
+    impl->ReleaseAddressSpace(memory_manager);
+}
+
+void GPU::ReleaseRegions(std::vector<std::pair<DAddr, u64>> regions) {
+    impl->ReleaseRegions(std::move(regions));
 }
 
 void GPU::BindRenderer(std::unique_ptr<VideoCore::RendererBase> renderer) {

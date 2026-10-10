@@ -235,6 +235,9 @@ public:
 
     void WriteMemory(DAddr device_addr, u64 size);
 
+    /// Deletes every buffer over device memory that is going away for good (its process exited).
+    void ReleaseRegion(DAddr device_addr, u64 size);
+
     void CachedWriteMemory(DAddr device_addr, u64 size);
 
     bool OnCPUWrite(DAddr device_addr, u64 size);

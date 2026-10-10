@@ -48,6 +48,8 @@ void ThreadManager::StartThread(VideoCore::RendererBase& renderer, Core::Fronten
                 renderer.ReadRasterizer()->FlushRegion(flush->addr, flush->size);
             } else if (const auto* invalidate = std::get_if<InvalidateRegionCommand>(&next.data)) {
                 renderer.ReadRasterizer()->OnCacheInvalidation(invalidate->addr, invalidate->size);
+            } else if (auto* callback = std::get_if<CallbackCommand>(&next.data)) {
+                callback->func();
             } else {
                 ASSERT(false);
             }
@@ -75,6 +77,10 @@ void ThreadManager::FlushRegion(DAddr addr, u64 size, bool is_async) {
 
 void ThreadManager::TickGPU(bool is_async) {
     PushCommand(GPUTickCommand(), false, is_async);
+}
+
+void ThreadManager::RunInQueueOrder(std::function<void()>&& func, bool is_async) {
+    PushCommand(CallbackCommand(std::move(func)), true, is_async);
 }
 
 void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {

@@ -82,6 +82,7 @@ public:
     void InitializeChannel(Tegra::Control::ChannelState& channel) override;
     void BindChannel(Tegra::Control::ChannelState& channel) override;
     void ReleaseChannel(s32 channel_id) override;
+    void ReleaseAddressSpace(size_t as_id) override;
 
 private:
     Tegra::GPU& m_gpu;

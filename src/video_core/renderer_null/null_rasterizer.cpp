@@ -103,5 +103,8 @@ void RasterizerNull::BindChannel(Tegra::Control::ChannelState& channel) {
 void RasterizerNull::ReleaseChannel(s32 channel_id) {
     EraseChannel(channel_id);
 }
+void RasterizerNull::ReleaseAddressSpace(size_t as_id) {
+    EraseAddressSpace(as_id);
+}
 
 } // namespace Null

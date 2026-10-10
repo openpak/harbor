@@ -7,6 +7,8 @@
 #pragma once
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "common/bit_field.h"
 #include "common/common_types.h"
@@ -156,9 +158,18 @@ public:
 
     void BindChannel(s32 channel_id);
 
+    /// Closes a channel: its queued work is dropped and the rasterizer forgets it. Must not be
+    /// called on the GPU thread.
     void ReleaseChannel(Control::ChannelState& to_release);
 
     void InitAddressSpace(Tegra::MemoryManager& memory_manager);
+
+    /// Drops the rasterizer's state for an address space about to be destroyed.
+    void ReleaseAddressSpace(Tegra::MemoryManager& memory_manager);
+
+    /// Drops every cache entry over device memory about to be unmapped because its process
+    /// exited. Must not be called on the GPU thread.
+    void ReleaseRegions(std::vector<std::pair<DAddr, u64>> regions);
 
     /// Request a host GPU memory flush from the CPU.
     [[nodiscard]] u64 RequestFlush(DAddr addr, std::size_t size);

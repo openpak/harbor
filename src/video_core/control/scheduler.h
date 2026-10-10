@@ -26,6 +26,9 @@ public:
 
     void DeclareChannel(std::shared_ptr<ChannelState> new_channel);
 
+    /// Forgets a closed channel: command lists still queued for it are dropped.
+    void RemoveChannel(s32 channel);
+
 private:
     ::Common::unordered_map<s32, std::shared_ptr<ChannelState>> channels;
     std::mutex scheduling_guard;

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -76,9 +77,17 @@ struct FlushAndInvalidateRegionCommand final {
 /// Command to make the gpu look into pending requests
 struct GPUTickCommand final {};
 
+/// Runs a function on the GPU thread in queue order: after every command list queued before it
+/// and never inside one (unlike sync requests, which run at any draw).
+struct CallbackCommand final {
+    explicit CallbackCommand(std::function<void()>&& func_) : func{std::move(func_)} {}
+
+    std::function<void()> func;
+};
+
 using CommandData =
     std::variant<std::monostate, SubmitListCommand, FlushRegionCommand, InvalidateRegionCommand,
-                 FlushAndInvalidateRegionCommand, GPUTickCommand>;
+                 FlushAndInvalidateRegionCommand, GPUTickCommand, CallbackCommand>;
 
 struct CommandDataContainer {
     CommandDataContainer() = default;
@@ -124,6 +133,9 @@ public:
     void FlushAndInvalidateRegion(DAddr addr, u64 size, bool is_async);
 
     void TickGPU(bool is_async);
+
+    /// Runs func on the GPU thread after the commands queued before it, and waits for it.
+    void RunInQueueOrder(std::function<void()>&& func, bool is_async);
 
     void NotifyShutdown();
 

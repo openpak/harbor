@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
+#include <memory>
 
 #include "video_core/control/channel_state.h"
 #include "video_core/control/channel_state_cache.h"
@@ -25,6 +26,8 @@ void ChannelSetupCaches<P>::CreateChannel(struct Tegra::Control::ChannelState& c
         if (!free_channel_ids.empty()) {
             auto id = free_channel_ids.front();
             free_channel_ids.pop_front();
+            // The erased channel's state stayed constructed until its slot is reused.
+            std::destroy_at(&channel_storage[id]);
             new (&channel_storage[id]) P(channel);
             return id;
         }
@@ -43,7 +46,7 @@ void ChannelSetupCaches<P>::CreateChannel(struct Tegra::Control::ChannelState& c
     }
     AddressSpaceRef new_gpu_mem_ref{
         .ref_count = 1,
-        .storage_id = address_spaces.size(),
+        .storage_id = next_storage_id++,
         .gpu_memory = channel.memory_manager,
     };
     address_spaces.emplace(channel.memory_manager->GetID(), new_gpu_mem_ref);
@@ -86,6 +89,22 @@ void ChannelSetupCaches<P>::EraseChannel(s32 id) {
     }
     active_channel_ids.erase(
         std::find(active_channel_ids.begin(), active_channel_ids.end(), this_id));
+}
+
+/// Forget an address space that is being destroyed.
+template <class P>
+void ChannelSetupCaches<P>::EraseAddressSpace(size_t as_id) {
+    size_t storage_id{};
+    {
+        std::unique_lock<std::mutex> lk(config_mutex);
+        const auto it = address_spaces.find(as_id);
+        if (it == address_spaces.end()) {
+            return;
+        }
+        storage_id = it->second.storage_id;
+        address_spaces.erase(it);
+    }
+    OnGPUASUnregister(as_id, storage_id);
 }
 
 } // namespace VideoCommon
