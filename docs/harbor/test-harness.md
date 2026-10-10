@@ -158,6 +158,9 @@ scripts/harbor/run-desktop.sh p2p-join --console --netns auto
   uplink. No port is forwarded in either direction (`-t/-u/-T/-U none`), so only replies to flows
   the console opened come back. pasta exits with the console. Its log is `<run>/pasta.log`; the
   chosen addresses are in `<run>/household`; the network commands are in `<run>/launch.sh`.
+  `HARBOR_NETNS_PCAP=<file>` in run-desktop.sh's environment records the household's traffic (the
+  console's side of the NAT) for the peer-to-peer phase the server never sees. It holds the console's
+  own traffic: keep it under the run directory, never commit it, delete it when done.
 - `--netns auto` picks a LAN address of this PC on the router's subnet that is neither the default
   route's source (the desktop and every console without `--netns` use that one) nor another
   household's uplink; `--netns <address>` names one. Two households must not share an uplink:

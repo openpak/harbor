@@ -222,7 +222,9 @@ LAUNCH="$RUN/launch.sh"
         echo "rm -f '$RUN/netns-ready' '$RUN/pasta.pid'"
         echo "unshare --user --map-current-user --net -- sh -c 'echo \$\$ > \"\$0/pid\"; while [ ! -e \"\$0/netns-ready\" ]; do sleep 0.05; done; exec \"\$@\"' '$RUN' $cmd > '$RUN/stdout.log' 2>&1 &"
         echo "while [ ! -s '$RUN/pid' ]; do sleep 0.05; done"
-        echo "pasta -4 -t none -u none -T none -U none -l '$RUN/pasta.log' --config-net -a $HOUSEHOLD.2/24 -g $HOUSEHOLD.1 -o $NETNS -P '$RUN/pasta.pid' \"\$(cat '$RUN/pid')\" || kill \"\$(cat '$RUN/pid')\""
+        # HARBOR_NETNS_PCAP=<file> records the household's traffic (the console's side of pasta).
+        pcap=""; [ -n "${HARBOR_NETNS_PCAP:-}" ] && pcap="-p '$HARBOR_NETNS_PCAP' "
+        echo "pasta -4 -t none -u none -T none -U none -l '$RUN/pasta.log' $pcap--config-net -a $HOUSEHOLD.2/24 -g $HOUSEHOLD.1 -o $NETNS -P '$RUN/pasta.pid' \"\$(cat '$RUN/pid')\" || kill \"\$(cat '$RUN/pid')\""
         echo "touch '$RUN/netns-ready'"
         echo "wait"
     fi
