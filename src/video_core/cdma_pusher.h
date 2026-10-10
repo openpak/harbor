@@ -120,6 +120,10 @@ protected:
 
     virtual void ProcessMethod(u32 method, u32 arg) = 0;
 
+    /// Stops the worker after the method it is running; queued work is dropped, as for a closed
+    /// channel. Devices call it first in their destructors: the worker calls into them.
+    void StopThread();
+
 private:
     /// Invoke command class devices to execute the command based on the current state
     void ExecuteCommand(u32 state_offset, u32 data);
