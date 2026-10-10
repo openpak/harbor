@@ -21,6 +21,7 @@ class Memory;
 }
 
 namespace Tegra {
+class MemoryManager;
 namespace Control {
 struct ChannelState;
 }
@@ -56,6 +57,10 @@ public:
 
     void OnOpen(NvCore::SessionId session_id, DeviceFD fd) override;
     void OnClose(DeviceFD fd) override;
+
+    bool IsChannel() const override {
+        return true;
+    }
 
     Kernel::KEvent* QueryEvent(u32 event_id) override;
 
@@ -216,6 +221,8 @@ private:
     NvCore::Container& core;
     NvCore::SyncpointManager& syncpoint_manager;
     NvCore::NvMap& nvmap;
+    /// The address space bound to the channel; declared first so it outlives channel_state.
+    std::shared_ptr<Tegra::MemoryManager> address_space;
     std::shared_ptr<Tegra::Control::ChannelState> channel_state;
     ::Common::unordered_map<DeviceFD, NvCore::SessionId> sessions;
     u32 channel_syncpoint;

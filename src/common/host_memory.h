@@ -54,6 +54,10 @@ public:
 
     void ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value);
 
+    /// Gives the host pages behind a free backing region back to the host; the region reads as
+    /// zeros afterwards. A no-op where the platform cannot do it.
+    void DecommitBackingRegion(size_t physical_offset, size_t length);
+
     [[nodiscard]] u8* BackingBasePointer() noexcept {
         return backing_base;
     }

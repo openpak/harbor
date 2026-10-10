@@ -310,15 +310,11 @@ RestoreResult RestoreDeviceKey(std::string_view passphrase) {
 }
 
 bool MakeNewConsole() {
-    const u64 old_id = Calibration::Get().DeviceId();
-    const std::string old_namespace = OpenPak::CurrentSecretNamespace();
-
-    // The old console's credentials, in this process and in the password store.
+    // The old console's credentials are forgotten by this process only. Its password-store entries
+    // (credentials namespace, device key) stay: this is offered because another live console holds
+    // the same identity, and when that console is a copy on this host it reads the same entries.
+    // ponytail: on a host with no other copy the old entries are left orphaned; harmless, a few bytes.
     OpenPak::Session::ForgetAllProfiles();
-    OpenPak::EraseSecretNamespace(old_namespace);
-    if (old_id != 0) {
-        OpenPak::EraseHostSecret(SecretName(old_id));
-    }
 
     // Its identity: the calibration, a sealed key, and the per-server TLS files made from it.
     std::error_code ec;

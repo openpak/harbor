@@ -433,6 +433,16 @@ Result KMemoryManager::AllocateForProcess(KPageGroup* out, size_t num_pages, u32
     R_SUCCEED();
 }
 
+void KMemoryManager::DecommitFreedPages(KPhysicalAddress address, size_t num_pages) {
+    // Small runs are left alone: they are reused soon and cost a syscall each.
+    constexpr size_t MinDecommitPages = 16;
+    if (num_pages < MinDecommitPages) {
+        return;
+    }
+    m_system.DeviceMemory().buffer.DecommitBackingRegion(
+        GetInteger(address) - Core::DramMemoryMap::Base, num_pages * PageSize);
+}
+
 size_t KMemoryManager::Impl::Initialize(KPhysicalAddress address, size_t size,
                                         KVirtualAddress management, KVirtualAddress management_end,
                                         Pool p) {

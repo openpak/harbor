@@ -107,7 +107,11 @@ public:
 
             {
                 KScopedLightLock lk(m_pool_locks[static_cast<size_t>(manager.GetPool())]);
-                manager.Close(address, cur_pages);
+                // Freed pages go back to the host while the pool lock keeps them unallocated.
+                manager.Close(address, cur_pages,
+                              [this](KPhysicalAddress freed, size_t freed_pages) {
+                                  this->DecommitFreedPages(freed, freed_pages);
+                              });
             }
 
             num_pages -= cur_pages;
@@ -288,7 +292,13 @@ private:
             }
         }
 
-        void Close(KPhysicalAddress address, size_t num_pages) {
+        template <typename OnFree>
+        void Close(KPhysicalAddress address, size_t num_pages, OnFree&& on_free) {
+            const auto free_run = [&](size_t start, size_t count) {
+                const KPhysicalAddress freed = m_heap.GetAddress() + start * PageSize;
+                this->Free(freed, count);
+                on_free(freed, count);
+            };
             size_t index = this->GetPageOffset(address);
             const size_t end = index + num_pages;
 
@@ -308,7 +318,7 @@ private:
                     }
                 } else {
                     if (free_count > 0) {
-                        this->Free(m_heap.GetAddress() + free_start * PageSize, free_count);
+                        free_run(free_start, free_count);
                         free_count = 0;
                     }
                 }
@@ -317,7 +327,7 @@ private:
             }
 
             if (free_count > 0) {
-                this->Free(m_heap.GetAddress() + free_start * PageSize, free_count);
+                free_run(free_start, free_count);
             }
         }
 
@@ -356,6 +366,10 @@ private:
 
     Result AllocatePageGroupImpl(KPageGroup* out, size_t num_pages, Pool pool, Direction dir,
                                  bool unoptimized, bool random);
+
+    /// Returns the host memory behind pages that went back to the free heap, as a console's
+    /// memory goes back to its pool when a process exits. Called with the pool lock held.
+    void DecommitFreedPages(KPhysicalAddress address, size_t num_pages);
 
 private:
     template <typename T>

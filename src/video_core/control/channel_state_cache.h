@@ -60,6 +60,9 @@ public:
     /// Erase channel's state.
     void EraseChannel(s32 id);
 
+    /// Forget an address space that is being destroyed (no channel uses it any more).
+    void EraseAddressSpace(size_t as_id);
+
     Tegra::MemoryManager* GetFromID(size_t id) const {
         std::unique_lock<std::mutex> lk(config_mutex);
         const auto ref = address_spaces.find(id);
@@ -96,9 +99,14 @@ protected:
         Tegra::MemoryManager* gpu_memory;
     };
     ::Common::unordered_map<size_t, AddressSpaceRef> address_spaces;
+    /// Storage ids are never reused: an erased address space keeps its slot.
+    size_t next_storage_id{};
     mutable std::mutex config_mutex;
 
     virtual void OnGPUASRegister([[maybe_unused]] size_t map_id) {}
+    /// Called by EraseAddressSpace without config_mutex held.
+    virtual void OnGPUASUnregister([[maybe_unused]] size_t map_id,
+                                   [[maybe_unused]] size_t storage_id) {}
 };
 
 } // namespace VideoCommon

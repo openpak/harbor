@@ -168,6 +168,13 @@ public:
 
     virtual void ReleaseChannel(s32 channel_id) {}
 
+    /// Forget a GPU address space that is being destroyed; its channels are already released.
+    virtual void ReleaseAddressSpace(size_t as_id) {}
+
+    /// Drop every cache entry over device memory that is about to be unmapped for good because
+    /// its process exited (images, buffers, shaders, queries).
+    virtual void ReleaseRegion(DAddr addr, u64 size) {}
+
     /// Register the address as a Transform Feedback Object
     virtual void RegisterTransformFeedback(GPUVAddr tfb_object_addr) {}
 

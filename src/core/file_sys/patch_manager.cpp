@@ -22,6 +22,7 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/ips_layer.h"
+#include "core/file_sys/openpak_builtin_patches.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
@@ -34,6 +35,7 @@
 #include "core/loader/loader.h"
 #include "core/loader/nso.h"
 #include "core/memory/cheat_engine.h"
+#include "core/openpak/boot_connection.h"
 
 namespace FileSys {
 namespace {
@@ -457,10 +459,21 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
 
     LOG_INFO(Loader, "Patching NSO for name={}, build_id={}", name, build_id);
 
+    auto out = nso;
+
+    // OpenPak's built-in IPS patch first, while the bytes it checks are still as shipped. It does
+    // not depend on the user's mods, so it applies with none installed or all disabled. out is the
+    // header-included buffer user IPS files are applied to, which is the basis its offsets use.
+    if (OpenPak::Network::Enabled()) {
+        if (const auto* builtin = OpenPakBuiltinPatches::Find(build_id)) {
+            OpenPakBuiltinPatches::Apply(*builtin, out);
+        }
+    }
+
     const auto load_dir = GetModificationLoadRoot();
     if (load_dir == nullptr) {
         LOG_ERROR(Loader, "Cannot load mods for invalid title_id={:016X}", title_id);
-        return nso;
+        return out;
     }
 
     auto patch_dirs = load_dir->GetSubdirectories();
@@ -468,7 +481,6 @@ std::vector<u8> PatchManager::PatchNSO(const std::vector<u8>& nso, const std::st
               [](const VirtualDir& l, const VirtualDir& r) { return l->GetName() < r->GetName(); });
     const auto patches = CollectPatches(patch_dirs, build_id);
 
-    auto out = nso;
     for (const auto& patch_file : patches) {
         if (patch_file->GetExtension() == "ips") {
             LOG_INFO(Loader, "    - Applying IPS patch from mod \"{}\"",
@@ -499,6 +511,11 @@ bool PatchManager::HasNSOPatch(const BuildID& build_id_, std::string_view name) 
     const auto build_id = build_id_raw.substr(0, build_id_raw.find_last_not_of('0') + 1);
 
     LOG_INFO(Loader, "Querying NSO patch existence for build_id={}, name={}", build_id, name);
+
+    // OpenPak's built-in IPS patch counts as an NSO patch, so the loader calls PatchNSO for it.
+    if (OpenPak::Network::Enabled() && OpenPakBuiltinPatches::Find(build_id)) {
+        return true;
+    }
 
     const auto load_dir = GetModificationLoadRoot();
     if (load_dir == nullptr) {

@@ -556,11 +556,12 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
         return Fail(Error::ArchiveIncomplete, "start_download reply", archive_id);
     }
     if (progress) {
-        progress->total = 0;
-        progress->done = 0;
+        std::uint64_t total = 0;
         for (const auto& component : downloading->components) {
-            progress->total += static_cast<std::uint64_t>(std::max<std::int64_t>(component.size, 0));
+            total += static_cast<std::uint64_t>(std::max<std::int64_t>(component.size, 0));
         }
+        progress->done = 0;
+        progress->total = total;
     }
     for (const auto id : ids) {
         const auto component =

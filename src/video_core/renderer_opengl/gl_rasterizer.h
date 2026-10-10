@@ -137,6 +137,10 @@ public:
 
     void ReleaseChannel(s32 channel_id) override;
 
+    void ReleaseAddressSpace(size_t as_id) override;
+
+    void ReleaseRegion(DAddr addr, u64 size) override;
+
     void RegisterTransformFeedback(GPUVAddr tfb_object_addr) override;
 
     bool HasDrawTransformFeedback() override {

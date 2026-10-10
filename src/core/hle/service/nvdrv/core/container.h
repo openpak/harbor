@@ -9,12 +9,15 @@
 
 #include <deque>
 #include <memory>
+#include <utility>
+#include <vector>
 #include "common/container/unordered_map.h"
 
 #include "core/device_memory_manager.h"
 #include "core/hle/service/nvdrv/nvdata.h"
 
 namespace Kernel {
+class KernelCore;
 class KProcess;
 }
 
@@ -54,11 +57,15 @@ struct Session {
 
 class Container {
 public:
-    explicit Container(Tegra::Host1x::Host1x& host1x);
+    explicit Container(Tegra::Host1x::Host1x& host1x, Kernel::KernelCore& kernel);
     ~Container();
 
     SessionId OpenSession(Kernel::KProcess* process);
     void CloseSession(SessionId id);
+
+    /// The device memory a session's process has mapped, when closing the session is its last
+    /// reference (the process is gone for nvservices); empty otherwise.
+    std::vector<std::pair<DAddr, u64>> GetRegionsReleasedOnClose(SessionId id);
 
     Session* GetSession(SessionId id);
 

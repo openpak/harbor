@@ -1393,6 +1393,38 @@ void RasterizerOpenGL::ReleaseChannel(s32 channel_id) {
     query_cache.EraseChannel(channel_id);
 }
 
+void RasterizerOpenGL::ReleaseAddressSpace(size_t as_id) {
+    EraseAddressSpace(as_id);
+    {
+        std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+        texture_cache.EraseAddressSpace(as_id);
+        buffer_cache.UnmapGPUMemory(as_id, 0, u64{1} << 40);
+        buffer_cache.EraseAddressSpace(as_id);
+    }
+    shader_cache.EraseAddressSpace(as_id);
+    query_cache.EraseAddressSpace(as_id);
+}
+
+void RasterizerOpenGL::ReleaseRegion(DAddr addr, u64 size) {
+    if (addr == 0 || size == 0) {
+        return;
+    }
+    {
+        std::scoped_lock lock{texture_cache.mutex};
+        if (maxwell3d != nullptr) {
+            texture_cache.UnmapMemory(addr, size);
+        } else {
+            texture_cache.WriteMemory(addr, size);
+        }
+    }
+    {
+        std::scoped_lock lock{buffer_cache.mutex};
+        buffer_cache.ReleaseRegion(addr, size);
+    }
+    query_cache.InvalidateRegion(addr, size);
+    shader_cache.InvalidateRegion(addr, size);
+}
+
 void RasterizerOpenGL::RegisterTransformFeedback(GPUVAddr tfb_object_addr) {
     buffer_cache_runtime.BindTransformFeedbackObject(tfb_object_addr);
 }

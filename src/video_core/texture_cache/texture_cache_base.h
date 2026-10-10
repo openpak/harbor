@@ -295,6 +295,9 @@ private:
 
     void OnGPUASRegister(size_t map_id) final override;
 
+    /// Deletes the images of a destroyed address space and empties its GPU page tables.
+    void OnGPUASUnregister(size_t map_id, size_t storage_id) final override;
+
     /// Runs the Garbage Collector.
     void RunGarbageCollector();
 

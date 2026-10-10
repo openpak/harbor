@@ -129,6 +129,21 @@ void BufferCache<P>::WriteMemory(DAddr device_addr, u64 size) {
 }
 
 template <class P>
+void BufferCache<P>::ReleaseRegion(DAddr device_addr, u64 size) {
+    WriteMemory(device_addr, size);
+    // DeleteBuffer scrubs the bound channel's bindings; with no channel bound nothing can draw.
+    if (channel_state == nullptr || maxwell3d == nullptr) {
+        return;
+    }
+    boost::container::small_vector<BufferId, 64> buffers;
+    ForEachBufferInRange(device_addr, size,
+                         [&](BufferId buffer_id, Buffer&) { buffers.push_back(buffer_id); });
+    for (const BufferId buffer_id : buffers) {
+        DeleteBuffer(buffer_id);
+    }
+}
+
+template <class P>
 void BufferCache<P>::CachedWriteMemory(DAddr device_addr, u64 size) {
     const bool is_dirty = IsRegionRegistered(device_addr, size);
     if (!is_dirty) {

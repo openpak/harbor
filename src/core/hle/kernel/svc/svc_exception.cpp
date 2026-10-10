@@ -17,6 +17,7 @@
 #include "core/hle/kernel/k_thread.h"
 #include "core/hle/kernel/svc.h"
 #include "core/hle/kernel/svc_types.h"
+#include "core/hle/service/am/applet_manager.h"
 #include "core/memory.h"
 #include "core/reporter.h"
 
@@ -196,6 +197,24 @@ void Break(Core::System& system, BreakReason reason, u64 info1, u64 info2) {
         auto* thread = system.Kernel().GetCurrentEmuThread();
         system.GetDebugger().NotifyThreadStopped(thread);
         thread->RequestSuspend(system.Kernel(), Kernel::SuspendType::Debug);
+        return;
+    }
+
+    // With no debugger attached a console's kernel ends the process that broke (svcBreak exits
+    // the process once the JIT debug attempt fails); HOME then reports the software as closed by
+    // an error, with the result the application set through SetTerminateResult. In a HOME
+    // session the application is ended the same way; system applets keep Eden's behaviour.
+    // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): Syscall.Break.
+    if (should_break && system.GetAppletManager().IsHomeSession()) {
+        auto& kernel = system.Kernel();
+        auto& process = GetCurrentProcess(kernel);
+        if (process.IsApplication() && process.GetState() == KProcess::State::Running) {
+            LOG_WARNING(Debug_Emulated,
+                        "svcBreak: ending application pid={} program={:016x} (it broke "
+                        "execution)",
+                        process.GetProcessId(), process.GetProgramId());
+            process.Exit(kernel);
+        }
     }
 }
 

@@ -71,6 +71,11 @@ public:
      */
     virtual void OnClose(DeviceFD fd) = 0;
 
+    /// Whether this is a GPU channel (/dev/nvhost-gpu), closed first when its client goes away.
+    virtual bool IsChannel() const {
+        return false;
+    }
+
     virtual Kernel::KEvent* QueryEvent(u32 event_id) {
         return nullptr;
     }

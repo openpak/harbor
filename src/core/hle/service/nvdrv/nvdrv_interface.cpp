@@ -5,6 +5,10 @@
 // SPDX-FileCopyrightText: 2021 Skyline Team and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+#include <utility>
+#include <vector>
+
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/string_util.h"
@@ -16,6 +20,7 @@
 #include "core/hle/service/nvdrv/nvdata.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
 #include "core/hle/service/nvdrv/nvdrv_interface.h"
+#include "video_core/gpu.h"
 
 namespace Service::Nvidia {
 
@@ -274,12 +279,29 @@ NVDRV::~NVDRV() {
         LOG_INFO(Service_NVDRV, "{} client closed: nvcore session {}, {} device files left open",
                  GetServiceName(), session_id.id, open_fds.size());
     }
-    for (const DeviceFD fd : open_fds) {
-        nvdrv->Close(fd);
+    // Teardown in the order nvservices and the GPU driver use when a client process exits:
+    // first its channels (the GPU stops running its work), then the GPU caches over its memory,
+    // then its address spaces and remaining files, and last its memory mappings and process.
+    std::ranges::stable_partition(open_fds, [this](DeviceFD fd) { return nvdrv->IsChannel(fd); });
+    auto fd_it = open_fds.begin();
+    for (; fd_it != open_fds.end() && nvdrv->IsChannel(*fd_it); ++fd_it) {
+        nvdrv->Close(*fd_it);
+    }
+    std::vector<std::pair<DAddr, u64>> released_regions;
+    if (is_initialized) {
+        released_regions = nvdrv->GetContainer().GetRegionsReleasedOnClose(session_id);
+        if (!released_regions.empty()) {
+            system.GPU().ReleaseRegions(released_regions);
+        }
+    }
+    for (; fd_it != open_fds.end(); ++fd_it) {
+        nvdrv->Close(*fd_it);
     }
     if (is_initialized) {
         auto& container = nvdrv->GetContainer();
         container.CloseSession(session_id);
+        LOG_INFO(Service_NVDRV, "{} client closed: nvcore session {} released ({} memory regions)",
+                 GetServiceName(), session_id.id, released_regions.size());
     }
 }
 

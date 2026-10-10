@@ -73,6 +73,9 @@ public:
 
     NvResult VerifyFD(DeviceFD fd) const;
 
+    /// Whether the file is a GPU channel (/dev/nvhost-gpu).
+    bool IsChannel(DeviceFD fd) const;
+
     /// Opens a device node and returns a file descriptor to it.
     DeviceFD Open(const std::string& device_name, NvCore::SessionId session_id);
 

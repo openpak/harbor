@@ -157,6 +157,9 @@ public:
 
     void UnmapAllHandles(NvCore::SessionId session_id);
 
+    /// Device ranges of the session's handles mapped outside its heap mapper.
+    std::vector<std::pair<DAddr, u64>> GetSessionDeviceMappings(NvCore::SessionId session_id);
+
 private:
     std::list<std::shared_ptr<Handle>> unmap_queue{};
     std::mutex unmap_queue_lock{}; //!< Protects access to `unmap_queue`

@@ -20,6 +20,7 @@
 #include "video_core/engines/puller.h"
 #include "video_core/gpu.h"
 #include "video_core/host1x/host1x.h"
+#include "video_core/memory_manager.h"
 
 namespace Service::Nvidia::Devices {
 namespace {
@@ -45,6 +46,20 @@ nvhost_gpu::nvhost_gpu(Core::System& system_, EventInterface& events_interface_,
 }
 
 nvhost_gpu::~nvhost_gpu() {
+    // Close the channel as the GPU driver does when its owner goes away: the GPU stops running
+    // its work before its address space and the memory behind it can go.
+    system.GPU().ReleaseChannel(*channel_state);
+    // Then its syncpoint moves to the last value promised to the guest (the driver's safe state
+    // for an aborted channel), so nothing keeps waiting for work that was dropped.
+    const u32 promised = syncpoint_manager.IncrementSyncpointMaxExt(channel_syncpoint, 0);
+    auto& host1x_syncpoints = system.Host1x().GetSyncpointManager();
+    const auto behind = [promised](u32 value) { return static_cast<s32>(promised - value) > 0; };
+    for (u32 i = 0; i < 0x10000 && behind(host1x_syncpoints.GetGuestSyncpointValue(channel_syncpoint)); ++i) {
+        host1x_syncpoints.IncrementGuest(channel_syncpoint);
+    }
+    for (u32 i = 0; i < 0x10000 && behind(host1x_syncpoints.GetHostSyncpointValue(channel_syncpoint)); ++i) {
+        host1x_syncpoints.IncrementHost(channel_syncpoint);
+    }
     events_interface.FreeEvent(sm_exception_breakpoint_int_report_event);
     events_interface.FreeEvent(sm_exception_breakpoint_pause_report_event);
     events_interface.FreeEvent(error_notifier_event);

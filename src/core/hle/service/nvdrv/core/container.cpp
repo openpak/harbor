@@ -5,6 +5,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <utility>
 
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/service/nvdrv/core/container.h"
@@ -22,9 +23,12 @@ Session::Session(SessionId id_, Kernel::KProcess* process_, Core::Asid asid_)
 Session::~Session() = default;
 
 struct ContainerImpl {
-    explicit ContainerImpl(Container& core, Tegra::Host1x::Host1x& host1x_)
-        : host1x{host1x_}, file{core, host1x_}, manager{host1x_}, device_file_data{} {}
+    explicit ContainerImpl(Container& core, Tegra::Host1x::Host1x& host1x_,
+                           Kernel::KernelCore& kernel_)
+        : host1x{host1x_}, kernel{kernel_}, file{core, host1x_}, manager{host1x_},
+          device_file_data{} {}
     Tegra::Host1x::Host1x& host1x;
+    Kernel::KernelCore& kernel;
     NvMap file;
     SyncpointManager manager;
     Container::Host1xDeviceFileData device_file_data;
@@ -34,8 +38,8 @@ struct ContainerImpl {
     std::mutex session_guard;
 };
 
-Container::Container(Tegra::Host1x::Host1x& host1x_) {
-    impl = std::make_unique<ContainerImpl>(*this, host1x_);
+Container::Container(Tegra::Host1x::Host1x& host1x_, Kernel::KernelCore& kernel) {
+    impl = std::make_unique<ContainerImpl>(*this, host1x_, kernel);
 }
 
 Container::~Container() = default;
@@ -68,6 +72,9 @@ SessionId Container::OpenSession(Kernel::KProcess* process) {
     auto& session = impl->sessions[new_id];
     session.is_active = true;
     session.ref_count = 1;
+    // nvservices keeps the client's process handle until the session closes, so the process
+    // and its memory outlive the GPU work and the mappings torn down in CloseSession.
+    process->Open(impl->kernel);
     // Optimization
     if (process->IsApplication()) {
         auto& page_table = process->GetPageTable().GetBasePageTable();
@@ -132,6 +139,22 @@ void Container::CloseSession(SessionId session_id) {
     session.is_active = false;
     smmu.UnregisterProcess(impl->sessions[session_id.id].asid);
     impl->id_pool.emplace_front(session_id.id);
+    if (auto* const process = std::exchange(session.process, nullptr)) {
+        process->Close(impl->kernel);
+    }
+}
+
+std::vector<std::pair<DAddr, u64>> Container::GetRegionsReleasedOnClose(SessionId session_id) {
+    std::scoped_lock lk(impl->session_guard);
+    auto& session = impl->sessions[session_id.id];
+    if (!session.is_active || session.ref_count != 1) {
+        return {};
+    }
+    auto regions = impl->file.GetSessionDeviceMappings(session_id);
+    if (session.has_preallocated_area) {
+        regions.emplace_back(session.mapper->GetRegionStart(), session.mapper->GetRegionSize());
+    }
+    return regions;
 }
 
 Session* Container::GetSession(SessionId session_id) {

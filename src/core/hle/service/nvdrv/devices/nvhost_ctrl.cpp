@@ -30,6 +30,21 @@ nvhost_ctrl::nvhost_ctrl(Core::System& system_, EventInterface& events_interface
       syncpoint_manager{core_.GetSyncpointManager()} {}
 
 nvhost_ctrl::~nvhost_ctrl() {
+    // A wait still pending when the client goes away (its process exited) is cancelled first:
+    // its syncpoint action refers to this device and would run after it is gone.
+    {
+        auto lock = NvEventsLock();
+        auto& host1x_syncpoint_manager = system.Host1x().GetSyncpointManager();
+        for (auto& event : events) {
+            if (event.registered &&
+                event.status.exchange(EventState::Cancelling, std::memory_order_acq_rel) ==
+                    EventState::Waiting) {
+                host1x_syncpoint_manager.DeregisterHostAction(event.assigned_syncpt,
+                                                              event.wait_handle);
+                event.wait_handle = {};
+            }
+        }
+    }
     for (auto& event : events) {
         if (!event.registered) {
             continue;
