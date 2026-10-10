@@ -256,6 +256,11 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // Harbor console mode runs the firmware's keyboard; keys that reach the activity (volume up,
+        // for one) are Android's to handle, never text for a host inline keyboard.
+        if (HarborConsole.active) {
+            return super.onKeyDown(keyCode, event)
+        }
         if (event.action == KeyEvent.ACTION_DOWN) {
             if (keyCode == KeyEvent.KEYCODE_ENTER) {
                 // Special case, we do not support multiline input, dismiss the keyboard.
