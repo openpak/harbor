@@ -122,7 +122,7 @@ void LoopProcess(Core::System& system) {
 }
 
 Module::Module(Core::System& system)
-    : container{system.Host1x()}, service_context{system, "nvdrv"}, events_interface{*this} {
+    : container{system.Host1x(), system.Kernel()}, service_context{system, "nvdrv"}, events_interface{*this} {
     builders["/dev/nvhost-as-gpu"] = [this, &system](DeviceFD fd) {
         auto device = std::make_shared<Devices::nvhost_as_gpu>(system, *this, container);
         return open_files.emplace(fd, std::move(device)).first;
@@ -175,6 +175,11 @@ NvResult Module::VerifyFD(DeviceFD fd) const {
     }
 
     return NvResult::Success;
+}
+
+bool Module::IsChannel(DeviceFD fd) const {
+    const auto itr = open_files.find(fd);
+    return itr != open_files.end() && itr->second->IsChannel();
 }
 
 DeviceFD Module::Open(const std::string& device_name, NvCore::SessionId session_id) {

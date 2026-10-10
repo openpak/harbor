@@ -332,6 +332,18 @@ std::optional<NvMap::FreeInfo> NvMap::FreeHandle(Handle::Id handle, bool interna
     return freeInfo;
 }
 
+std::vector<std::pair<DAddr, u64>> NvMap::GetSessionDeviceMappings(NvCore::SessionId session_id) {
+    std::vector<std::pair<DAddr, u64>> regions;
+    std::scoped_lock lk{handles_lock};
+    for (auto& [id, handle] : handles) {
+        std::scoped_lock handle_lk{handle->mutex};
+        if (handle->session_id.id == session_id.id && !handle->in_heap && handle->d_address != 0) {
+            regions.emplace_back(handle->d_address, handle->aligned_size);
+        }
+    }
+    return regions;
+}
+
 void NvMap::UnmapAllHandles(NvCore::SessionId session_id) {
     auto handles_copy = [&] {
         std::scoped_lock lk{handles_lock};

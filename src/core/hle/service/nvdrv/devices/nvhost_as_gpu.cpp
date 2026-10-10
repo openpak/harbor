@@ -138,8 +138,17 @@ NvResult nvhost_as_gpu::AllocAsEx(IoctlAllocAsEx& params) {
         static_cast<u32>((vm.va_range_end - vm.va_range_split) >> vm.big_page_size_bits)};
     vm.big_page_allocator.emplace(start_big_pages, end_big_pages);
 
-    gmmu = std::make_unique<Tegra::MemoryManager>(system, max_big_page_bits, vm.va_range_split, vm.big_page_size_bits, VM::PAGE_SIZE_BITS);
-    system.GPU().InitAddressSpace(*gmmu);
+    // The rasterizer forgets the address space before it is destroyed, after the last channel
+    // using it has been released.
+    auto& gpu = system.GPU();
+    gmmu = std::shared_ptr<Tegra::MemoryManager>(
+        new Tegra::MemoryManager(system, max_big_page_bits, vm.va_range_split,
+                                 vm.big_page_size_bits, VM::PAGE_SIZE_BITS),
+        [&gpu](Tegra::MemoryManager* memory_manager) {
+            gpu.ReleaseAddressSpace(*memory_manager);
+            delete memory_manager;
+        });
+    gpu.InitAddressSpace(*gmmu);
     vm.initialised = true;
 
     return NvResult::Success;
@@ -416,6 +425,7 @@ NvResult nvhost_as_gpu::BindChannel(IoctlBindChannel& params) {
 
     auto gpu_channel_device = module.GetDevice<nvhost_gpu>(params.fd);
     gpu_channel_device->channel_state->memory_manager = gmmu.get();
+    gpu_channel_device->address_space = gmmu;
     return NvResult::Success;
 }
 
