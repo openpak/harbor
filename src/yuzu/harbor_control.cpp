@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -32,6 +33,7 @@
 #include "common/settings_input.h"
 #include "common/thread.h"
 #include "core/hle/service/omm/idle_policy.h"
+#include "hid_core/frontend/motion_input.h"
 #include "input_common/drivers/keyboard.h"
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/main.h"
@@ -446,6 +448,73 @@ void HarborControl::Execute(const std::string& line) {
                 gamepad->SetStickPosition(port, stick, 0.0f, 0.0f);
             }
         }
+    } else if (cmd == "motion") {
+        // motion <x> <y> <z> [ms] | motion turn <x|y|z> <degrees> [ms]: the controller turns at
+        // x, y, z degrees per second about its own axes (or by `degrees` about one axis) for ms
+        // (default 500), then is held still. The sensor is reported every 5 ms, as a controller
+        // reports it, so hid integrates the orientation; the accelerometer reads gravity as it
+        // falls in the turned controller (1 g along -z before any turn: lying flat).
+        const auto usage = [] {
+            LOG_WARNING(Frontend, "harbor-control: usage: motion <x> <y> <z> [ms] | "
+                                  "motion turn <x|y|z> <degrees> [ms] (degrees per second)");
+        };
+        float rate[3]{};
+        int ms = 500;
+        if (words.size() >= 4 && words[1] == "turn") {
+            const int axis = words[2] == "x" ? 0 : words[2] == "y" ? 1 : words[2] == "z" ? 2 : -1;
+            ms = ms_at(4, ms);
+            if (axis < 0 || ms <= 0) {
+                usage();
+                return;
+            }
+            rate[axis] = std::strtof(words[3].c_str(), nullptr) * 1000.0f / static_cast<float>(ms);
+        } else if (words.size() >= 4) {
+            for (int i = 0; i < 3; ++i) {
+                rate[i] = std::strtof(words[i + 1].c_str(), nullptr);
+            }
+            ms = ms_at(4, ms);
+        } else {
+            usage();
+            return;
+        }
+        auto* const gamepad = input_subsystem.GetVirtualGamepad();
+        // The controller's pose, integrated from the same gyroscope samples hid gets, gives the
+        // gravity a real accelerometer would read in it. A fixed reading would make hid's drift
+        // correction pull the controller back to where it started.
+        static Core::HID::MotionInput pose;
+        // hid's gyroscope unit is turns per second.
+        const auto report = [&](const float* turn, u64 delta_us) {
+            pose.SetGyroscope({turn[0], turn[1], turn[2]});
+            pose.UpdateOrientation(delta_us);
+            const auto q = pose.GetQuaternion();
+            // MotionInput::UpdateOrientation's gravity estimate, as the accelerometer it expects.
+            const float q1 = q[3], q2 = q[0], q3 = q[1], q4 = q[2];
+            const float gx = 2.0f * (q2 * q4 - q1 * q3);
+            const float gy = 2.0f * (q1 * q2 + q3 * q4);
+            const float gz = q1 * q1 - q2 * q2 - q3 * q3 + q4 * q4;
+            for (const auto port : PlayerPorts) {
+                gamepad->SetMotionState(port, delta_us, turn[0], turn[1], turn[2], -gx, gy, -gz);
+            }
+        };
+        const float turns[3]{rate[0] / 360.0f, rate[1] / 360.0f, rate[2] / 360.0f};
+        const float still[3]{};
+        using Clock = std::chrono::steady_clock;
+        const auto start = Clock::now();
+        const auto end = start + std::chrono::milliseconds(ms);
+        auto last = start;
+        report(still, 5000);
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            const auto now = std::min(Clock::now(), end);
+            const auto delta =
+                std::chrono::duration_cast<std::chrono::microseconds>(now - last).count();
+            report(turns, static_cast<u64>(delta));
+            last = now;
+            if (now >= end) {
+                break;
+            }
+        }
+        report(still, 5000);
     } else if (cmd == "home") {
         PressFor(static_cast<int>(VirtualButton::ButtonHome), HomeShortMs);
     } else if (cmd == "home-long") {

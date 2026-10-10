@@ -9,6 +9,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -121,9 +122,19 @@ public:
     virtual std::unique_ptr<Importer> OpenImporter(std::span<const std::uint8_t> meta) = 0;
 };
 
+/// A transfer's byte counters. The transfer thread writes them while olsc's IPC threads read them
+/// (GetTransferTaskProgress), so they are atomic; a copy is a snapshot.
 struct Progress {
-    std::uint64_t total = 0;
-    std::uint64_t done = 0;
+    std::atomic<std::uint64_t> total{0};
+    std::atomic<std::uint64_t> done{0};
+
+    Progress() = default;
+    Progress(const Progress& other) : total{other.total.load()}, done{other.done.load()} {}
+    Progress& operator=(const Progress& other) {
+        total = other.total.load();
+        done = other.done.load();
+        return *this;
+    }
 };
 
 struct Outcome {

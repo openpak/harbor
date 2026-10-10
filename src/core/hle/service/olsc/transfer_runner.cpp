@@ -590,6 +590,27 @@ void TransferQueue::Raise(u64 task_id) {
     }
 }
 
+std::optional<std::array<u64, 3>> TransferQueue::ProgressOf(u64 task_id, u8 filter) const {
+    std::lock_guard lock{mutex};
+    for (const auto& task : tasks) {
+        if (task.id != task_id || !MatchesFilter(task, filter)) {
+            continue;
+        }
+        if (!task.running) {
+            return std::array<u64, 3>{task.progress.total.load(), task.progress.done.load(), 0};
+        }
+        // The running task (0x1e2940): live counters and the throughput so far.
+        const u64 done = live_progress.done.load();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - live_started)
+                .count();
+        const u64 bits_per_second =
+            elapsed > 0 ? done * 8 * 1000 / static_cast<u64>(elapsed) : 0;
+        return std::array<u64, 3>{live_progress.total.load(), done, bits_per_second};
+    }
+    return std::nullopt;
+}
+
 std::optional<TransferTask> TransferQueue::Current() const {
     std::lock_guard lock{mutex};
     for (const auto& task : tasks) {
@@ -637,6 +658,34 @@ std::deque<TransferTask>::iterator TransferQueue::NextLocked(Clock::time_point n
         return basic;
     }
     return std::find_if(tasks.begin(), tasks.end(), runnable);
+}
+
+void TransferQueue::LogWaitingLocked() {
+    // Queued tasks that cannot start, and why: logged once per change, so a download that sits
+    // at "Paused" in qlaunch's dialog shows its reason in the log.
+    std::string why;
+    for (const auto& t : tasks) {
+        if (t.state != 0 || t.running) {
+            continue;
+        }
+        const char* reason = "waiting";
+        if (execution_holds > 0) {
+            reason = "a stopper is open";
+        } else if (running_applications.contains(t.application_id)) {
+            reason = "its title is running";
+        } else if (t.rank >= RankPostponed) {
+            reason = "postponed";
+        }
+        why += fmt::format("{}task {} ({:016X}, {}): {}", why.empty() ? "" : "; ", t.id,
+                           t.application_id, t.type == 1 ? "download" : "upload", reason);
+    }
+    if (why != waiting_logged) {
+        waiting_logged = why;
+        if (!why.empty()) {
+            LOG_INFO(Service_OLSC, "save data cloud: queued, not started: {} (stoppers {})", why,
+                     execution_holds);
+        }
+    }
 }
 
 TransferQueue::Clock::time_point TransferQueue::NextWakeLocked() const {
@@ -726,25 +775,45 @@ void TransferQueue::Autonomy() {
 
 void TransferQueue::Run(std::stop_token stop) {
     HARBOR_CRUMB("olsc: transfer runner thread runs");
+    bool autonomy_due = true;
     while (!stop.stop_requested()) {
-        HARBOR_CRUMB_ONCE("olsc: first boot pass (Autonomy)");
-        Autonomy();
-        HARBOR_CRUMB_ONCE("olsc: first boot pass done");
+        // The executor and the autonomy agent are separate on a console: a task the user queued
+        // (qlaunch's "Download") starts at once, not after the agent's list refreshes and
+        // registrations, which go to the network. The agent runs when nothing is runnable.
+        bool runnable;
+        {
+            std::lock_guard lock{mutex};
+            runnable = NextLocked(Clock::now()) != tasks.end();
+        }
+        if (autonomy_due || !runnable) {
+            HARBOR_CRUMB_ONCE("olsc: first boot pass (Autonomy)");
+            Autonomy();
+            HARBOR_CRUMB_ONCE("olsc: first boot pass done");
+            autonomy_due = false;
+        }
         TransferTask task;
         {
             std::unique_lock lock{mutex};
             const auto next = NextLocked(Clock::now());
             if (next == tasks.end()) {
+                LogWaitingLocked();
                 wake.wait_until(lock, stop, NextWakeLocked(), [this] {
                     return !exited_applications.empty() || NextLocked(Clock::now()) != tasks.end();
                 });
+                // Woken for exits or the agent's own time: the agent first. Woken because a task
+                // became runnable: that task first.
+                autonomy_due = !exited_applications.empty() ||
+                               NextLocked(Clock::now()) == tasks.end();
                 continue;
             }
+            waiting_logged.clear();
             if (next->rank >= RankPostponed) {
                 postponed_gate = Clock::now() + PostponedInterval;
             }
             next->running = true;
             task = *next;
+            live_progress = {};
+            live_started = Clock::now();
             Raise(start_events);
         }
         Execute(task);
@@ -795,14 +864,15 @@ void TransferQueue::Execute(TransferTask& task) {
             save.acd_index = reinterpret_cast<const u8*>(&extra)[0x55];
             save.launch_required_version = LaunchVersion(system, task.application_id);
             ManagerFs fs{system, task.user, info->save_id_unknown};
-            outcome = tr::Upload(rest, fs, save, 0, &task.progress);
+            outcome = tr::Upload(rest, fs, save, 0, &live_progress);
         }
     } else {
         const auto info = FindLocalSave(system, task.user, task.application_id);
         ManagerFs fs{system, task.user, info ? u64{info->save_id_unknown} : 0};
         outcome = tr::Download(rest, fs, task.application_id, task.archive_id,
-                               LaunchVersion(system, task.application_id), &task.progress);
+                               LaunchVersion(system, task.application_id), &live_progress);
     }
+    task.progress = live_progress;
     // The task's result as olsc keeps it: 2179-<description>; an HTTP failure without a server
     // code is 2155-<status> on a console (olsc-transfer.md §5). Fs failures carry fs's own
     // result on a console; Harbor reports them as 2179-9100 (logged with fs's result above).

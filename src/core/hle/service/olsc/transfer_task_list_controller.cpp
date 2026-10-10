@@ -184,16 +184,13 @@ Result ITransferTaskListController::SuspendTransferTask(u8 filter, u64 task_id) 
 
 Result ITransferTaskListController::GetTransferTaskProgress(Out<std::array<u8, 0x18>> out_progress,
                                                            u8 filter, u64 task_id) {
-    // 0x222e80 -> 0x1aa1b0: {total bytes, bytes done, throughput in bits/s}, or 2179-1102.
+    // 0x222e80 -> 0x1aa1b0: {total bytes, bytes done, throughput in bits/s}, or 2179-1102. The
+    // running task's are live (0x1e2940): qlaunch's download dialog shows them as it goes.
     out_progress->fill(0);
-    for (const auto& task : queue->Tasks()) {
-        if (task.id == task_id && MatchesFilter(task, filter)) {
-            std::memcpy(out_progress->data(), &task.progress.total, 8);
-            std::memcpy(out_progress->data() + 8, &task.progress.done, 8);
-            R_SUCCEED();
-        }
-    }
-    R_RETURN(ResultTransferTaskNotFound);
+    const auto progress = queue->ProgressOf(task_id, filter);
+    R_UNLESS(progress.has_value(), ResultTransferTaskNotFound);
+    std::memcpy(out_progress->data(), progress->data(), 0x18);
+    R_SUCCEED();
 }
 
 Result ITransferTaskListController::FindTransferTaskInfo(Out<TransferTaskInfo> out_info,
