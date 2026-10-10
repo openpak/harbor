@@ -85,7 +85,7 @@ public:
 public:
     KMemoryBlockManager();
 
-    using BlockCallback = std::function<void(Common::ProcessAddress, u64)>;
+    using BlockCallback = std::function<void(Common::ProcessAddress, u64, KMemoryState)>;
 
     Result Initialize(KProcessAddress st, KProcessAddress nd,
                       KMemoryBlockSlabManager* slab_manager);

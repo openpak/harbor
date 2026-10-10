@@ -463,7 +463,14 @@ Result KPageTableBase::FinalizeProcess() {
 void KPageTableBase::Finalize() {
     this->FinalizeProcess();
 
-    auto BlockCallback = [&](KProcessAddress addr, u64 size) {
+    auto BlockCallback = [&](KProcessAddress addr, u64 size, KMemoryState state) {
+        // A free block has no host mapping and no pages. It can also lie outside the fastmem
+        // arena: with NCE the arena covers 256 GiB from its host base while the block manager
+        // spans the whole 39-bit space, so unmapping the trailing free block overran the arena.
+        if (state == KMemoryState::Free) {
+            return;
+        }
+
         if (m_impl.fastmem_arena) {
             m_system.DeviceMemory().buffer.Unmap(GetInteger(addr), size, false);
         }

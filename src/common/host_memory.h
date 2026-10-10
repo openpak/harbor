@@ -90,6 +90,8 @@ private:
     size_t virtual_base_offset{};
     // Windows requires it for kernels whom lack proper support for some functions!
     bool fallback_buffer{false};
+    /// Set once EnableDirectMappedAddress has made virtual offsets absolute host addresses.
+    bool direct_mapped{false};
 };
 
 } // namespace Common
