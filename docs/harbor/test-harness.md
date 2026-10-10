@@ -49,6 +49,8 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `press <button> [ms]` | hold the button for `ms` (default 100), then release |
 | `hold <button>` / `release <button>` | press or release until told otherwise |
 | `stick <l\|r> <x> <y> [ms]` | set a stick (-1..1); with `ms` it returns to centre afterwards |
+| `motion <x> <y> <z> [ms]` | turns the controller at x, y, z degrees per second about its own axes for `ms` (default 500), then holds it still; the gyroscope is reported every 5 ms and the accelerometer reads gravity as it falls in the turned controller (1 g along -z lying flat), so hid integrates the pose as it does for a real sensor and its drift correction keeps it |
+| `motion turn <x\|y\|z> <degrees> [ms]` | the same by a total angle about one axis over `ms`. Handheld, as Splatoon 2 reads it: `x` positive tilts the top edge up (looks up), `y` positive turns the view left (negative turns right). Games often scale the angle (Splatoon 2's camera moves more than the controller); aim in small steps and screenshot |
 | `home` | Home for 100 ms (short press, below the poller's 400 ms) |
 | `home-long` | Home for 1200 ms (long press, above the poller's 500 ms in a HOME session, 800 ms outside one) |
 | `capture` | Capture button, short press |
@@ -72,7 +74,9 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `threads` | guest thread dump to the log |
 | `quit` | closes the main window (clean shutdown, about 10 s) |
 
-Buttons: `A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK`. `drive.sh` also takes
+Buttons: `A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT LSTICK RSTICK`. Motion example (Splatoon 2's first-run
+"Tilt up slowly" step, then the balloon): `drive.sh s1 motion turn x 44 2000`, then small `motion turn x/y` steps onto
+the balloon and `press ZR 2000`. `drive.sh` also takes
 `sleep <seconds>`. Relative screenshot paths land in the run directory.
 
 Input goes through InputCommon's virtual gamepad (the path the Android overlay uses), which every
