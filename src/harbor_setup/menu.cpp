@@ -36,6 +36,7 @@
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/core.h"
+#include "core/online_speed_lock.h"
 #include "core/openpak/session.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
@@ -677,6 +678,12 @@ void MenuSetHost(MenuHost& host) {
     HARBOR_CRUMB("menu: MenuSetHost");
     menu_host = &host;
     StartPowerKey(host.System());
+    // Online play locks the speed to 100%; the user who had chosen another speed is told.
+    Core::OnlineSpeedLock::SetNoticeHandler([](const std::string& text) {
+        if (menu_host) {
+            menu_host->HostNotice(text);
+        }
+    });
     // OpenPak refused this console's identity (another live console has it): the menu offers to
     // make this one a new console, on every frontend alike.
     OpenPak::Session::SetDeviceIdInUseHook([] {

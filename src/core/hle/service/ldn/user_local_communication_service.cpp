@@ -14,6 +14,7 @@
 #include "core/hle/service/server_manager.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
+#include "core/online_speed_lock.h"
 #include "network/network.h"
 
 // This is defined by synchapi.h and conflicts with ServiceContext::CreateEvent
@@ -67,6 +68,7 @@ IUserLocalCommunicationService::IUserLocalCommunicationService(Core::System& sys
 }
 
 IUserLocalCommunicationService::~IUserLocalCommunicationService() {
+    HoldSpeedLock(false);
     if (is_initialized) {
         if (auto room_member = Network::GetRoomMember().lock()) {
             room_member->Unbind(ldn_packet_received);
@@ -209,14 +211,19 @@ Result IUserLocalCommunicationService::OpenAccessPoint() {
 Result IUserLocalCommunicationService::CloseAccessPoint() {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.CloseAccessPoint());
+    const Result result = lan_discovery.CloseAccessPoint();
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::CreateNetwork(const CreateNetworkConfig& create_config) {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.CreateNetwork(create_config.security_config, create_config.user_config,
-                                         create_config.network_config));
+    const Result result =
+        lan_discovery.CreateNetwork(create_config.security_config, create_config.user_config,
+                                    create_config.network_config);
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::CreateNetworkPrivate(
@@ -224,14 +231,19 @@ Result IUserLocalCommunicationService::CreateNetworkPrivate(
     InArray<AddressEntry, BufferAttr_HipcPointer> address_list) {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.CreateNetwork(create_config.security_config, create_config.user_config,
-                                         create_config.network_config));
+    const Result result =
+        lan_discovery.CreateNetwork(create_config.security_config, create_config.user_config,
+                                    create_config.network_config);
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::DestroyNetwork() {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.DestroyNetwork());
+    const Result result = lan_discovery.DestroyNetwork();
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::SetAdvertiseData(
@@ -260,7 +272,9 @@ Result IUserLocalCommunicationService::OpenStation() {
 Result IUserLocalCommunicationService::CloseStation() {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.CloseStation());
+    const Result result = lan_discovery.CloseStation();
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::Connect(
@@ -272,14 +286,19 @@ Result IUserLocalCommunicationService::Connect(
              connect_data.security_config.passphrase_size,
              connect_data.security_config.security_mode, connect_data.local_communication_version);
 
-    R_RETURN(lan_discovery.Connect(*network_info, connect_data.user_config,
-                                   static_cast<u16>(connect_data.local_communication_version)));
+    const Result result =
+        lan_discovery.Connect(*network_info, connect_data.user_config,
+                              static_cast<u16>(connect_data.local_communication_version));
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::Disconnect() {
     LOG_INFO(Service_LDN, "called");
 
-    R_RETURN(lan_discovery.Disconnect());
+    const Result result = lan_discovery.Disconnect();
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::Initialize(ClientProcessId aruid) {
@@ -309,7 +328,9 @@ Result IUserLocalCommunicationService::Finalize() {
 
     is_initialized = false;
 
-    R_RETURN(lan_discovery.Finalize());
+    const Result result = lan_discovery.Finalize();
+    UpdateSpeedLock();
+    R_RETURN(result);
 }
 
 Result IUserLocalCommunicationService::Initialize2(u32 version, ClientProcessId process_id) {
@@ -322,7 +343,28 @@ void IUserLocalCommunicationService::OnLDNPacketReceived(const Network::LDNPacke
 }
 
 void IUserLocalCommunicationService::OnEventFired() {
+    UpdateSpeedLock();
     state_change_event->Signal(system.Kernel());
+}
+
+// [Harbor] Local wireless play holds the guest at real time while a network is up, like online
+// play does (core/online_speed_lock.h).
+void IUserLocalCommunicationService::UpdateSpeedLock() {
+    const auto state = lan_discovery.GetState();
+    HoldSpeedLock(state == State::AccessPointCreated || state == State::StationConnected);
+}
+
+void IUserLocalCommunicationService::HoldSpeedLock(bool hold) {
+    std::scoped_lock lk{speed_lock_mutex};
+    if (hold == speed_lock_held) {
+        return;
+    }
+    speed_lock_held = hold;
+    if (hold) {
+        speed_lock_ticket = Core::OnlineSpeedLock::Acquire("local wireless");
+    } else {
+        Core::OnlineSpeedLock::Release("local wireless", speed_lock_ticket);
+    }
 }
 
 } // namespace Service::LDN

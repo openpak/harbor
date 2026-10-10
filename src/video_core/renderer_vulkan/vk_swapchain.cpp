@@ -51,8 +51,9 @@ static VkPresentModeKHR ChooseSwapPresentMode(bool has_imm, bool has_mailbox,
         if (Settings::values.frame_gen.GetValue()) {
             return mode == Settings::VSyncMode::FifoRelaxed ? mode : Settings::VSyncMode::Fifo;
         }
-        if (Settings::values.use_speed_limit.GetValue() &&
-            Settings::values.current_speed_mode.GetValue() != Settings::SpeedMode::Turbo) {
+        if (Settings::OnlineSpeedLocked() ||
+            (Settings::values.use_speed_limit.GetValue() &&
+             Settings::values.current_speed_mode.GetValue() != Settings::SpeedMode::Turbo)) {
             return mode;
         }
         switch (mode) {

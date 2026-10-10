@@ -992,6 +992,14 @@ float Volume();
 
 // speed limit ops
 u16 SpeedLimit();
+/// [Harbor] The speed limiter as emulation applies it: the user's choice, or on while online play
+/// locks the guest to real time. Read this, not use_speed_limit, wherever the guest is paced.
+bool SpeedLimitEnabled();
+/// [Harbor] Online play (an application's accepted internet request, or local wireless) locks the
+/// guest to 100%: peers drop a console whose game runs faster or slower than real time.
+/// Runtime only; set by core/online_speed_lock.cpp, never saved, the user's settings untouched.
+bool OnlineSpeedLocked();
+void SetOnlineSpeedLocked(bool locked);
 void SetSpeedMode(const SpeedMode &mode);
 void ToggleStandardMode();
 void ToggleTurboMode();

@@ -145,6 +145,12 @@ object HarborMenuBridge {
                 ""
             }
 
+            // A short host-side notice from the core (e.g. online play locking the speed).
+            "notice" -> {
+                onUi { activity -> Toast.makeText(activity, argument, Toast.LENGTH_LONG).show() }
+                ""
+            }
+
             // Controllers and Input.
             "homeKeyEnabled" -> flag(HarborKeyService.enabled(YuzuApplication.appContext))
             "openHomeKeySettings" -> {

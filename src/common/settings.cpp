@@ -10,6 +10,7 @@
 #include <exception>
 #include <stdexcept>
 #endif
+#include <atomic>
 #include <compare>
 #include <cstddef>
 #include <filesystem>
@@ -420,7 +421,26 @@ void SetConfiguringGlobal(bool is_global) {
     configuring_global = is_global;
 }
 
+namespace {
+std::atomic_bool online_speed_locked{false};
+} // namespace
+
+bool OnlineSpeedLocked() {
+    return online_speed_locked.load(std::memory_order_relaxed);
+}
+
+void SetOnlineSpeedLocked(bool locked) {
+    online_speed_locked.store(locked, std::memory_order_relaxed);
+}
+
+bool SpeedLimitEnabled() {
+    return OnlineSpeedLocked() || values.use_speed_limit.GetValue();
+}
+
 u16 SpeedLimit() {
+    if (OnlineSpeedLocked()) {
+        return 100;
+    }
     switch (SpeedMode(values.current_speed_mode)) {
     case SpeedMode::Standard:
         return values.speed_limit.GetValue();
