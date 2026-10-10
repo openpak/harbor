@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -1935,10 +1936,28 @@ void BSD_USA::DuplicateSocket(HLERequestContext& ctx) {
     PushRetErrno(ctx, new_fd < 0 ? Result2{-1, Errno::BADF} : Result2{new_fd, Errno::SUCCESS});
 }
 
+// [Harbor] A named message carries its peer's address, as msg_name does for sendmmsg(2) and
+// recvmmsg(2): a send goes to it, a receive writes the source into it. The name keeps the length
+// the guest gave (an IPv4 address fills its start, the rest is zeroed): whether the guest reads a
+// shorter name length back is not established, so the layout it sent is the one it gets.
+static void FillName(MsgHdr& m, const std::vector<u8>& addr) {
+    std::fill(m.name.begin(), m.name.end(), u8{0});
+    std::copy_n(addr.begin(), (std::min)(addr.size(), m.name.size()), m.name.begin());
+}
+
+static void WarnNamedMMsg(const char* command) {
+    static std::atomic_bool warned{false};
+    if (!warned.exchange(true)) {
+        LOG_WARNING(Service, "unknown contract: bsd {} named message: the name is the peer address, "
+                             "its length is kept",
+                    command);
+    }
+}
+
 // RecvMMsg(u32 fd, u32 vlen, u32 flags, u32 reserved, nn::socket::TimeVal timeout) -> (i32 ret,
 // u32 bsd_errno, buffer<0x6> messages). Written from: emulator-parity-ledger §2 Sockets
-// ("SendMMsg/RecvMMsg are one concatenated call; a named message is EOPNOTSUPP"), Ryujinx master
-// IClient.RecvMMsg (layout) and recvmmsg(2) (the first message may wait, the rest do not).
+// ("SendMMsg/RecvMMsg are one concatenated call"), Ryujinx master IClient.RecvMMsg (layout) and
+// recvmmsg(2) (the first message may wait, the rest do not; msg_name gets the source).
 void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const s32 fd = rp.Pop<s32>();
@@ -1955,12 +1974,13 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
     }
     for (const auto& m : *messages) {
         if (!m.name.empty()) {
-            PushRetErrno(ctx, {-1, Errno::OPNOTSUPP});
-            return;
+            WarnNamedMMsg("RecvMMsg");
+            break;
         }
     }
     const auto table = TableFor(ctx);
     std::vector<u8> first;
+    std::vector<u8> first_addr;
     RunParkable(
         ctx,
         [&](ParkSlot& slot) -> Outcome {
@@ -1972,7 +1992,8 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
                 capacity += v.size();
             }
             first.assign(capacity, 0);
-            auto r = OpRecv(*table, fd, flags, first, nullptr, slot);
+            auto r = OpRecv(*table, fd, flags, first,
+                            (*messages)[0].name.empty() ? nullptr : &first_addr, slot);
             if (!r && tv_sec >= 0 && tv_usec >= 0 && (tv_sec | tv_usec) != 0 &&
                 !slot.deadline_overridden) {
                 // The timeval bounds the wait for the first message.
@@ -1991,9 +2012,11 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
             for (size_t i = 0; i < messages->size(); ++i) {
                 auto& m = (*messages)[i];
                 std::vector<u8> data;
+                std::vector<u8> addr;
                 s32 got;
                 if (i == 0) {
                     data = std::move(first);
+                    addr = std::move(first_addr);
                     got = r.first;
                 } else {
                     size_t capacity = 0;
@@ -2003,7 +2026,7 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
                     data.assign(capacity, 0);
                     ParkSlot none;
                     const auto more = OpRecv(*table, fd, flags | Network::FLAG_MSG_DONTWAIT, data,
-                                             nullptr, none);
+                                             m.name.empty() ? nullptr : &addr, none);
                     if (!more || more->first < 0) {
                         break;
                     }
@@ -2015,6 +2038,9 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
                     std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(offset), n, v.begin());
                     offset += n;
                 }
+                if (!m.name.empty()) {
+                    FillName(m, addr);
+                }
                 m.length = static_cast<u32>(got);
                 ++count;
             }
@@ -2024,8 +2050,8 @@ void BSD_USA::RecvMMsg(HLERequestContext& ctx) {
 }
 
 // SendMMsg(u32 fd, u32 vlen, u32 flags) -> (i32 ret, u32 bsd_errno, buffer<0x6> messages).
-// Written from: emulator-parity-ledger §2 Sockets (one concatenated call per message; a named
-// message is EOPNOTSUPP) and sendmmsg(2) (the count sent; an error only if none was).
+// Written from: emulator-parity-ledger §2 Sockets (one concatenated call per message) and
+// sendmmsg(2) (the count sent; an error only if none was; a named message goes to its name).
 void BSD_USA::SendMMsg(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const s32 fd = rp.Pop<s32>();
@@ -2042,14 +2068,13 @@ void BSD_USA::SendMMsg(HLERequestContext& ctx) {
     Errno first_error = Errno::SUCCESS;
     for (auto& m : *messages) {
         if (!m.name.empty()) {
-            first_error = Errno::OPNOTSUPP;
-            break;
+            WarnNamedMMsg("SendMMsg");
         }
         std::vector<u8> data;
         for (const auto& v : m.iov) {
             data.insert(data.end(), v.begin(), v.end());
         }
-        const auto r = OpSend(*table, fd, flags, data, {});
+        const auto r = OpSend(*table, fd, flags, data, m.name);
         if (r.first < 0) {
             first_error = r.second;
             break;
