@@ -821,9 +821,13 @@ void HostMemory::DecommitBackingRegion(size_t physical_offset, size_t length) {
 
 void HostMemory::EnableDirectMappedAddress() {
 #if !(defined(__OPENORBIS__) || defined(__managarm__))
-    if (impl) {
+    // Every NCE application launch calls this; only the first switches to absolute addresses.
+    // Adding the base again on each launch kept widening the bounds the asserts check and
+    // IsInVirtualRange reports.
+    if (impl && !direct_mapped) {
         impl->EnableDirectMappedAddress();
         virtual_size += reinterpret_cast<uintptr_t>(virtual_base);
+        direct_mapped = true;
     }
 #endif
 }
