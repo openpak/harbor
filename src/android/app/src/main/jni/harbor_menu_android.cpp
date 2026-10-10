@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <sstream>
+#include <thread>
 
 #include "common/android/android_common.h"
 #include "common/android/id_cache.h"
@@ -209,7 +210,10 @@ public:
 
     void HostNotice(const std::string& text) override {
         LOG_INFO(Frontend, "harbor: notice: {}", text);
-        Call("notice", text);
+        // Notices come from guest service code, which runs on a Fiber: JNI there takes the process
+        // down (SIGSEGV; see common/android/applets/software_keyboard.cpp). A short-lived thread of
+        // its own makes the call, and the guest does not wait for it.
+        std::thread([text] { Call("notice", text); }).detach();
     }
 };
 
