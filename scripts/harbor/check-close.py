@@ -31,6 +31,8 @@ def main():
     ap.add_argument('--tile', type=int, default=4)
     ap.add_argument('--cycles', type=int, default=10)
     ap.add_argument('--play', type=float, default=75)
+    ap.add_argument('--min-free', type=float, default=7,
+                    help='GiB the host must have available before a launch (other runs share it)')
     args = ap.parse_args()
     run_dir = os.path.join(SCR, 'run', args.run)
     log_path = os.path.join(run_dir, 'user', 'log', 'eden_log.txt')
@@ -74,18 +76,35 @@ def main():
         print(f'FAIL: {message}', flush=True)
         sys.exit(1)
 
-    def wait_alive(seconds, what):
+    def available_gib():
+        for line in open('/proc/meminfo'):
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1]) / (1024 * 1024)
+        return 0.0
+
+    def wait_alive(seconds, what, low_memory_ends=False):
         end = time.time() + seconds
         while time.time() < end:
             if not alive():
                 fail(f'the run died {what}')
+            if low_memory_ends and available_gib() < 1.0:
+                print('the host is under 1 GiB available: closing early', flush=True)
+                return
             time.sleep(1)
+
+    def wait_for_memory():
+        end = time.time() + 30 * 60
+        while available_gib() < args.min_free:
+            if time.time() > end:
+                fail(f'the host never had {args.min_free} GiB available')
+            time.sleep(10)
 
     mem('start')
     for n in range(1, args.cycles + 1):
         nav = []
         for _ in range(args.tile):
             nav += ['press', 'RIGHT', '300', 'sleep', '1.0']
+        wait_for_memory()
         released_before = released_count()
         drive(*nav, 'press', 'A', '300', 'sleep', '8')
         if now_running().startswith(HOME_ID):
@@ -94,7 +113,7 @@ def main():
         if title.startswith(HOME_ID) or not title:
             fail(f'cycle {n}: nothing launched')
         print(f'cycle {n}: launched {title}', flush=True)
-        wait_alive(args.play, 'while the application ran')
+        wait_alive(args.play, 'while the application ran', low_memory_ends=True)
         mem(f'cycle {n} in game')
         if now_running().startswith(HOME_ID):
             print(f'cycle {n}: the application ended by itself', flush=True)
