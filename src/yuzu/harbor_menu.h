@@ -4,8 +4,11 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <string>
 
 #include "harbor_setup/menu.h"
 
@@ -44,6 +47,7 @@ public:
         return true;
     }
     std::optional<std::string> HudText() override;
+    void HostNotice(const std::string& text) override;
     /// The latest performance figures (MainWindow's statsUpdated, twice a second).
     void SetStats(double fps, double speed);
     Core::System& System() override;
@@ -88,6 +92,10 @@ private:
     std::atomic_bool show_device_line{false};
     std::atomic<double> fps{0.0};
     std::atomic<double> speed{0.0};
+    // HostNotice: shown under the FPS line (or alone) until the deadline.
+    std::mutex notice_mutex;
+    std::string notice;
+    std::chrono::steady_clock::time_point notice_until{};
     int player1_callback = -1;
     int handheld_callback = -1;
 };

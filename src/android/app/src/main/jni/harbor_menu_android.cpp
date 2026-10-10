@@ -206,6 +206,11 @@ public:
     void ConsoleAction(const std::string& name) override {
         Call("consoleAction", name);
     }
+
+    void HostNotice(const std::string& text) override {
+        LOG_INFO(Frontend, "harbor: notice: {}", text);
+        Call("notice", text);
+    }
 };
 
 AndroidMenuHost* menu_host = nullptr;

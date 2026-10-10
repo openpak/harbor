@@ -242,14 +242,34 @@ void HarborMenu::SetStats(double fps_, double speed_) {
 /// "N FPS · speed N%", as on Android, and the GPU and its driver under it when chosen.
 std::optional<std::string> HarborMenu::HudText() {
     auto& system = *QtCommon::system;
-    if (!show_fps || !system.IsPoweredOn()) {
+    std::string note;
+    {
+        std::scoped_lock lk{notice_mutex};
+        if (!notice.empty() && std::chrono::steady_clock::now() < notice_until) {
+            note = notice;
+        }
+    }
+    if (!system.IsPoweredOn() || (!show_fps && note.empty())) {
         return std::nullopt;
     }
-    std::string text = fmt::format("{:.0f} FPS · speed {:.0f}%", fps.load(), speed.load() * 100.0);
-    if (show_device_line) {
-        text += "\n" + system.GPU().Renderer().GetDeviceDescription();
+    std::string text;
+    if (show_fps) {
+        text = fmt::format("{:.0f} FPS · speed {:.0f}%", fps.load(), speed.load() * 100.0);
+        if (show_device_line) {
+            text += "\n" + system.GPU().Renderer().GetDeviceDescription();
+        }
+    }
+    if (!note.empty()) {
+        text += (text.empty() ? "" : "\n") + note;
     }
     return text;
+}
+
+void HarborMenu::HostNotice(const std::string& text) {
+    LOG_INFO(Frontend, "harbor: notice: {}", text);
+    std::scoped_lock lk{notice_mutex};
+    notice = text;
+    notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
 }
 
 bool HarborMenu::FrameGenSupported() {

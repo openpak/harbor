@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/ldn/lan_discovery.h"
@@ -89,6 +91,8 @@ private:
     /// Callback to parse and handle a received LDN packet.
     void OnLDNPacketReceived(const Network::LDNPacket& packet);
     void OnEventFired();
+    void UpdateSpeedLock();
+    void HoldSpeedLock(bool hold);
 
     KernelHelpers::ServiceContext service_context;
     Kernel::KEvent* state_change_event;
@@ -98,6 +102,10 @@ private:
     Network::RoomMember::CallbackHandle<Network::LDNPacket> ldn_packet_received;
 
     bool is_initialized{};
+
+    std::mutex speed_lock_mutex;
+    bool speed_lock_held{};
+    u64 speed_lock_ticket{};
 };
 
 } // namespace Service::LDN

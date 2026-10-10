@@ -10,6 +10,8 @@
 #include "common/redact.h"
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/nifm/nifm.h"
@@ -17,6 +19,7 @@
 #include "core/internal_network/emu_net_state.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
+#include "core/online_speed_lock.h"
 #include "network/network.h"
 
 #include <atomic>
@@ -319,6 +322,7 @@ public:
     }
 
     ~IRequest() override {
+        HoldSpeedLock(false);
         service_context.CloseEvent(event1);
         service_context.CloseEvent(event2);
     }
@@ -332,6 +336,9 @@ private:
         const auto has_connection = Network::GetHostIPv4Address().has_value() &&
                                     !Settings::values.airplane_mode.GetValue();
         awaiting_connection = !has_connection;
+        // [Harbor] An application's accepted request is online play: see core/online_speed_lock.h.
+        const auto* process = ctx.GetThread().GetOwnerProcess();
+        from_application = process != nullptr && process->IsApplication();
         UpdateState(has_connection ? RequestState::Accepted : RequestState::OnHold);
 
         IPC::ResponseBuilder rb{ctx, 2};
@@ -435,6 +442,7 @@ private:
         // The request goes back to Free/Error and says so on the first event.
         awaiting_connection = false;
         state = RequestState::Invalid;
+        HoldSpeedLock(false);
         event1->Signal(system.Kernel());
 
         IPC::ResponseBuilder rb{ctx, 2};
@@ -477,6 +485,7 @@ private:
     void UpdateState(RequestState new_state) {
         LOG_DEBUG(Service_NIFM, "(STUBBED) called");
         state = new_state;
+        HoldSpeedLock(from_application && state == RequestState::Accepted);
         event1->Signal(system.Kernel());
         // [OpenPak] Splatoon 3's NPLN readiness thread waits on the second event.
         event2->Signal(system.Kernel());
@@ -487,6 +496,18 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
+    }
+
+    void HoldSpeedLock(bool hold) {
+        if (hold == speed_lock_held) {
+            return;
+        }
+        speed_lock_held = hold;
+        if (hold) {
+            speed_lock_ticket = Core::OnlineSpeedLock::Acquire("internet request");
+        } else {
+            Core::OnlineSpeedLock::Release("internet request", speed_lock_ticket);
+        }
     }
 
     void GetRevision(HLERequestContext& ctx) {
@@ -513,6 +534,10 @@ private:
     u8 priority = 0;
     u128 network_profile_id{};
     bool rejectable = false;
+    // [Harbor] Submitted by an application; holding the online speed lock while accepted.
+    bool from_application = false;
+    bool speed_lock_held = false;
+    u64 speed_lock_ticket = 0;
 
     Kernel::KEvent* event1;
     Kernel::KEvent* event2;

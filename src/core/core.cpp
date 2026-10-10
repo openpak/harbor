@@ -61,6 +61,7 @@
 #include "core/loader/loader.h"
 #include "core/memory.h"
 #include "core/memory/cheat_engine.h"
+#include "core/online_speed_lock.h"
 #include "core/perf_stats.h"
 #include "core/reporter.h"
 #include "core/tools/freezer.h"
@@ -435,6 +436,7 @@ struct System::Impl {
 
         // Reset per-game flags
         Settings::values.use_squashed_iterated_blend = false;
+        Core::OnlineSpeedLock::Reset();
 
         is_powered_on = false;
         exit_locked = false;

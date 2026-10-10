@@ -160,7 +160,7 @@ float EmuWindow_Android::GetFrameRateHint() const {
     }
 
     const float nominal_rate = 60.0f * presented_multiplier;
-    if (!Settings::values.use_speed_limit.GetValue()) {
+    if (!Settings::SpeedLimitEnabled()) {
         return QuantizeFrameRateHint(nominal_rate);
     }
 

@@ -171,6 +171,9 @@ public:
     /// The console's backup, restore and new identity ("backup", "restore", "new-console"): the
     /// console stops, the platform asks for the file and the passphrase, the console starts again.
     virtual void ConsoleAction(const std::string& name) {}
+    /// A short host-side notice (Harbor's own, never inside the console's UI), from any thread:
+    /// a toast on Android, a line on the console's screen for a few seconds on desktop.
+    virtual void HostNotice(const std::string& text) {}
     /// Consent to send crash reports (common/harbor_crash.h; nullopt: not asked yet).
     virtual std::optional<bool> CrashReportConsent() {
         return Common::HarborCrash::CrashReportConsent();
