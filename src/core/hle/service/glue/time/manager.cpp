@@ -20,6 +20,7 @@
 #include "core/hle/service/psc/time/time_zone_service.h"
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
+#include "core/internal_network/network.h"
 
 namespace Service::Glue::Time {
 
@@ -175,6 +176,22 @@ TimeManager::TimeManager(Core::System& system)
     //      "rtc_value" = rtc_time_s
 
     m_worker.StartThread();
+
+    // [Harbor] ntc's autonomic correction: a connected console sets its standard network clock
+    // from the server soon after it starts, so it stays accurate however long ago it was last set
+    // (the accuracy window is 30 days). Harbor's server time is the host's UTC; the worker saves
+    // the new context to the settings as it does for every network clock change.
+    if (Network::GetHostIPv4Address().has_value() && !Settings::values.airplane_mode.GetValue()) {
+        std::shared_ptr<Service::PSC::Time::SystemClock> network_clock;
+        if (m_time_sm->GetStandardNetworkSystemClock(&network_clock) == ResultSuccess) {
+            const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+            const Result result = network_clock->SetCurrentTime(now);
+            LOG_INFO(Service_Time, "ntc: network clock set to the host's UTC at start: result {:#x}",
+                     result.raw);
+        }
+    }
 
     m_file_timestamp_worker.m_initialized = true;
 
