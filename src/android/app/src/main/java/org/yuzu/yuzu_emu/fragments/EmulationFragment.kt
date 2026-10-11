@@ -1011,7 +1011,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 )
                 ViewUtils.showView(binding.surfaceInputOverlay)
                 ViewUtils.hideView(binding.loadingIndicator)
-                harborHideLoading()
+                harborHideLoading("emulation started")
 
                 emulationState.updateSurface()
 
@@ -1541,6 +1541,29 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
     /** Harbor's boot page (a Borealis host page) laid over the console's screen while it starts or stops. */
     private var harborLoading: View? = null
+    /** The console's picture count (HostScreen::GuestFrames) when the boot page went up. */
+    private var harborLoadingFrames = 0L
+    private var harborLoadingSince = 0L
+
+    /**
+     * Takes the boot page away once the console draws again: Eden's emulation-started signal is not
+     * sent for every start in a HOME session, so the console's own pictures decide (a few new ones
+     * since the page went up), with a time limit as the last resort.
+     */
+    private val harborLoadingWatch = object : Runnable {
+        override fun run() {
+            if (harborLoading == null) {
+                return
+            }
+            val frames = HarborNative.guestFrames()
+            when {
+                frames >= harborLoadingFrames + HARBOR_BOOT_FRAMES -> harborHideLoading("the console's picture is up")
+                SystemClock.elapsedRealtime() - harborLoadingSince > HARBOR_BOOT_LIMIT_MS ->
+                    harborHideLoading("time limit")
+                else -> handler.postDelayed(this, HARBOR_BOOT_POLL_MS)
+            }
+        }
+    }
 
     private fun harborShowLoading(text: String) {
         val container = _binding?.emulationContainer ?: return
@@ -1552,19 +1575,26 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             )
             harborLoading = frame
+            harborLoadingFrames = HarborNative.guestFrames()
+            harborLoadingSince = SystemClock.elapsedRealtime()
+            Log.info("[Harbor] boot page shown: $text")
+            handler.removeCallbacks(harborLoadingWatch)
+            handler.postDelayed(harborLoadingWatch, HARBOR_BOOT_POLL_MS)
         }
         HarborNative.showHostPage(HarborScreenActivity.KIND_STATUS, text)
     }
 
-    private fun harborHideLoading() {
+    private fun harborHideLoading(reason: String) {
         val view = harborLoading ?: return
         harborLoading = null
+        handler.removeCallbacks(harborLoadingWatch)
         (view.parent as? ViewGroup)?.removeView(view)
         HarborNative.endHostPage()
+        Log.info("[Harbor] boot page hidden: $reason")
     }
 
     override fun onDestroyView() {
-        harborHideLoading()
+        harborHideLoading("screen closed")
         super.onDestroyView()
         amiiboLoadJob?.cancel()
         amiiboLoadJob = null
@@ -2701,6 +2731,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     }
 
     companion object {
+        /** The boot page goes once the console has drawn this many new pictures (about half a second). */
+        private const val HARBOR_BOOT_FRAMES = 30L
+        private const val HARBOR_BOOT_POLL_MS = 250L
+        private const val HARBOR_BOOT_LIMIT_MS = 90_000L
         private const val HARBOR_FPS_REFRESH_MS = 500L
         private const val HARBOR_MIN_OPACITY = 20f
         private val AMIIBO_MIME_TYPES =
