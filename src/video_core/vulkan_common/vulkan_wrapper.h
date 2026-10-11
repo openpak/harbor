@@ -205,6 +205,7 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkBindBufferMemory vkBindBufferMemory{};
     PFN_vkBindImageMemory vkBindImageMemory{};
     PFN_vkCmdBeginConditionalRenderingEXT vkCmdBeginConditionalRenderingEXT{};
+    PFN_vkCmdWriteBufferMarkerAMD vkCmdWriteBufferMarkerAMD{};
     PFN_vkCmdBeginDebugUtilsLabelEXT vkCmdBeginDebugUtilsLabelEXT{};
     PFN_vkCmdBeginQuery vkCmdBeginQuery{};
     PFN_vkCmdBeginRenderPass vkCmdBeginRenderPass{};
@@ -1731,6 +1732,11 @@ public:
 
     void EndConditionalRenderingEXT() const noexcept {
         dld->vkCmdEndConditionalRenderingEXT(handle);
+    }
+
+    void WriteBufferMarkerAMD(VkPipelineStageFlagBits stage, VkBuffer buffer, VkDeviceSize offset,
+                              u32 marker) const noexcept {
+        dld->vkCmdWriteBufferMarkerAMD(handle, stage, buffer, offset, marker);
     }
 
     void BeginDebugUtilsLabelEXT(const char* label, std::span<float, 4> color) const noexcept {

@@ -445,6 +445,13 @@ public:
     /// Instructs the frontend to exit the application.
     void Exit();
 
+    /// Harbor: the console stops because the host failed (e.g. the GPU was lost), not because the
+    /// guest or the user stopped it: `reason` is what "Harbor stopped" shows. Calls Exit().
+    void StopForHostFailure(std::string reason);
+
+    /// The reason given to StopForHostFailure since the last call (cleared), or empty.
+    [[nodiscard]] std::string TakeHostStopReason();
+
     using ApplicationChangedCallback = std::function<void(u64 program_id)>;
     void RegisterApplicationChangedCallback(ApplicationChangedCallback&& callback);
     void NotifyApplicationChanged(u64 program_id);

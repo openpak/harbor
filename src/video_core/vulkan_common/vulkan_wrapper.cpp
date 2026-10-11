@@ -90,6 +90,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkBindBufferMemory);
     X(vkBindImageMemory);
     X(vkCmdBeginConditionalRenderingEXT);
+    X(vkCmdWriteBufferMarkerAMD);
     X(vkCmdBeginQuery);
     X(vkCmdBeginRenderPass);
     X(vkCmdBeginTransformFeedbackEXT);

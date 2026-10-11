@@ -628,6 +628,10 @@ bool GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
             last_descriptor_payload.assign(entries, entries + num_descriptor_entries);
         }
     }
+    if (bind_pipeline) {
+        // GPU breadcrumbs: name the vertex and fragment shaders (their cache/dump hashes).
+        scheduler.TagNextCommand(key.unique_hashes[1], key.unique_hashes[5]);
+    }
     scheduler.Record([this, descriptor_data, bind_pipeline, update_descriptors,
                       descriptor_buffer_offset, descriptor_buffer_chunk, bind_descriptor_buffer,
                       rescaling_data = rescaling.Data(), is_rescaling, update_rescaling,

@@ -7,6 +7,8 @@
 #define VMA_IMPLEMENTATION
 #include "video_core/vulkan_common/vma.h"
 
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <climits>
 #include <codecvt>
@@ -165,6 +167,47 @@ ANativeWindow* EmulationSession::NativeWindow() const {
 void EmulationSession::SetNativeWindow(ANativeWindow* native_window) {
     m_native_window = native_window;
 }
+
+namespace {
+
+/// Harbor: driver environment overrides, to diagnose a GPU problem on a phone without a new build.
+/// <data>/harbor-driver-env.txt holds KEY=VALUE lines (# starts a comment); only TU_*, FD_*, IR3_*,
+/// MESA_* and HARBOR_* keys are taken (e.g. TU_DEBUG=sysmem, HARBOR_GPU_BREADCRUMBS=1). They are
+/// set before the driver loads, which reads them once per process.
+void ApplyHarborDriverEnv() {
+    const auto dir = Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir);
+    if (dir.empty()) {
+        return;
+    }
+    std::ifstream file{dir / "harbor-driver-env.txt"};
+    if (!file) {
+        return;
+    }
+    constexpr std::array<std::string_view, 5> allowed{"TU_", "FD_", "IR3_", "MESA_", "HARBOR_"};
+    std::string line;
+    while (std::getline(file, line)) {
+        if (const auto hash = line.find('#'); hash != std::string::npos) {
+            line.resize(hash);
+        }
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        const std::string key{Common::StripSpaces(line.substr(0, eq))};
+        const std::string value{Common::StripSpaces(line.substr(eq + 1))};
+        const bool ok = !key.empty() && std::ranges::any_of(allowed, [&](std::string_view prefix) {
+            return key.starts_with(prefix);
+        });
+        if (!ok) {
+            LOG_WARNING(Frontend, "harbor: driver environment: {} ignored", key);
+            continue;
+        }
+        setenv(key.c_str(), value.c_str(), 1);
+        LOG_INFO(Frontend, "harbor: driver environment: {}={}", key, value);
+    }
+}
+
+} // namespace
 
 void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
                                            const std::string& custom_driver_dir,
@@ -977,6 +1020,8 @@ void JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_initializeGpuDriver(JNIEnv* e
                                                                        jstring custom_driver_dir,
                                                                        jstring custom_driver_name,
                                                                        jstring file_redirect_dir) {
+    ApplyHarborDriverEnv();
+
     // Log active Freedreno environment variables
     const char* tu_debug = getenv("TU_DEBUG");
     const char* fd_debug = getenv("FD_MESA_DEBUG");

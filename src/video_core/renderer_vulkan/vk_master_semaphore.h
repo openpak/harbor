@@ -54,6 +54,10 @@ public:
     /// Waits for a tick to be hit on the GPU
     void Wait(u64 tick);
 
+    /// The device was lost: nothing submitted will ever signal, so every tick counts as reached
+    /// from now on and every waiter is released (the console then stops instead of hanging).
+    void MarkLost();
+
     /// Submits the device graphics queue, updating the tick as necessary
     VkResult SubmitQueue(vk::CommandBuffer& cmdbuf, vk::CommandBuffer& upload_cmdbuf,
                          VkSemaphore signal_semaphore, VkSemaphore wait_semaphore, u64 host_tick);
@@ -75,6 +79,7 @@ private:
     vk::Semaphore semaphore;          ///< Timeline semaphore.
     std::atomic<u64> gpu_tick{0};     ///< Current known GPU tick.
     std::atomic<u64> current_tick{1}; ///< Current logical tick.
+    std::atomic<bool> lost{false};    ///< The device was lost; see MarkLost.
     std::mutex wait_mutex;
     std::mutex free_mutex;
     std::condition_variable_any wait_cv;
