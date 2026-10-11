@@ -404,6 +404,10 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_endHostPage(J
     HarborSetup::MenuEndHostPage();
 }
 
+JNIEXPORT jlong JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_guestFrames(JNIEnv*, jobject) {
+    return static_cast<jlong>(VideoCore::HostScreen::GuestFrames());
+}
+
 /// The view's surface appeared (a Surface) or went (null).
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostSurface(JNIEnv* env, jobject,
                                                                               jobject view_surface) {

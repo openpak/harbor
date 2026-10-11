@@ -86,6 +86,9 @@ object HarborNative {
 
     external fun endHostPage()
 
+    /** How many pictures of its own the console has put on the screen in this process. */
+    external fun guestFrames(): Long
+
     /** The page's surface (a Surface), or null when it went. */
     external fun hostSurface(surface: Any?)
 
