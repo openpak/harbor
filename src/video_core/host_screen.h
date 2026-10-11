@@ -38,6 +38,12 @@ void Hide();
 /// Whether the host screen replaces the console's picture now.
 bool Active();
 
+/// The compositor composed a picture of the console's own: from now on the host screen is seen
+/// when shown (before it, nothing presents it). Once a frame; cheap.
+void NoteGuestFrame();
+/// Whether the console has put a picture on the screen since the process started.
+bool GuestFrameShown();
+
 /// Whether any host layer (screen, overlay, sleep or dim shade) is in use: while not, presenting
 /// does nothing of Harbor's (one atomic read per frame).
 bool AnyLayer();
