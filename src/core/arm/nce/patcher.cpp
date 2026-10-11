@@ -47,9 +47,9 @@ Patcher::Patcher() : c(m_patch_instructions), c_pre(m_patch_instructions_pre) {
 
 Patcher::~Patcher() = default;
 
-bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet::Segment& code) {
+bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, const Kernel::CodeSet::Segment& code) {
     // If we have patched modules but cannot reach the new module, then it needs its own patcher.
-    const size_t image_size = program_image.size();
+    const size_t image_size = program_image.size() + zero_size;
 
     // Check if we need split mode for large modules. A64 max takes 128MB
     // tests showed that, with update, some are larger. (In this case 208MB)
@@ -182,11 +182,12 @@ bool Patcher::PatchText(std::span<const u8> program_image, const Kernel::CodeSet
     return true;
 }
 
-bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, EntryTrampolines* out_trampolines) {
+bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, size_t zero_size, EntryTrampolines* out_trampolines) {
     const size_t patch_size = GetSectionSize();
     const size_t pre_patch_size = GetPreSectionSize();
 
-    const size_t image_size = (mode == PatchMode::Split) ? program_image.size() - pre_patch_size : program_image.size();
+    // The module's image size, its zero range (BSS) included; program_image holds all but that.
+    const size_t image_size = ((mode == PatchMode::Split) ? program_image.size() - pre_patch_size : program_image.size()) + zero_size;
 
     // Retrieve text segment data.
     const auto text = std::span{program_image}.subspan(code.offset, code.size);
@@ -352,8 +353,11 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::Co
             std::memcpy(program_image.data() + current_size, m_patch_instructions.data(),
                         m_patch_instructions.size() * sizeof(u32));
         } else {
-            program_image.resize(image_size + patch_size);
-            std::memcpy(program_image.data() + image_size, m_patch_instructions.data(),
+            // The patch follows the image (its zero range included), which is where program_image
+            // ends: the zero range is not stored.
+            const size_t current_size = program_image.size();
+            program_image.resize(current_size + patch_size);
+            std::memcpy(program_image.data() + current_size, m_patch_instructions.data(),
                         m_patch_instructions.size() * sizeof(u32));
         }
         return true;

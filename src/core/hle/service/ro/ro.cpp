@@ -436,8 +436,8 @@ public:
 
                 Kernel::CodeSet::Segment code{.size = static_cast<u32>(rx_size)};
                 Core::NCE::Patcher patch;
-                patch.PatchText(image, code);
-                patch.RelocateAndCopy(nro_info->base_address, code, image, nullptr);
+                patch.PatchText(image, 0, code);
+                patch.RelocateAndCopy(nro_info->base_address, code, image, 0, nullptr);
 
                 const u64 patch_address = nro_info->base_address + total_size;
                 const size_t patch_size = patch.GetSectionSize();

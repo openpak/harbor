@@ -1276,7 +1276,15 @@ void KProcess::LoadModule(KernelCore& kernel, CodeSet code_set, KProcessAddress 
         m_page_table.SetProcessMemoryPermission(segment.addr + base_addr, segment.size, permission);
     };
 
-    this->GetMemory().WriteBlock(base_addr, code_set.memory.data(), code_set.memory.size());
+    // The zero range (a module's BSS) is not written: the code pages were cleared when the code
+    // region was allocated, and writing it would make every page of it resident on the host.
+    const auto& image = code_set.memory;
+    const size_t head = code_set.zero_size != 0 ? code_set.zero_offset : image.size();
+    this->GetMemory().WriteBlock(base_addr, image.data(), head);
+    if (head < image.size()) {
+        this->GetMemory().WriteBlock(base_addr + head + code_set.zero_size, image.data() + head,
+                                     image.size() - head);
+    }
 
     ReprotectSegment(code_set.CodeSegment(), Svc::MemoryPermission::ReadExecute);
     ReprotectSegment(code_set.RODataSegment(), Svc::MemoryPermission::Read);

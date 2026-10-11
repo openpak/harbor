@@ -156,7 +156,14 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
 
     codeset.DataSegment().size += nso_header.segments[2].bss_size;
     u32 image_size = PageAlignSize(u32(codeset.memory.size()) + nso_header.segments[2].bss_size);
-    codeset.memory.resize(image_size);
+
+    // The BSS (and the page alignment after it) stays out of the host image as a zero range: it
+    // is zero in the process's freshly cleared code pages already. Materialised it was a host
+    // vector as large as the BSS, zero-filled on both the layout and the load pass and then
+    // copied into guest memory; Don't Starve Together's 3.1 GiB BSS took the process past 8 GiB
+    // resident while its main module loaded and the phone's low-memory killer ended it.
+    codeset.zero_offset = codeset.memory.size();
+    codeset.zero_size = image_size - codeset.memory.size();
 
     for (std::size_t i = 0; i < nso_header.segments.size(); ++i) {
         codeset.segments[i].size = PageAlignSize(codeset.segments[i].size);
@@ -165,6 +172,10 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
     // Apply patches if necessary
     const auto name = nso_file.GetName();
     if (pm && (pm->HasNSOPatch(nso_header.build_id, name) || Settings::values.dump_nso)) {
+        // IPS patches and NSO dumps see the whole image, BSS included, as before.
+        codeset.memory.resize(image_size);
+        codeset.zero_offset = 0;
+        codeset.zero_size = 0;
         std::span<u8> patchable_section(codeset.memory.data() + module_start, codeset.memory.size() - module_start);
         std::vector<u8> pi_header(sizeof(NSOHeader) + patchable_section.size());
         std::memcpy(pi_header.data(), &nso_header, sizeof(NSOHeader));
@@ -184,15 +195,16 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         //Set module ID using build_id from the NSO header
         patch->SetModuleID(nso_header.build_id);
         // Patch SVCs and MRS calls in the guest code
-        while (!patch->PatchText(codeset.memory, code)) {
+        while (!patch->PatchText(codeset.memory, codeset.zero_size, code)) {
             patch = &patches->emplace_back();
             patch->SetModuleID(nso_header.build_id);  // In case the patcher is changed for big modules, the new patcher should also have the build_id
         }
     } else if (patch) {
         // Relocate code patch and copy to the program image.
         // Save size before RelocateAndCopy (which may resize)
-        const size_t size_before_relocate = codeset.memory.size();
-        if (patch->RelocateAndCopy(load_base, code, codeset.memory, &process.GetPostHandlers())) {
+        const size_t size_before_relocate = codeset.ImageSize();
+        if (patch->RelocateAndCopy(load_base, code, codeset.memory, codeset.zero_size,
+                                   &process.GetPostHandlers())) {
             // Update patch section.
             auto& patch_segment = codeset.PatchSegment();
             auto& post_patch_segment = codeset.PostPatchSegment();
@@ -213,7 +225,7 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
 
         // Refresh image_size to take account the patch section if it was added by RelocateAndCopy
-        image_size = static_cast<u32>(codeset.memory.size());
+        image_size = static_cast<u32>(codeset.ImageSize());
     }
 #endif
 
