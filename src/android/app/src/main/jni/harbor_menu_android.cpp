@@ -79,6 +79,10 @@ int Number(const std::string& what, int fallback) {
 std::mutex devices_mutex;
 std::vector<Common::ParamPackage> devices;
 
+/// A notice waits for four seconds of the console's pictures (past its boot logo, a notice made
+/// while it restarts), then stays eight seconds.
+constexpr u64 NoticeWaitFrames = 240;
+
 class AndroidMenuHost final : public HarborSetup::MenuHost {
 public:
     std::vector<Common::ParamPackage> InputDevices() override {
@@ -253,13 +257,13 @@ public:
             return std::nullopt;
         }
         const auto now = std::chrono::steady_clock::now();
-        // The time runs from when the console's picture is there to show it.
+        // The time runs from when the console's picture is there to show it (NoticeWaitFrames).
         if (!notice_shown) {
-            if (!VideoCore::HostScreen::GuestFrameShown()) {
+            if (VideoCore::HostScreen::GuestFrames() < notice_frames + NoticeWaitFrames) {
                 return std::nullopt;
             }
             notice_shown = true;
-            notice_until = now + std::chrono::seconds(6);
+            notice_until = now + std::chrono::seconds(8);
         }
         if (now >= notice_until) {
             notice.clear();
@@ -273,12 +277,14 @@ public:
         std::scoped_lock lk{notice_mutex};
         notice = text;
         notice_shown = false;
+        notice_frames = VideoCore::HostScreen::GuestFrames();
     }
 
 private:
     std::mutex notice_mutex;
     std::string notice;
     bool notice_shown = false;
+    u64 notice_frames = 0;
     std::chrono::steady_clock::time_point notice_until{};
 
 public:

@@ -34,25 +34,11 @@ abstract class HarborScreenActivity : ComponentActivity() {
     private var pageKind = KIND_STATUS
     private var pageText = ""
     private var resumed = false
-    private lateinit var screen: ScreenView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         volumeControlStream = AudioManager.STREAM_MUSIC
-        val dark = HarborTheme.dark(this)
-        screen = ScreenView(this)
-        val frame = FrameLayout(this).apply {
-            setBackgroundColor(if (dark) HarborTheme.PAPER_DARK else HarborTheme.PAPER_LIGHT)
-            addView(
-                screen,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    Gravity.CENTER
-                )
-            )
-        }
-        setContentView(frame)
+        setContentView(HarborScreenView.frame(this))
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
@@ -153,49 +139,6 @@ abstract class HarborScreenActivity : ComponentActivity() {
     private fun tap(button: Int) {
         HarborNative.hostButton(button, true)
         handler.postDelayed({ HarborNative.hostButton(button, false) }, TAP_MS)
-    }
-
-    /** The page's picture, kept at 16:9 in the middle of the screen; touches go to the page. */
-    private class ScreenView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
-        init {
-            holder.addCallback(this)
-            isFocusable = true
-        }
-
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val width = MeasureSpec.getSize(widthMeasureSpec)
-            val height = MeasureSpec.getSize(heightMeasureSpec)
-            val fitted = if (width * 9 > height * 16) {
-                Pair(height * 16 / 9, height)
-            } else {
-                Pair(width, width * 9 / 16)
-            }
-            setMeasuredDimension(fitted.first, fitted.second)
-        }
-
-        override fun surfaceCreated(holder: SurfaceHolder) {
-            HarborNative.hostSurface(holder.surface)
-        }
-
-        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-            HarborNative.hostSurface(holder.surface)
-        }
-
-        override fun surfaceDestroyed(holder: SurfaceHolder) {
-            HarborNative.hostSurface(null)
-        }
-
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            val w = width.toFloat().coerceAtLeast(1f)
-            val h = height.toFloat().coerceAtLeast(1f)
-            val action = event.actionMasked
-            for (i in 0 until event.pointerCount) {
-                val up = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
-                    (action == MotionEvent.ACTION_POINTER_UP && i == event.actionIndex)
-                HarborNative.hostTouch(event.getPointerId(i), event.getX(i) / w, event.getY(i) / h, !up)
-            }
-            return true
-        }
     }
 
     companion object {

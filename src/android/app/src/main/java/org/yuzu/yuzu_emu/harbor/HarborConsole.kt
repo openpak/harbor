@@ -629,25 +629,23 @@ object HarborConsole {
         }
     }
 
-    internal fun confirmNewConsole(activity: EmulationActivity) {
-        val dialog = MaterialAlertDialogBuilder(activity)
-            .setTitle(R.string.harbor_menu_new_console)
-            .setMessage(R.string.harbor_new_console_confirm)
-            .setPositiveButton(R.string.harbor_menu_new_console) { _, _ ->
-                stopThen(activity) {
-                    thread(name = "HarborNewConsole") {
-                        val made = HarborNative.makeNewConsole()
-                        activity.runOnUiThread {
-                            tell(
-                                activity,
-                                activity.getString(if (made) R.string.harbor_new_console_done else R.string.harbor_new_console_failed)
-                            ) { restartConsole(activity) }
-                        }
-                    }
+    /**
+     * The Harbor menu's "Make this a new console" (confirmed there, a Borealis dialog): the console
+     * stops, gets a new identity and starts again; the outcome is a line on its screen once HOME
+     * is back.
+     */
+    internal fun makeNewConsole(activity: EmulationActivity) {
+        stopThen(activity) {
+            thread(name = "HarborNewConsole") {
+                val made = HarborNative.makeNewConsole()
+                Log.info("[Harbor] new console identity ${if (made) "made" else "not made"}")
+                activity.runOnUiThread {
+                    HarborNative.hostNotice(
+                        activity.getString(if (made) R.string.harbor_new_console_done else R.string.harbor_new_console_failed)
+                    )
+                    restartConsole(activity)
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-        HarborPanelInput.attach(dialog)
+        }
     }
 }
