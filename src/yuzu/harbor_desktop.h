@@ -8,14 +8,13 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 
 #include <QWidget>
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
 
-class QLabel;
-class QPushButton;
 
 namespace Core {
 class System;
@@ -45,28 +44,41 @@ std::array<u8, 3> LetterboxColour(Core::System& system, bool* known);
 /// Ryujinx Harbor (MIT-licensed Ryujinx base), App.FollowConsoleTheme.
 bool DarkTheme(Core::System* running);
 
-/// "Harbor stopped" (the console stopped on its own, with the reason) or "Harbor cannot start",
-/// drawn in the console's colours, in place of the console's picture: Start again, Set up again,
-/// Exit. A stop the user asked for never shows it. The graphics driver row is Android's only.
-class StoppedPage final : public QWidget {
+/// Harbor's own pages where the console's picture would be, while there is none: the status line
+/// while the console gets ready ("Connecting to OpenPak..."), "Harbor stopped" (the console stopped
+/// on its own, with the reason) and "Harbor cannot start". They are Borealis pages drawn by the
+/// Harbor menu (harbor_setup/menu.h, MenuShowHostPage), the same as Android's; this widget shows
+/// their pictures and passes the keyboard (Enter/Space, Escape/Backspace, the arrows, X, Y) and the
+/// mouse (as touch) on. What a page asks for reaches the frontend through MenuHost::HostPageAction.
+/// A stop the user asked for never shows "Harbor stopped".
+class HostPages final : public QWidget {
 public:
-    struct Actions {
-        std::function<void()> start_again;
-        std::function<void()> set_up_again;
-        std::function<void()> exit;
-    };
+    explicit HostPages(QWidget* parent);
+    ~HostPages() override;
 
-    StoppedPage(QWidget* parent, Actions actions);
+    void ShowStatus(const QString& text);
+    void ShowStopped(const QString& reason);
+    void ShowCannotStart(const QString& reason);
+    /// Hides the widget and ends its page.
+    void Hide();
+    /// The harness's screenshot: the page's last picture as a PNG.
+    bool SavePicture(const QString& path) const;
 
-    void ShowStopped(const QString& reason, bool dark);
-    void ShowCannotStart(const QString& reason, bool dark);
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void keyReleaseEvent(QKeyEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
-    void Show(const QString& heading, const QString& reason, bool dark, bool start_again);
+    void Show(int kind, const QString& text);
+    void Touch(const QPointF& position, bool down);
+    QRectF PictureRect() const;
 
-    QLabel* heading;
-    QLabel* message;
-    QPushButton* start_again;
+    struct Shared;
+    std::shared_ptr<Shared> shared;
 };
 
 } // namespace HarborDesktop

@@ -4,14 +4,17 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <optional>
 
 #include <QGuiApplication>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QPushButton>
+#include <QImage>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPointer>
+#include <QTimer>
 #include <QSettings>
 #include <QStyleHints>
-#include <QVBoxLayout>
 
 #include "common/fs/path_util.h"
 #include "common/logging.h"
@@ -22,6 +25,8 @@
 #include "core/hle/service/set/system_settings_server.h"
 #include "core/hle/service/sm/sm.h"
 #include "harbor_setup/harbor_setup.h"
+#include "harbor_setup/menu.h"
+#include "video_core/host_screen.h"
 #include "yuzu/harbor_desktop.h"
 
 namespace HarborDesktop {
@@ -117,71 +122,178 @@ bool DarkTheme(Core::System* running) {
     return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
 }
 
-StoppedPage::StoppedPage(QWidget* parent, Actions actions) : QWidget(parent) {
-    setObjectName(QStringLiteral("HarborStoppedPage"));
-    setAttribute(Qt::WA_StyledBackground, true);
-    heading = new QLabel(this);
-    heading->setObjectName(QStringLiteral("heading"));
-    message = new QLabel(this);
-    message->setWordWrap(true);
-    message->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    start_again = new QPushButton(tr("Start again"), this);
-    auto* setup_button = new QPushButton(tr("Set up again"), this);
-    auto* exit_button = new QPushButton(tr("Exit"), this);
-    connect(start_again, &QPushButton::clicked, this, [run = actions.start_again] { run(); });
-    connect(setup_button, &QPushButton::clicked, this, [run = actions.set_up_again] { run(); });
-    connect(exit_button, &QPushButton::clicked, this, [run = actions.exit] { run(); });
+struct HostPages::Shared {
+    std::mutex mutex;
+    QImage picture;
+    QPointer<HostPages> widget;
+};
 
-    auto* column = new QVBoxLayout;
-    column->addWidget(heading);
-    column->addWidget(message);
-    column->addSpacing(8);
-    for (auto* button : {start_again, setup_button, exit_button}) {
-        button->setMinimumHeight(40);
-        column->addWidget(button);
+HostPages::HostPages(QWidget* parent) : QWidget(parent), shared{std::make_shared<Shared>()} {
+    shared->widget = this;
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(false);
+    QWidget::hide();
+}
+
+HostPages::~HostPages() {
+    if (isVisible()) {
+        HarborSetup::MenuEndHostPage();
     }
-    auto* holder = new QWidget(this);
-    holder->setLayout(column);
-    holder->setMaximumWidth(560);
-    auto* outer = new QVBoxLayout(this);
-    outer->addStretch();
-    auto* row = new QHBoxLayout;
-    row->addStretch();
-    row->addWidget(holder, 1);
-    row->addStretch();
-    outer->addLayout(row);
-    outer->addStretch();
-    hide();
 }
 
-void StoppedPage::ShowStopped(const QString& reason, bool dark) {
-    Show(tr("Harbor stopped"), reason, dark, true);
+void HostPages::ShowStatus(const QString& text) {
+    Show(static_cast<int>(HarborSetup::HostPageKind::Status), text);
 }
 
-void StoppedPage::ShowCannotStart(const QString& reason, bool dark) {
-    Show(tr("Harbor cannot start"), reason, dark, true);
+void HostPages::ShowStopped(const QString& reason) {
+    Show(static_cast<int>(HarborSetup::HostPageKind::Stopped), reason);
 }
 
-void StoppedPage::Show(const QString& title, const QString& reason, bool dark, bool can_start) {
-    // HOME's colours: Basic White paper #ebebeb with #2d2d2d ink, Basic Black the other way round.
-    const QString paper = dark ? QStringLiteral("#2d2d2d") : QStringLiteral("#ebebeb");
-    const QString ink = dark ? QStringLiteral("#ebebeb") : QStringLiteral("#2d2d2d");
-    const QString button = dark ? QStringLiteral("#464646") : QStringLiteral("#ffffff");
-    const QString accent = QStringLiteral("#00c3e3");
-    setStyleSheet(QStringLiteral(
-                      "#HarborStoppedPage { background: %1; }"
-                      "#HarborStoppedPage QLabel { color: %2; font-size: 16px; background: transparent; }"
-                      "#HarborStoppedPage QLabel#heading { font-size: 26px; font-weight: bold; }"
-                      "#HarborStoppedPage QPushButton { color: %2; background: %3; border: 2px solid %3;"
-                      " border-radius: 6px; font-size: 16px; padding: 6px 16px; text-align: left; }"
-                      "#HarborStoppedPage QPushButton:focus, #HarborStoppedPage QPushButton:hover"
-                      " { border-color: %4; }")
-                      .arg(paper, ink, button, accent));
-    heading->setText(title);
-    message->setText(reason);
-    start_again->setVisible(can_start);
-    show();
-    start_again->setFocus();
+void HostPages::ShowCannotStart(const QString& reason) {
+    Show(static_cast<int>(HarborSetup::HostPageKind::CannotStart), reason);
+}
+
+void HostPages::Show(int kind, const QString& text) {
+    QWidget::show();
+    setFocus();
+    // After the window is built: the menu's host (the Harbor menu) is made later in the same
+    // constructor that shows the first status.
+    QTimer::singleShot(0, this, [this, kind, text] {
+        if (!isVisible()) {
+            return;
+        }
+        auto weak = std::weak_ptr<Shared>(shared);
+        HarborSetup::MenuShowHostPage(
+            {.kind = static_cast<HarborSetup::HostPageKind>(kind), .text = text.toStdString()},
+            [weak](std::shared_ptr<const VideoCore::HostScreen::Frame> frame) {
+                const auto state = weak.lock();
+                if (!state || !frame) {
+                    return;
+                }
+                QImage image(frame->rgba.data(), static_cast<int>(frame->width),
+                             static_cast<int>(frame->height), QImage::Format_RGBA8888);
+                {
+                    std::scoped_lock lk{state->mutex};
+                    state->picture = image.copy();
+                }
+                QMetaObject::invokeMethod(state->widget, [state] {
+                    if (state->widget) {
+                        state->widget->update();
+                    }
+                }, Qt::QueuedConnection);
+            });
+    });
+}
+
+void HostPages::Hide() {
+    if (isVisible()) {
+        HarborSetup::MenuEndHostPage();
+    }
+    QWidget::hide();
+}
+
+bool HostPages::SavePicture(const QString& path) const {
+    QImage picture;
+    {
+        std::scoped_lock lk{shared->mutex};
+        picture = shared->picture;
+    }
+    return !picture.isNull() && picture.save(path, "PNG");
+}
+
+QRectF HostPages::PictureRect() const {
+    QSizeF size;
+    {
+        std::scoped_lock lk{shared->mutex};
+        size = shared->picture.isNull() ? QSizeF(1280, 720) : QSizeF(shared->picture.size());
+    }
+    const QSizeF fitted = size.scaled(QSizeF(width(), height()), Qt::KeepAspectRatio);
+    return QRectF(QPointF((width() - fitted.width()) / 2, (height() - fitted.height()) / 2), fitted);
+}
+
+void HostPages::paintEvent(QPaintEvent*) {
+    QPainter painter(this);
+    QImage picture;
+    {
+        std::scoped_lock lk{shared->mutex};
+        picture = shared->picture;
+    }
+    if (picture.isNull()) {
+        painter.fillRect(rect(), DarkTheme(nullptr) ? QColor(0x2d, 0x2d, 0x2d) : QColor(0xeb, 0xeb, 0xeb));
+        return;
+    }
+    // The bars take the page's own paper colour.
+    painter.fillRect(rect(), picture.pixelColor(0, picture.height() / 2));
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    painter.drawImage(PictureRect(), picture);
+}
+
+namespace {
+
+std::optional<HarborSetup::HostButton> ButtonFor(int key) {
+    using HarborSetup::HostButton;
+    switch (key) {
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space:
+        return HostButton::A;
+    case Qt::Key_Escape:
+    case Qt::Key_Backspace:
+        return HostButton::B;
+    case Qt::Key_X:
+        return HostButton::X;
+    case Qt::Key_Y:
+        return HostButton::Y;
+    case Qt::Key_Up:
+        return HostButton::Up;
+    case Qt::Key_Down:
+        return HostButton::Down;
+    case Qt::Key_Left:
+        return HostButton::Left;
+    case Qt::Key_Right:
+        return HostButton::Right;
+    default:
+        return std::nullopt;
+    }
+}
+
+} // namespace
+
+void HostPages::keyPressEvent(QKeyEvent* event) {
+    if (const auto button = ButtonFor(event->key()); button && !event->isAutoRepeat()) {
+        HarborSetup::MenuHostButton(*button, true);
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void HostPages::keyReleaseEvent(QKeyEvent* event) {
+    if (const auto button = ButtonFor(event->key()); button && !event->isAutoRepeat()) {
+        HarborSetup::MenuHostButton(*button, false);
+        return;
+    }
+    QWidget::keyReleaseEvent(event);
+}
+
+void HostPages::Touch(const QPointF& position, bool down) {
+    const QRectF picture = PictureRect();
+    HarborSetup::MenuHostTouch(0, static_cast<float>((position.x() - picture.x()) / picture.width()),
+                               static_cast<float>((position.y() - picture.y()) / picture.height()), down);
+}
+
+void HostPages::mousePressEvent(QMouseEvent* event) {
+    setFocus();
+    Touch(event->position(), true);
+}
+
+void HostPages::mouseMoveEvent(QMouseEvent* event) {
+    if (event->buttons() & Qt::LeftButton) {
+        Touch(event->position(), true);
+    }
+}
+
+void HostPages::mouseReleaseEvent(QMouseEvent* event) {
+    Touch(event->position(), false);
 }
 
 } // namespace HarborDesktop

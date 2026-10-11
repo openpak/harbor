@@ -25,6 +25,10 @@ namespace Core {
 class System;
 }
 
+namespace VideoCore::HostScreen {
+struct Frame;
+}
+
 namespace InputCommon {
 class InputSubsystem;
 }
@@ -200,6 +204,17 @@ public:
         return IsAndroid() ? "Share" : "Save a copy…";
     }
     virtual void ShareCrashReport(const Common::HarborCrash::Report& report) {}
+
+    // Harbor's own pages outside the console (MenuShowHostPage).
+    /// What a host page asks of the frontend: "start-again", "set-up-again", "exit", "back" (B on
+    /// the page itself), "driver-changed" (a driver was chosen or downloaded for the next start),
+    /// "restart-with" (the driver failed to load: `argument` is chosen, "" the phone's own, and
+    /// Harbor restarts into it).
+    virtual void HostPageAction(const std::string& action, const std::string& argument) {}
+    /// After a driver failed to load: the installed drivers that fit this GPU, except the chosen one.
+    virtual std::vector<MenuChoice> FittingDrivers() {
+        return {};
+    }
 };
 
 /// Where the menu opens.
@@ -216,7 +231,26 @@ enum class MenuPage {
     /// Crash reports: asked once whether to keep them, or last time's report offered (view,
     /// share, delete). MenuOfferCrashReport opens it.
     CrashReport,
+    /// A status line on the console's screen ("Stopping the console..."): MenuShowStatus.
+    Status,
 };
+
+/// Harbor's own pages when no console picture is there to draw over: the launcher's status line,
+/// "Harbor stopped" (with its reason, Start again, Graphics driver on Adreno, Set up again, Exit),
+/// "Harbor cannot start" and the driver that did not load. The menu draws them into the frontend's
+/// own surface instead of the console's screen.
+enum class HostPageKind { Status, Stopped, CannotStart, DriverFailed };
+
+struct HostPage {
+    HostPageKind kind = HostPageKind::Status;
+    std::string text; ///< the status line, the stop reason or the driver problem
+};
+
+/// Receives each drawn picture of a host page (on the menu's thread).
+using HostFrameSink = std::function<void(std::shared_ptr<const VideoCore::HostScreen::Frame>)>;
+
+/// The buttons a frontend's surface passes on, by the console's positions (A confirms, B goes back).
+enum class HostButton { A, B, X, Y, Up, Down, Left, Right };
 
 /// Once per process, before the first Open. The host outlives the menu.
 void MenuSetHost(MenuHost& host);
@@ -237,5 +271,22 @@ void MenuShutdown();
 /// soon as the console's picture is on the screen (never earlier: a page that is not seen must not
 /// take the console's input), and while the menu is closed.
 void MenuOfferCrashReport();
+
+/// A status line on the console's screen while the frontend stops it ("Stopping the console..."),
+/// with nothing to choose; the console's input stays with the menu until it closes.
+void MenuShowStatus(std::string text);
+
+/// Shows a host page in the frontend's surface (any thread): pictures go to `sink`, input comes
+/// from MenuHostButton and MenuHostTouch (and the console's controllers, for the harness). A page
+/// shown while another is up replaces it. Needs MenuSetHost.
+void MenuShowHostPage(HostPage page, HostFrameSink sink);
+/// The surface goes away: the page closes and no picture is sent any more.
+void MenuEndHostPage();
+bool MenuHostPageShown();
+void MenuHostButton(HostButton button, bool pressed);
+/// A finger (or the mouse) on the surface: `x` and `y` from 0 to 1 across the picture.
+void MenuHostTouch(int id, float x, float y, bool down);
+/// A status line for the open host page from the frontend (a driver file it installed).
+void MenuHostPageNotice(std::string text, bool bad);
 
 } // namespace HarborSetup
