@@ -27,6 +27,7 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_key_service_description">Sends a controller\'s HOME key to the console while Harbor is on screen, instead of leaving Harbor. Harbor reads no other keys and nothing on screen.</string>
     <string name="harbor_connecting">Connecting to OpenPak…</string>
     <string name="harbor_starting">Starting…</string>
+    <string name="harbor_loading_home">Loading HOME…</string>
     <string name="harbor_menu_power">Power button (hold)</string>
     <string name="harbor_stopping">Stopping the console…</string>
     <string name="harbor_stopped">Harbor stopped</string>

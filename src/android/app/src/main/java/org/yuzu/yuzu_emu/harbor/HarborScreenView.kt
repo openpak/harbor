@@ -32,16 +32,23 @@ class HarborScreenView(context: Context) : SurfaceView(context), SurfaceHolder.C
         setMeasuredDimension(fitted.first, fitted.second)
     }
 
+    // One surface takes the pages at a time: the newest view's. A view that goes lets go of the
+    // surface only when it is its own (the launcher's view can go after the console's appeared).
     override fun surfaceCreated(holder: SurfaceHolder) {
+        owner = this
         HarborNative.hostSurface(holder.surface)
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        owner = this
         HarborNative.hostSurface(holder.surface)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        HarborNative.hostSurface(null)
+        if (owner === this) {
+            owner = null
+            HarborNative.hostSurface(null)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -57,13 +64,16 @@ class HarborScreenView(context: Context) : SurfaceView(context), SurfaceHolder.C
     }
 
     companion object {
+        private var owner: HarborScreenView? = null
+
         /**
-         * The view in the middle of a black frame (the bars around the 16:9 page, as around the
-         * console's own picture), ready to be a screen's content or laid over the console's.
+         * The view in the middle of a frame in the console's paper colour (the bars around the
+         * 16:9 page), ready to be a screen's content or laid over the console's.
          */
         fun frame(context: Context): FrameLayout {
+            val dark = HarborTheme.dark(context)
             return FrameLayout(context).apply {
-                setBackgroundColor(android.graphics.Color.BLACK)
+                setBackgroundColor(if (dark) HarborTheme.PAPER_DARK else HarborTheme.PAPER_LIGHT)
                 addView(
                     HarborScreenView(context),
                     FrameLayout.LayoutParams(
