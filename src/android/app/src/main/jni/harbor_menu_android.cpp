@@ -6,6 +6,12 @@
 
 #include <jni.h>
 
+#include <android/native_window.h>
+#include <android/native_window_jni.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <vector>
@@ -21,6 +27,7 @@
 #include "harbor_setup/host.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
+#include "video_core/host_screen.h"
 #include "harbor_setup_android.h"
 #include "native.h"
 #include "common/harbor_crash.h"
@@ -221,16 +228,93 @@ public:
         Call("shareCrashReport", Common::FS::PathToUTF8String(report.path) + "\n" + report.name);
     }
 
+    void HostPageAction(const std::string& action, const std::string& argument) override {
+        Call("hostPage", action + "\n" + argument);
+    }
+    std::vector<HarborSetup::MenuChoice> FittingDrivers() override {
+        // Lines of id and label, two per driver.
+        std::vector<HarborSetup::MenuChoice> out;
+        std::istringstream lines(Call("fittingDrivers"));
+        std::string id, label;
+        while (std::getline(lines, id) && std::getline(lines, label)) {
+            out.push_back({id, label, ""});
+        }
+        return out;
+    }
+
+    // Notices are a line on the console's screen (the menu's overlay, as on the desktop), drawn by
+    // the menu's thread: no JNI from the caller, which may be guest service code on a Fiber.
+    bool HasHud() const override {
+        return true;
+    }
+    std::optional<std::string> HudText() override {
+        std::scoped_lock lk{notice_mutex};
+        if (notice.empty()) {
+            return std::nullopt;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        // The time runs from when the console's picture is there to show it.
+        if (!notice_shown) {
+            if (!VideoCore::HostScreen::GuestFrameShown()) {
+                return std::nullopt;
+            }
+            notice_shown = true;
+            notice_until = now + std::chrono::seconds(6);
+        }
+        if (now >= notice_until) {
+            notice.clear();
+            return std::nullopt;
+        }
+        return notice;
+    }
+
     void HostNotice(const std::string& text) override {
         LOG_INFO(Frontend, "harbor: notice: {}", text);
-        // Notices come from guest service code, which runs on a Fiber: JNI there takes the process
-        // down (SIGSEGV; see common/android/applets/software_keyboard.cpp). A short-lived thread of
-        // its own makes the call, and the guest does not wait for it.
-        std::thread([text] { Call("notice", text); }).detach();
+        std::scoped_lock lk{notice_mutex};
+        notice = text;
+        notice_shown = false;
     }
+
+private:
+    std::mutex notice_mutex;
+    std::string notice;
+    bool notice_shown = false;
+    std::chrono::steady_clock::time_point notice_until{};
+
+public:
 };
 
 AndroidMenuHost* menu_host = nullptr;
+
+// Harbor's host pages (HarborScreenView): the menu's pictures copied into the view's surface.
+std::mutex surface_mutex;
+ANativeWindow* surface = nullptr;
+std::pair<u32, u32> surface_size{};
+
+void DrawToSurface(std::shared_ptr<const VideoCore::HostScreen::Frame> frame) {
+    std::scoped_lock lk{surface_mutex};
+    if (!surface || !frame) {
+        return;
+    }
+    if (surface_size != std::pair{frame->width, frame->height}) {
+        ANativeWindow_setBuffersGeometry(surface, static_cast<int32_t>(frame->width),
+                                         static_cast<int32_t>(frame->height), WINDOW_FORMAT_RGBA_8888);
+        surface_size = {frame->width, frame->height};
+    }
+    ANativeWindow_Buffer buffer{};
+    if (ANativeWindow_lock(surface, &buffer, nullptr) != 0) {
+        return;
+    }
+    const u32 rows = std::min<u32>(frame->height, static_cast<u32>(buffer.height));
+    const std::size_t row_bytes = std::min<std::size_t>(frame->width, static_cast<std::size_t>(buffer.width)) * 4;
+    for (u32 y = 0; y < rows; y++) {
+        std::memcpy(static_cast<u8*>(buffer.bits) + static_cast<std::size_t>(y) * buffer.stride * 4,
+                    frame->rgba.data() + static_cast<std::size_t>(y) * frame->width * 4, row_bytes);
+    }
+    ANativeWindow_unlockAndPost(surface);
+}
+
+void InitMenu(JNIEnv* env);
 
 } // namespace
 
@@ -238,6 +322,14 @@ extern "C" {
 
 /// Once the console boots: the menu's host, the Power button binding, and the bridge it calls.
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIEnv* env, jobject) {
+    InitMenu(env);
+}
+
+} // extern "C"
+
+namespace {
+
+void InitMenu(JNIEnv* env) {
     HARBOR_CRUMB("menu: initMenu");
     static std::once_flag once;
     std::call_once(once, [env] {
@@ -254,6 +346,10 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIE
     });
     HARBOR_CRUMB("menu: initMenu done");
 }
+
+} // namespace
+
+extern "C" {
 
 /// On the UI thread when a controller connects, changes or goes, and as the menu opens: the device
 /// list the menu shows, and a known pad's saved mapping applied (HarborSetup::CheckControllers).
@@ -286,6 +382,67 @@ JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_menuOpen(
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_menuBack(JNIEnv*, jobject) {
     HarborSetup::MenuBack();
+}
+
+/// Harbor's own pages outside the console (HarborScreenActivity): 0 status, 1 stopped, 2 cannot
+/// start, 3 driver failed, with its text. Their pictures go to the surface given by hostSurface.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_showHostPage(JNIEnv* env, jobject, jint kind,
+                                                                               jstring text) {
+    InitMenu(env);
+    HarborSetup::MenuShowHostPage({.kind = static_cast<HarborSetup::HostPageKind>(kind),
+                                   .text = text ? Common::Android::GetJString(env, text) : std::string{}},
+                                  DrawToSurface);
+}
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_endHostPage(JNIEnv*, jobject) {
+    HarborSetup::MenuEndHostPage();
+}
+
+/// The view's surface appeared (a Surface) or went (null).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostSurface(JNIEnv* env, jobject,
+                                                                              jobject view_surface) {
+    std::scoped_lock lk{surface_mutex};
+    if (surface) {
+        ANativeWindow_release(surface);
+        surface = nullptr;
+    }
+    surface_size = {};
+    if (view_surface) {
+        surface = ANativeWindow_fromSurface(env, view_surface);
+    }
+}
+
+/// A button by the console's positions (HarborSetup::HostButton: A, B, X, Y, up, down, left, right).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostButton(JNIEnv*, jobject, jint button,
+                                                                             jboolean down) {
+    if (button >= 0 && button <= static_cast<jint>(HarborSetup::HostButton::Right)) {
+        HarborSetup::MenuHostButton(static_cast<HarborSetup::HostButton>(button), down == JNI_TRUE);
+    }
+}
+
+/// A finger on the view, `x` and `y` from 0 to 1 across the picture.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostTouch(JNIEnv*, jobject, jint id, jfloat x,
+                                                                            jfloat y, jboolean down) {
+    HarborSetup::MenuHostTouch(id, x, y, down == JNI_TRUE);
+}
+
+/// A status line on the console's screen while Harbor stops it.
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_menuStatus(JNIEnv* env, jobject, jstring text) {
+    HarborSetup::MenuShowStatus(text ? Common::Android::GetJString(env, text) : std::string{});
+}
+
+/// A short notice from Harbor itself: a line on the console's screen (the menu's overlay).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostNotice(JNIEnv* env, jobject, jstring text) {
+    if (menu_host && text) {
+        menu_host->HostNotice(Common::Android::GetJString(env, text));
+    }
+}
+
+/// A line for the open host page (a driver file installed through the system's picker).
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostPageNotice(JNIEnv* env, jobject,
+                                                                                 jstring text, jboolean bad) {
+    HarborSetup::MenuHostPageNotice(text ? Common::Android::GetJString(env, text) : std::string{},
+                                    bad == JNI_TRUE);
 }
 
 } // extern "C"

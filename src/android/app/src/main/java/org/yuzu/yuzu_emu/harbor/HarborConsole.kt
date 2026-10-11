@@ -85,20 +85,19 @@ object HarborConsole {
                 start.runOnUiThread { start.showStatus(R.string.harbor_connecting) }
             }
             HarborNative.connectOpenPak()
-            // Keys that are not on this phone are never replaced on their own: the user is told.
+            // The Harbor menu and the mapped Power button, for this console session.
+            HarborNative.initMenu()
+            // Keys that are not on this phone are never replaced on their own: the user is told, in
+            // a line on the console's screen once HOME is up.
             val keys = HarborNative.calibrationKeys()
             if (keys == KEYS_NOT_HERE || keys == KEYS_BACKUP_PENDING) {
                 Log.warning("[Harbor] the console's keys are not on this phone ($keys); told the user")
-                from.runOnUiThread {
-                    Toast.makeText(
-                        from,
-                        if (keys == KEYS_BACKUP_PENDING) R.string.harbor_keys_backup_pending else R.string.harbor_keys_not_here,
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+                HarborNative.hostNotice(
+                    from.getString(
+                        if (keys == KEYS_BACKUP_PENDING) R.string.harbor_keys_backup_pending else R.string.harbor_keys_not_here
+                    )
+                )
             }
-            // The Harbor menu and the mapped Power button, for this console session.
-            HarborNative.initMenu()
             val qlaunch = NativeLibrary.getAppletLaunchPath(AppletInfo.QLaunch.entryId)
             Log.info("[Harbor] console boot: $games titles and $addons add-on files registered, HOME menu ${if (qlaunch.isEmpty()) "missing" else "present"}")
             from.runOnUiThread {
@@ -204,9 +203,13 @@ object HarborConsole {
         from.finish()
     }
 
-    /** Opens the setup wizard: directly the first time in a process, else in a new process. */
+    /**
+     * Opens the setup wizard: directly the first time in a process, else in a new process. Borealis
+     * starts once per process, so a process that already drew a Harbor page (the launcher's status)
+     * starts the setup in a new one too.
+     */
     fun openSetup(from: Activity) {
-        if (HarborSetupBridge.ran) {
+        if (HarborSetupBridge.ran || HarborScreenActivity.borealisUsed) {
             restartIntoSetup(from)
             return
         }
@@ -441,14 +444,9 @@ object HarborConsole {
 
     /** "Stopping the console…" while the session stops, then `next` (Restart, Set up again). */
     internal fun stopThen(activity: EmulationActivity, next: () -> Unit) {
-        val notice = MaterialAlertDialogBuilder(HarborTheme.dialogContext(activity))
-            .setMessage(R.string.harbor_stopping)
-            .setCancelable(false)
-            .show()
-        activity.harborStop {
-            if (notice.isShowing) notice.dismiss()
-            next()
-        }
+        // A Borealis status line on the console's screen (the Harbor menu's), as on the desktop.
+        HarborNative.menuStatus(activity.getString(R.string.harbor_stopping))
+        activity.harborStop { next() }
     }
 
     // Console backups: the NAND zipped with its device key sealed by a passphrase the user sets.

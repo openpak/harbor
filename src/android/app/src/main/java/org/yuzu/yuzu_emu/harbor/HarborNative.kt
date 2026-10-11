@@ -74,32 +74,38 @@ object HarborNative {
     /** The console's power button held: HOME's overlay opens its power menu. */
     external fun pressPower()
 
-    /** Whether a recommended driver exists for this GPU (T30 on an Adreno 6xx). */
-    external fun hasRecommendedDriver(): Boolean
-
     /** Why an installed driver does not fit this GPU, or "". */
     external fun driverProblem(name: String, library: String, minApi: Int): String
 
-    /** Downloads, installs and selects the recommended driver: [id, name, error]. Not on the UI thread. */
-    external fun installRecommendedDriver(): Array<String>
+    /**
+     * Harbor's own pages outside the console (HarborScreenActivity): a Borealis page of the Harbor
+     * menu, kind 0 status, 1 stopped, 2 cannot start, 3 driver failed, drawn into the surface given
+     * by hostSurface.
+     */
+    external fun showHostPage(kind: Int, text: String)
 
-    /** Whether the setup's GitHub driver catalogue is offered on this phone. */
-    external fun canBrowseDrivers(): Boolean
+    external fun endHostPage()
 
-    /** What the catalogue is, or why it is not offered here. */
-    external fun driverDownloadLead(): String
+    /** The page's surface (a Surface), or null when it went. */
+    external fun hostSurface(surface: Any?)
 
-    /** Fetches the catalogue: [notice, then title, detail, file, recommended per package]. Blocking. */
-    external fun driverCatalogue(): Array<String>
+    /** A button by the console's positions: 0 A, 1 B, 2 X, 3 Y, 4 up, 5 down, 6 left, 7 right. */
+    external fun hostButton(button: Int, down: Boolean)
 
-    /** Downloads, installs and chooses package `index` of the last catalogue: [id, name, error, cancelled]. Blocking. */
-    external fun downloadDriver(index: Int): Array<String>
+    /** A finger on the page, `x` and `y` from 0 to 1. */
+    external fun hostTouch(id: Int, x: Float, y: Float, down: Boolean)
 
-    /** The words for the running catalogue fetch or download. */
-    external fun driverProgress(): String
+    /** A status line on the console's screen while Harbor stops it ("Stopping the console…"). */
+    external fun menuStatus(text: String)
 
-    /** Cancels the running catalogue fetch or download (not an install). */
-    external fun cancelDriverWork()
+    /** A short notice from Harbor itself, a line on the console's screen (MenuHost::HostNotice). */
+    external fun hostNotice(text: String)
+
+    /** A status line for the open host page (a driver file installed through the picker). */
+    external fun hostPageNotice(text: String, bad: Boolean)
+
+    /** A picked driver package read, checked, installed and chosen: [id, name, error]. Blocking. */
+    external fun installDriverFile(location: String, name: String): Array<String>
 
     /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
     external fun powerShortPress()
