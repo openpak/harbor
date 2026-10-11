@@ -1079,7 +1079,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                     .setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
                 ViewUtils.hideView(binding.surfaceInputOverlay)
                 if (HarborConsole.active) {
-                    harborShowLoading(getString(R.string.harbor_starting))
+                    harborShowLoading(getString(R.string.harbor_loading_home))
                 } else {
                     ViewUtils.showView(binding.loadingIndicator)
                 }
@@ -1576,6 +1576,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             )
             harborLoading = frame
+            // The FPS line is the console's: not over the loading page.
+            binding.showStatsOverlayText.visibility = View.GONE
             harborLoadingFrames = HarborNative.guestFrames()
             harborLoadingSince = SystemClock.elapsedRealtime()
             Log.info("[Harbor] boot page shown: $text")
@@ -1592,6 +1594,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         (view.parent as? ViewGroup)?.removeView(view)
         HarborNative.endHostPage()
         Log.info("[Harbor] boot page hidden: $reason")
+        if (_binding != null) {
+            updateShowStatsOverlay()
+        }
     }
 
     override fun onDestroyView() {
@@ -1819,8 +1824,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         perfStatsUpdater = {
             val b = _binding
             if (b != null) {
+                // Not over Harbor's loading page (harborLoading).
                 val running = emulationViewModel.emulationStarted.value &&
-                    !emulationViewModel.isEmulationStopping.value && NativeLibrary.isRunning()
+                    !emulationViewModel.isEmulationStopping.value && NativeLibrary.isRunning() &&
+                    harborLoading == null
                 if (running) {
                     val stats = NativeLibrary.getPerfStats()
                     b.showStatsOverlayText.text = String.format(
