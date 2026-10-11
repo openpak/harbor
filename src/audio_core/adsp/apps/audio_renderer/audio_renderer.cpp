@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 
@@ -11,6 +12,7 @@
 #include "audio_core/audio_core.h"
 #include "audio_core/common/common.h"
 #include "audio_core/sink/sink.h"
+#include "audio_core/sink/sink_stream.h"
 #include "common/logging.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -125,13 +127,13 @@ void AudioRenderer::CreateSinkStreams() {
         std::string name{fmt::format("ADSP_RenderStream-{}", i)};
         streams[i] =
             sink.AcquireSinkStream(system, channels, name, ::AudioCore::Sink::StreamType::Render);
-        streams[i]->SetRingSize(4);
+        streams[i]->SetRingSize(::AudioCore::Sink::RenderQueueBuffers());
     }
 }
 
 void AudioRenderer::Main(std::stop_token stop_token) {
     Common::SetCurrentThreadName("DSP_AudioRenderer_Main");
-    Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+    ::AudioCore::Sink::SetAudioThreadPriority(Common::ThreadPriority::High);
 
     // TODO: Create buffer map/unmap thread + mailbox
     // TODO: Create gMix devices, initialize them here
@@ -145,6 +147,16 @@ void AudioRenderer::Main(std::stop_token stop_token) {
 
     // 0.12 seconds (2,304,000 / 19,200,000)
     constexpr u64 max_process_time{2'304'000ULL};
+
+    // Harbor: host time spent mixing a 5 ms frame. A frame that takes longer than the audio it
+    // makes cannot keep the output queue filled; reported every 5 s when that happens.
+    using Clock = std::chrono::steady_clock;
+    constexpr auto frame_duration = std::chrono::microseconds{TargetSampleCount * 1'000'000ULL /
+                                                              TargetSampleRate};
+    auto next_report = Clock::now() + std::chrono::seconds{5};
+    Clock::duration slowest_frame{};
+    u32 frames_rendered{};
+    u32 slow_frames{};
 
     while (!stop_token.stop_requested()) {
         auto msg{mailbox.Receive(Direction::DSP)};
@@ -162,6 +174,7 @@ void AudioRenderer::Main(std::stop_token stop_token) {
             std::array<bool, MaxRendererSessions> buffers_reset{};
             std::array<u64, MaxRendererSessions> render_times_taken{};
             const auto start_time{system.CoreTiming().GetGlobalTimeUs().count()};
+            Clock::duration mix_time{};
 
             for (u32 index = 0; index < MaxRendererSessions; index++) {
                 auto& command_buffer{command_buffers[index]};
@@ -200,8 +213,10 @@ void AudioRenderer::Main(std::stop_token stop_token) {
 
                     // Process the command list
                     {
+                        const auto mix_start = Clock::now();
                         render_times_taken[index] =
                             command_list_processor.Process(index) - start_time;
+                        mix_time += Clock::now() - mix_start;
                     }
 
                     const auto end_time{system.CoreTiming().GetGlobalTimeUs().count()};
@@ -210,6 +225,27 @@ void AudioRenderer::Main(std::stop_token stop_token) {
                         command_list_processor.GetRemainingCommandCount();
                     command_buffer.render_time_taken_us = end_time - start_time;
                 }
+            }
+            if (mix_time > Clock::duration::zero()) {
+                ++frames_rendered;
+                slowest_frame = (std::max)(slowest_frame, mix_time);
+                if (mix_time > frame_duration) {
+                    ++slow_frames;
+                }
+            }
+            if (const auto now = Clock::now(); now >= next_report) {
+                if (slow_frames > 0) {
+                    LOG_WARNING(Service_Audio,
+                                "audio: {} of {} renderer frames took longer to mix than the 5 ms "
+                                "they play (slowest {} us) in the last 5 s",
+                                slow_frames, frames_rendered,
+                                std::chrono::duration_cast<std::chrono::microseconds>(slowest_frame)
+                                    .count());
+                }
+                next_report = now + std::chrono::seconds{5};
+                slowest_frame = {};
+                frames_rendered = 0;
+                slow_frames = 0;
             }
             mailbox.Send(Direction::Host, Message::RenderResponse);
         } break;

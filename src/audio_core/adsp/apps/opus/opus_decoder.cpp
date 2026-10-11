@@ -12,6 +12,7 @@
 #include "audio_core/adsp/apps/opus/shared_memory.h"
 #include "audio_core/audio_core.h"
 #include "audio_core/common/common.h"
+#include "audio_core/sink/sink_stream.h"
 #include "common/logging.h"
 #include "common/thread.h"
 #include "core/core.h"
@@ -79,6 +80,7 @@ void OpusDecoder::Init(std::stop_token stop_token) {
 
 void OpusDecoder::Main(std::stop_token stop_token) {
     Common::SetCurrentThreadName("DSP_OpusDecoder_Main");
+    ::AudioCore::Sink::SetAudioThreadPriority(Common::ThreadPriority::Normal);
 
     while (!stop_token.stop_requested()) {
         auto msg = Receive(Direction::DSP, stop_token);

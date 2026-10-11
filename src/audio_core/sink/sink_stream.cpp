@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
+#include <string_view>
 #include <memory>
 #include <span>
 #include <vector>
@@ -16,6 +18,7 @@
 #include "audio_core/sink/sink_stream.h"
 #include "common/common_types.h"
 #include "common/fixed_point.h"
+#include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -37,10 +40,57 @@ f32 GetConsoleOutputGain() {
     return console_output_gain.load(std::memory_order_relaxed);
 }
 
+void SetAudioThreadPriority(Common::ThreadPriority upstream_priority) {
+    static const bool upstream = [] {
+        const char* value = std::getenv("HARBOR_AUDIO_PRIORITY");
+        const bool keep = value != nullptr && std::string_view{value} == "upstream";
+        LOG_INFO(Audio_Sink, "audio: audio threads run at {} priority",
+                 keep ? "upstream" : "the audio");
+        return keep;
+    }();
+    Common::SetCurrentThreadPriority(upstream ? upstream_priority
+                                              : Common::ThreadPriority::Critical);
+}
+
+u32 RenderQueueBuffers() {
+    static const u32 buffers = [] {
+        constexpr u32 Default = 4;
+        u32 count = Default;
+        if (const char* value = std::getenv("HARBOR_AUDIO_QUEUE")) {
+            count = std::clamp<u32>(static_cast<u32>(std::strtoul(value, nullptr, 10)), 2, 16);
+        }
+        LOG_INFO(Audio_Sink, "audio: renderer queue {} buffers ({} ms)", count,
+                 count * TargetSampleCount * 1000 / TargetSampleRate);
+        return count;
+    }();
+    return buffers;
+}
+
+void SinkStream::ReportUnderruns() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now < next_underrun_report) {
+        return;
+    }
+    next_underrun_report = now + std::chrono::seconds{5};
+    const u64 events = underrun_events.load(std::memory_order_relaxed);
+    const u64 frames = underrun_frames.load(std::memory_order_relaxed);
+    if (events != reported_underrun_events) {
+        LOG_WARNING(Audio_Sink,
+                    "audio: {} ran dry {} time(s) in the last 5 s ({} ms filled by holding the "
+                    "last sample), {} buffer(s) queued now",
+                    name, events - reported_underrun_events,
+                    (frames - reported_underrun_frames) * 1000 / TargetSampleRate,
+                    queued_buffers.load());
+    }
+    reported_underrun_events = events;
+    reported_underrun_frames = frames;
+}
+
 void SinkStream::AppendBuffer(SinkBuffer& buffer, std::span<s16> samples) {
     HARBOR_CRUMB_ONCE("audio: first sink buffer appended");
     if (type == StreamType::In)
         return;
+    ReportUnderruns();
 
     constexpr s32 min = (std::numeric_limits<s16>::min)();
     constexpr s32 max = (std::numeric_limits<s16>::max)();
@@ -204,6 +254,11 @@ void SinkStream::ProcessAudioOutAndRender(std::span<s16> output_buffer, std::siz
 
             if (!queue.TryPop(playing_buffer)) {
                 lk.unlock();
+                if (frames_written > 0 || last_callback_had_data) {
+                    underrun_events.fetch_add(1, std::memory_order_relaxed);
+                    underrun_frames.fetch_add(num_frames - frames_written,
+                                              std::memory_order_relaxed);
+                }
                 for (size_t i = frames_written; i < num_frames; i++)
                     std::memcpy(&output_buffer[i * frame_size], last_frame.data(), frame_size_bytes);
                 frames_written = num_frames;
@@ -228,6 +283,7 @@ void SinkStream::ProcessAudioOutAndRender(std::span<s16> output_buffer, std::siz
     }
 
     std::memcpy(last_frame.data(), &output_buffer[(frames_written - 1) * frame_size], frame_size_bytes);
+    last_callback_had_data = actual_frames_written == num_frames;
 
     {
         std::scoped_lock lk{sample_count_lock};
