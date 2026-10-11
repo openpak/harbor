@@ -3,15 +3,8 @@
 
 package org.yuzu.yuzu_emu.harbor
 
-import android.app.Activity
 import android.content.Intent
-import android.media.AudioManager
 import android.os.Bundle
-import android.view.Gravity
-import android.widget.TextView
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import kotlin.concurrent.thread
 import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
@@ -22,7 +15,7 @@ import org.yuzu.yuzu_emu.utils.Log
  * Harbor's launcher (docs/harbor/eden-port/host.md section 3.1): a console that is ready boots its
  * HOME menu; one that is not opens the setup. Eden's own onboarding and game list are never shown.
  */
-class HarborStartActivity : Activity() {
+class HarborStartActivity : HarborScreenActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Opened from the launcher while the console runs: back to it, no second boot.
@@ -43,23 +36,9 @@ class HarborStartActivity : Activity() {
             finish()
             return
         }
-        volumeControlStream = AudioManager.STREAM_MUSIC
-        // The console's theme (its saved colour set, the phone's before a first boot), as the setup
-        // and the stopped screen use it, so nothing flashes between screens.
-        val dark = HarborTheme.dark(this)
-        status = TextView(this).apply {
-            setBackgroundColor(if (dark) HarborTheme.PAPER_DARK else HarborTheme.PAPER_LIGHT)
-            setTextColor(if (dark) HarborTheme.INK_DARK else HarborTheme.INK_LIGHT)
-            gravity = Gravity.CENTER
-            textSize = 18f
-            setText(R.string.harbor_starting)
-        }
-        setContentView(status)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
-            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        // "Starting…" as a Borealis page (HarborScreenActivity), in the console's theme like the
+        // setup and the stopped screen, so nothing flashes between screens.
+        showPage(KIND_STATUS, getString(R.string.harbor_starting))
 
         HarborNative.initialize()
         val afterSetup = intent.getBooleanExtra(EXTRA_AFTER_SETUP, false)
@@ -85,11 +64,16 @@ class HarborStartActivity : Activity() {
         } }
     }
 
-    private lateinit var status: TextView
-
     /** A one-line state while the console gets ready (the boot connection to OpenPak). */
     fun showStatus(text: Int) {
-        status.setText(text)
+        showPage(KIND_STATUS, getString(text))
+    }
+
+    /** The status page has nothing to choose; Back leaves Harbor while it gets ready. */
+    override fun onHostAction(action: String, argument: String) {
+        if (action == "back") {
+            HarborConsole.exitHarbor(this)
+        }
     }
 
     companion object {

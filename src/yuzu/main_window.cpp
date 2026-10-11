@@ -490,16 +490,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         game_list_placeholder->hide();
 
         // OpenPak connects while the library is scanned (up to ~10 s on a first connect).
-        harbor_status = new QLabel(tr("Connecting to OpenPak..."), this);
-        harbor_status->setAlignment(Qt::AlignCenter);
-        ui->horizontalLayout->addWidget(harbor_status);
-        harbor_stopped_page = new HarborDesktop::StoppedPage(
-            this, {
-                      .start_again = [this] { HarborRestartConsole(); },
-                      .set_up_again = [this] { harbor_menu->SetupAgain(); },
-                      .exit = [this] { close(); },
-                  });
+        harbor_stopped_page = new HarborDesktop::HostPages(this);
         ui->horizontalLayout->addWidget(harbor_stopped_page);
+        harbor_stopped_page->ShowStatus(tr("Connecting to OpenPak..."));
         harbor_connect = std::thread([this] {
             HarborSetup::ConnectOpenPak();
             QMetaObject::invokeMethod(
@@ -607,6 +600,17 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                     }
                 },
             .console_action = [this](const std::string& name) { HarborConsoleAction(name); },
+            .host_page =
+                [this](const std::string& action) {
+                    // What Harbor's own pages ask for (harbor_stopped_page).
+                    if (action == "start-again") {
+                        HarborRestartConsole();
+                    } else if (action == "set-up-again") {
+                        harbor_menu->SetupAgain();
+                    } else if (action == "exit") {
+                        close();
+                    }
+                },
         });
     connect(this, &MainWindow::statsUpdated, this,
             [this](const Core::PerfStatsResults& results, const VideoCore::ShaderNotify&) {
@@ -625,6 +629,11 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         {
             .screenshot =
                 [this](const std::string& path, std::function<void(bool)> done) {
+                    // A Harbor page in place of the console (stopped, cannot start): its picture.
+                    if (harbor_stopped_page && harbor_stopped_page->isVisible()) {
+                        done(harbor_stopped_page->SavePicture(QString::fromStdString(path)));
+                        return;
+                    }
                     if (QtCommon::emu_thread == nullptr || !QtCommon::emu_thread->IsRunning()) {
                         LOG_ERROR(Frontend, "harbor-control: no running emulation to capture");
                         done(false);
@@ -817,18 +826,14 @@ void MainWindow::HarborConsoleStep(int done) {
     if (harbor_console_steps != (HarborConsoleScanned | HarborConsoleConnected) || emulation_running) {
         return;
     }
-    if (harbor_status) {
-        harbor_status->hide();
-    }
     if (harbor_stopped_page) {
-        harbor_stopped_page->hide();
+        harbor_stopped_page->Hide();
     }
     HarborConsoleMenu::WarnIfLocked(this);
     LaunchFirmwareApplet(u64(Service::AM::AppletProgramId::QLaunch), std::nullopt);
     if (!emulation_running && harbor_stopped_page) {
         LOG_ERROR(Frontend, "harbor: the HOME menu could not be loaded");
-        harbor_stopped_page->ShowCannotStart(tr("The HOME menu could not be loaded (see the log)."),
-                                             HarborDesktop::DarkTheme(nullptr));
+        harbor_stopped_page->ShowCannotStart(tr("The HOME menu could not be loaded (see the log)."));
     }
 }
 
@@ -837,7 +842,7 @@ void MainWindow::HarborRestartConsole() {
     // is there for HOME.
     LOG_INFO(Frontend, "harbor: the console restarts");
     if (harbor_stopped_page) {
-        harbor_stopped_page->hide();
+        harbor_stopped_page->ShowStatus(tr("Starting..."));
     }
     QtCommon::system->GetContentProvider().Refresh();
     harbor_console_steps = HarborConsoleConnected;
@@ -2546,12 +2551,10 @@ void MainWindow::OnEmulationStopped() {
             if (!host_reason.empty() && harbor_stopped_page) {
                 harbor_guest_exit = false;
                 LOG_INFO(Frontend, "harbor: the console stopped: {}", host_reason);
-                harbor_stopped_page->ShowStopped(QString::fromStdString(host_reason),
-                                                 HarborDesktop::DarkTheme(nullptr));
+                harbor_stopped_page->ShowStopped(QString::fromStdString(host_reason));
             } else if (harbor_guest_exit.exchange(false) && harbor_stopped_page) {
                 LOG_INFO(Frontend, "harbor: the console stopped: its root program exited");
-                harbor_stopped_page->ShowStopped(tr("The console's root program exited."),
-                                                 HarborDesktop::DarkTheme(nullptr));
+                harbor_stopped_page->ShowStopped(tr("The console's root program exited."));
             }
             break;
         }

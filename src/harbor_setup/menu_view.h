@@ -23,6 +23,9 @@
 
 namespace HarborSetup {
 
+/// The text MenuShowStatus last set (menu.cpp).
+std::string MenuStatusText();
+
 /// The Harbor menu and Harbor Settings in one Borealis activity, on the 1280x720 design canvas.
 /// Each change rebuilds the page from the state, keeping the focus on the same row (as the
 /// wizard). Settings is laid out like the console's System Settings: categories on the left, the
@@ -38,6 +41,10 @@ public:
 
     /// Shows `page` from its top, as the menu opens.
     void Show(MenuPage page);
+    /// Shows a host page (outside the console: the launcher's status, "Harbor stopped", ...).
+    void ShowHost(const HostPage& page);
+    /// A status line from the frontend for the host page's driver pages.
+    void HostPageNotice(const std::string& text, bool bad);
     /// B, Android back: one level up; on the menu itself it closes.
     void Back();
     /// While a button is being assigned, the controllers belong to the capture, not the menu.
@@ -46,12 +53,12 @@ public:
     void Tick();
 
 private:
-    enum class Screen { Menu, Settings, Crash };
+    enum class Screen { Menu, Settings, Crash, Host };
     /// The crash-report page: the consent question, last time's report, or its text.
     enum class CrashView { Consent, Offer, Text };
     enum class Category { Display, Controllers, Touch, Harbor };
     /// A sub-page inside the Settings pane.
-    enum class Sub { None, Player, Choice, Driver, Downloads };
+    enum class Sub { None, Player, Choice, Driver, Downloads, ConfirmPhone };
 
     struct Choice {
         std::string title;
@@ -69,6 +76,10 @@ private:
     brls::View* Footer();
     brls::View* MenuBody();
     brls::View* CrashBody();
+    brls::View* HostBody();
+    std::string HostTitle() const;
+    void DriverProgressPanel(brls::Box* pane);
+    void DownloadRecommended();
     std::string CrashTitle() const;
     brls::View* SettingsBody();
     void CategoryPane(brls::Box* pane);
@@ -126,6 +137,8 @@ private:
     brls::Label* capture_label = nullptr;
     int capture_seconds = 0;
     int capture_step = -1;
+
+    HostPage host_page;
 
     CrashView crash_view = CrashView::Consent;
     std::optional<Common::HarborCrash::Report> crash_report;

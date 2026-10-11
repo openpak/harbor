@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 import androidx.annotation.Keep
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -151,17 +150,20 @@ object HarborMenuBridge {
                 ""
             }
 
-            // A short host-side notice from the core (e.g. online play locking the speed).
-            "notice" -> {
-                onUi { activity -> Toast.makeText(activity, argument, Toast.LENGTH_LONG).show() }
+            // Harbor's own pages outside the console (HarborScreenActivity): "action\nargument".
+            "hostPage" -> {
+                val action = argument.substringBefore('\n')
+                val value = argument.substringAfter('\n', "")
+                main.post { HarborScreenActivity.current?.onHostAction(action, value) }
                 ""
             }
+            "fittingDrivers" -> HarborStoppedActivity.fittingDrivers()
 
             // Controllers and Input.
             "homeKeyEnabled" -> flag(HarborKeyService.enabled(YuzuApplication.appContext))
             "openHomeKeySettings" -> {
+                // The steps are on the menu's own row (Borealis); Android's settings are its own screen.
                 onUi { activity ->
-                    Toast.makeText(activity, R.string.harbor_key_service_hint, Toast.LENGTH_LONG).show()
                     activity.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
                 ""

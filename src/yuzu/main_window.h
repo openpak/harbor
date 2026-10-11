@@ -51,7 +51,7 @@ class GRenderWindow;
 class HarborControl;
 class HarborMenu;
 namespace HarborDesktop {
-class StoppedPage;
+class HostPages;
 }
 class LoadingScreen;
 class OverlayDialog;
@@ -559,10 +559,11 @@ private:
     QTimer harbor_resize_timer;
     std::optional<Settings::ResolutionSetup> harbor_resolution_in_use;
     std::optional<Settings::ResolutionSetup> harbor_resolution_pending;
-    HarborDesktop::StoppedPage* harbor_stopped_page = nullptr; // "Harbor stopped" / "cannot start"
+    // Harbor's own pages in place of the console's picture: the status while it gets ready,
+    // "Harbor stopped", "Harbor cannot start" (Borealis, drawn by the Harbor menu).
+    HarborDesktop::HostPages* harbor_stopped_page = nullptr;
     std::atomic<bool> harbor_stopping{false};   // a stop the user asked for is under way
     std::atomic<bool> harbor_guest_exit{false}; // the console's root program exited by itself
-    QLabel* harbor_status = nullptr; // "Connecting to OpenPak" while the console waits for it
     void HarborConsoleStep(int done);
     void HarborRestartConsole();
     void HarborAddMenu();

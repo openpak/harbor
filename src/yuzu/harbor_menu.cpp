@@ -367,3 +367,12 @@ void HarborMenu::ShareCrashReport(const Common::HarborCrash::Report& report) {
                  copied ? "saved as a copy" : "could not be copied");
     });
 }
+
+void HarborMenu::HostPageAction(const std::string& action, const std::string&) {
+    LOG_INFO(Frontend, "harbor: host page asks for {}", action);
+    OnGui([this, action] {
+        if (hooks.host_page) {
+            hooks.host_page(action);
+        }
+    });
+}

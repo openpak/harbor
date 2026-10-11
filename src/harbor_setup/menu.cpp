@@ -11,8 +11,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #ifdef __ANDROID__
@@ -323,6 +325,17 @@ MenuPage want_page = MenuPage::Menu;
 std::atomic_bool open{false};
 std::atomic_bool failed{false};
 
+// Host pages (MenuShowHostPage): drawn into the frontend's surface, not the console's screen.
+bool standalone = false;          ///< guarded by mutex: a host page is wanted
+bool host_page_pending = false;   ///< guarded by mutex
+HostPage host_page;               ///< guarded by mutex
+HostFrameSink host_sink;          ///< guarded by mutex
+std::atomic_bool open_standalone{false}; ///< the open page is a host page (menu thread)
+std::mutex host_input_mutex;
+std::array<bool, 8> host_buttons{};
+std::map<int, std::pair<float, float>> host_touches;
+std::optional<std::pair<std::string, bool>> host_notice; ///< guarded by host_input_mutex
+
 // ---- Input from the console ----
 
 constexpr std::size_t ControllerCount = 9; // Players 1-8 and Handheld
@@ -424,11 +437,27 @@ void ReadInput(MenuActivity* activity) {
             state.buttons[i] = false;
         }
     }
+    // A host page's surface: its own buttons and touches.
+    const bool host = open_standalone.load();
+    if (host) {
+        std::scoped_lock lk{host_input_mutex};
+        constexpr brls::ControllerButton map[] = {brls::BUTTON_A,  brls::BUTTON_B,    brls::BUTTON_X,
+                                                  brls::BUTTON_Y,  brls::BUTTON_UP,   brls::BUTTON_DOWN,
+                                                  brls::BUTTON_LEFT, brls::BUTTON_RIGHT};
+        for (std::size_t i = 0; i < host_buttons.size(); i++) {
+            state.buttons[map[i]] |= host_buttons[i];
+        }
+        state.buttons[brls::BUTTON_NAV_UP] |= state.buttons[brls::BUTTON_UP];
+        state.buttons[brls::BUTTON_NAV_DOWN] |= state.buttons[brls::BUTTON_DOWN];
+        state.buttons[brls::BUTTON_NAV_LEFT] |= state.buttons[brls::BUTTON_LEFT];
+        state.buttons[brls::BUTTON_NAV_RIGHT] |= state.buttons[brls::BUTTON_RIGHT];
+    }
+
     // Assigning a button: the controllers belong to the capture.
     if (activity->Capturing()) {
         state = {};
         held_at_open.fill(true);
-    } else if (plus && minus && !held_at_open[brls::BUTTON_START]) {
+    } else if (!host && plus && minus && !held_at_open[brls::BUTTON_START]) {
         // Plus and Minus together close the menu again, as they opened it.
         held_at_open.fill(true);
         state = {};
@@ -438,6 +467,18 @@ void ReadInput(MenuActivity* activity) {
 
     // The touch screen (and the desktop's mouse as touch), in the canvas' units.
     input.touches.clear();
+    if (host) {
+        std::scoped_lock lk{host_input_mutex};
+        for (const auto& [id, position] : host_touches) {
+            brls::RawTouchState raw;
+            raw.fingerId = id;
+            raw.pressed = true;
+            raw.position.x = position.first * brls::Application::contentWidth;
+            raw.position.y = position.second * brls::Application::contentHeight;
+            input.touches.push_back(raw);
+        }
+        return;
+    }
     const auto touch = hid.GetEmulatedConsole()->GetHostTouch();
     for (const auto& finger : touch) {
         if (!finger.pressed) {
@@ -503,9 +544,16 @@ void CloseNow() {
         return;
     }
     open = false;
-    VideoCore::HostScreen::Hide();
-    TakeConsoleInput(false);
-    LOG_INFO(Frontend, "harbor: menu closed");
+    if (open_standalone.exchange(false)) {
+        LOG_INFO(Frontend, "harbor: host page closed");
+        std::scoped_lock lk{host_input_mutex};
+        host_buttons.fill(false);
+        host_touches.clear();
+    } else {
+        VideoCore::HostScreen::Hide();
+        TakeConsoleInput(false);
+        LOG_INFO(Frontend, "harbor: menu closed");
+    }
     if (auto then = std::exchange(after_close, nullptr)) {
         then();
     }
@@ -521,6 +569,22 @@ void OpenNow(MenuPage page) {
     VideoCore::HostScreen::Show();
 }
 
+void OpenHostNow(const HostPage& page) {
+    if (open && !open_standalone) {
+        // From the console's screen to a host page: the console's input and picture come back first.
+        VideoCore::HostScreen::Hide();
+        TakeConsoleInput(false);
+        open = false;
+    }
+    if (!open) {
+        held_at_open.fill(true);
+        open = true;
+        open_standalone = true;
+    }
+    LOG_INFO(Frontend, "harbor: host page {}", static_cast<int>(page.kind));
+    activity->ShowHost(page);
+}
+
 void DrawFrame() {
     const auto [width, height] = ConsoleResolution();
     if (target.width != width || target.height != height) {
@@ -533,6 +597,14 @@ void DrawFrame() {
     glViewport(0, 0, width, height);
 
     ReadInput(activity);
+    std::optional<std::pair<std::string, bool>> notice;
+    {
+        std::scoped_lock lk{host_input_mutex};
+        notice = std::exchange(host_notice, std::nullopt);
+    }
+    if (notice && open_standalone) {
+        activity->HostPageNotice(notice->first, notice->second);
+    }
     activity->Tick();
     brls::Application::mainLoop();
 
@@ -549,7 +621,16 @@ void DrawFrame() {
         std::memcpy(frame->rgba.data() + static_cast<std::size_t>(y) * stride,
                     rows.data() + static_cast<std::size_t>(height - 1 - y) * stride, stride);
     }
-    if (open) {
+    if (open_standalone) {
+        HostFrameSink sink;
+        {
+            std::scoped_lock lk{mutex};
+            sink = host_sink;
+        }
+        if (sink) {
+            sink(std::move(frame));
+        }
+    } else if (open) {
         VideoCore::HostScreen::Publish(std::move(frame));
     }
 }
@@ -585,11 +666,15 @@ void DrawHud() {
     while (start <= text->size()) {
         const std::size_t end = std::min(text->find('\n', start), text->size());
         const std::string line = text->substr(start, end - start);
+        // A long notice wraps within the picture.
+        const float box = static_cast<float>(width) - 24.0f * scale;
+        float bounds[4]{};
+        nvgTextBoxBounds(vg, 12.0f * scale, y, box, line.c_str(), nullptr, bounds);
         nvgFillColor(vg, nvgRGBA(0, 0, 0, 200));
-        nvgText(vg, 13.0f * scale, y + 1.5f * scale, line.c_str(), nullptr);
+        nvgTextBox(vg, 13.0f * scale, y + 1.5f * scale, box, line.c_str(), nullptr);
         nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
-        nvgText(vg, 12.0f * scale, y, line.c_str(), nullptr);
-        y += 22.0f * scale;
+        nvgTextBox(vg, 12.0f * scale, y, box, line.c_str(), nullptr);
+        y += std::max(22.0f * scale, bounds[3] - bounds[1] + 4.0f * scale);
         start = end + 1;
     }
     nvgEndFrame(vg);
@@ -623,6 +708,18 @@ void Run() {
         return;
     }
     activity = new MenuActivity(*menu_host, [](std::function<void()> then) {
+        bool host;
+        {
+            std::scoped_lock lk{mutex};
+            host = standalone;
+        }
+        if (host) {
+            // A host page stays up until its surface goes; what was asked for runs now.
+            if (then) {
+                then();
+            }
+            return;
+        }
         after_close = std::move(then);
         std::scoped_lock lk{mutex};
         want_open = false;
@@ -651,10 +748,14 @@ void Run() {
         }
         const auto page = want_page;
         const bool show_page = std::exchange(page_pending, false);
+        const bool show_host = std::exchange(host_page_pending, false);
+        const auto host = host_page;
         const bool back = std::exchange(want_back, false);
         lk.unlock();
         const auto start = Clock::now();
-        if (!open || show_page) {
+        if (show_host) {
+            OpenHostNow(host);
+        } else if (!open || show_page) {
             OpenNow(page);
         }
         if (back) {
@@ -704,6 +805,10 @@ void MenuOpen(MenuPage page) {
         return;
     }
     std::scoped_lock lk{mutex};
+    if (standalone) {
+        LOG_INFO(Frontend, "harbor: menu page {} not opened: a host page is up", static_cast<int>(page));
+        return;
+    }
     if (failed && thread.joinable()) {
         // The last start found no GL: try again.
         thread.join();
@@ -721,6 +826,9 @@ void MenuOpen(MenuPage page) {
 
 void MenuClose() {
     std::scoped_lock lk{mutex};
+    if (standalone) {
+        return; // a host page stays until its surface goes (MenuEndHostPage)
+    }
     want_open = false;
     cv.notify_all();
 }
@@ -769,6 +877,78 @@ void MenuOfferCrashReport() {
         }
         MenuOpen(MenuPage::CrashReport);
     }).detach();
+}
+
+std::string status_text; ///< MenuPage::Status, guarded by mutex
+
+void MenuShowStatus(std::string text) {
+    {
+        std::scoped_lock lk{mutex};
+        status_text = std::move(text);
+    }
+    MenuOpen(MenuPage::Status);
+}
+
+std::string MenuStatusText() {
+    std::scoped_lock lk{mutex};
+    return status_text;
+}
+
+void MenuShowHostPage(HostPage page, HostFrameSink sink) {
+    if (!menu_host) {
+        LOG_WARNING(Frontend, "harbor: host pages cannot be shown here");
+        return;
+    }
+    std::scoped_lock lk{mutex};
+    if (failed && thread.joinable()) {
+        thread.join();
+        failed = false;
+    }
+    standalone = true;
+    host_page = std::move(page);
+    host_page_pending = true;
+    host_sink = std::move(sink);
+    want_open = true;
+    if (!thread.joinable()) {
+        thread = std::thread(Run);
+    }
+    cv.notify_all();
+}
+
+void MenuEndHostPage() {
+    std::scoped_lock lk{mutex};
+    if (!standalone) {
+        return;
+    }
+    standalone = false;
+    host_page_pending = false;
+    host_sink = nullptr;
+    want_open = false;
+    cv.notify_all();
+}
+
+bool MenuHostPageShown() {
+    std::scoped_lock lk{mutex};
+    return standalone;
+}
+
+void MenuHostButton(HostButton button, bool pressed) {
+    std::scoped_lock lk{host_input_mutex};
+    host_buttons[static_cast<std::size_t>(button)] = pressed;
+}
+
+void MenuHostTouch(int id, float x, float y, bool down) {
+    std::scoped_lock lk{host_input_mutex};
+    if (down) {
+        host_touches[id] = {std::clamp(x, 0.0f, 1.0f), std::clamp(y, 0.0f, 1.0f)};
+    } else {
+        host_touches.erase(id);
+    }
+}
+
+void MenuHostPageNotice(std::string text, bool bad) {
+    std::scoped_lock lk{host_input_mutex};
+    host_notice = std::pair{std::move(text), bad};
 }
 
 void MenuShutdown() {
