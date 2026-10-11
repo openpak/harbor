@@ -791,7 +791,28 @@ void HostMemory::Protect(size_t virtual_offset, size_t length, MemoryPermission 
 }
 
 void HostMemory::ClearBackingRegion(size_t physical_offset, size_t length, u32 fill_value) {
-    std::memset(backing_base + physical_offset, fill_value, length);
+    u8* const start = backing_base + physical_offset;
+#if defined(__linux__)
+    // A large zero clear punches a hole in the memfd backing instead of writing zeros: the range
+    // reads as zeros and stays off the host until the guest writes to it. A memset made every
+    // page resident at once, so a title that reserves gigabytes it uses little of (a 3 GiB BSS,
+    // a large heap) cost all of it in host memory from the start. Only a hole punch zeros the
+    // pages of a shared mapping; where it fails (a private backing) the range is written.
+    constexpr size_t MinHolePunchSize = 64 * 1024;
+    static const uintptr_t host_page_size = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+    if (fill_value == 0 && length >= MinHolePunchSize) {
+        const uintptr_t begin = AlignUp(reinterpret_cast<uintptr_t>(start), host_page_size);
+        const uintptr_t end = AlignDown(reinterpret_cast<uintptr_t>(start + length), host_page_size);
+        if (end > begin &&
+            madvise(reinterpret_cast<void*>(begin), end - begin, MADV_REMOVE) == 0) {
+            std::memset(start, 0, begin - reinterpret_cast<uintptr_t>(start));
+            std::memset(reinterpret_cast<void*>(end), 0,
+                        reinterpret_cast<uintptr_t>(start + length) - end);
+            return;
+        }
+    }
+#endif
+    std::memset(start, fill_value, length);
 }
 
 void HostMemory::DecommitBackingRegion(size_t physical_offset, size_t length) {

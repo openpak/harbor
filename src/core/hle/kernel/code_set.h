@@ -96,8 +96,21 @@ struct CodeSet final {
     }
 #endif
 
+    /// The image size, the zero range left out of memory included.
+    std::size_t ImageSize() const {
+        return memory.size() + zero_size;
+    }
+
     /// The overall data that backs this code set.
     std::vector<u8> memory;
+
+    /// A zero-filled range of the image (a module's BSS) that memory leaves out: memory[0,
+    /// zero_offset) loads at offset 0 and memory[zero_offset, end) at zero_offset + zero_size.
+    /// The process's code pages are zero when they are allocated, so the range is never copied.
+    /// Some titles have a BSS of several GiB (Don't Starve Together: 3.1 GiB), which a host copy
+    /// would make resident twice over during the load.
+    std::size_t zero_offset = 0;
+    std::size_t zero_size = 0;
     /// The segments that comprise this code set.
     std::array<Segment, 3> segments;
 

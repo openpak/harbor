@@ -249,7 +249,7 @@ static bool LoadNroImpl(Core::System& system, Kernel::KProcess& process,
 
     if (Settings::IsNceEnabled()) {
         // Patch SVCs and MRS calls in the guest code
-        patch.PatchText(program_image, code);
+        patch.PatchText(program_image, 0, code);
 
         // We only support PostData patching for NROs.
         ASSERT(patch.GetPatchMode() == Core::NCE::PatchMode::PostData);
@@ -289,7 +289,7 @@ static bool LoadNroImpl(Core::System& system, Kernel::KProcess& process,
     // This needs to be after LoadFromMetadata so we can use the process entry point.
 #ifdef HAS_NCE
     if (Settings::IsNceEnabled()) {
-        patch.RelocateAndCopy(process.GetEntryPoint(), code, program_image,
+        patch.RelocateAndCopy(process.GetEntryPoint(), code, program_image, 0,
                               &process.GetPostHandlers());
     }
 #endif
