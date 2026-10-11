@@ -81,7 +81,6 @@ object HarborMenuBridge {
             "setupAgain" -> {
                 onUi { activity ->
                     HarborConsole.stopThen(activity) {
-                        HarborNative.stopOpenPak()
                         HarborConsole.restartIntoSetup(activity)
                     }
                 }
@@ -90,8 +89,7 @@ object HarborMenuBridge {
             "exit" -> {
                 onUi { activity ->
                     activity.harborStop {
-                        HarborNative.stopOpenPak()
-                        activity.finishAndRemoveTask()
+                        HarborConsole.exitHarbor(activity)
                     }
                 }
                 ""

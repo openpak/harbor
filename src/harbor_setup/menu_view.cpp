@@ -1143,7 +1143,7 @@ void MenuActivity::HarborPane(brls::Box* pane) {
                            "one. A copy of this console (its system memory on another computer, or a "
                            "second copy here) is the usual cause: make this one a new console and its "
                            "users link their Nintendo Accounts again. If you only restarted Harbor, "
-                           "wait a minute and a half and it signs in again."));
+                           "wait up to a minute: Harbor tries to sign in again by itself."));
     }
     pane->addView(Row("console:backup", "Back up console…", "", [this] {
         Close([this] { host.ConsoleAction("backup"); });

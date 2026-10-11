@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -152,6 +153,18 @@ struct State {
     std::condition_variable heartbeat_wake;
     std::mutex heartbeat_mutex;
     std::atomic<bool> heartbeat_running{false};
+    /// Keeps StartHeartbeat and GoOffline from crossing (a restart right after a stop).
+    std::mutex lifecycle_mutex;
+
+    /// The users whose sign-in the server refused as "device id in use" and a worker retries,
+    /// guarded by resign_mutex. The worker is a thread of its own: neither HOME nor a guest's
+    /// thread waits on it.
+    std::thread resign;
+    std::condition_variable resign_wake;
+    std::mutex resign_mutex;
+    std::set<std::string> resign_pending;
+    bool resign_active = false; ///< The worker is running (or about to).
+    bool resign_stop = false;
 
     /// Work the heartbeat does between beats, guarded by heartbeat_mutex. Whoever raises them may
     /// be a guest's IPC thread, which must never wait on the network itself.
@@ -169,11 +182,25 @@ struct State {
     /// Stop and join, never detach: a joinable std::thread destroyed at exit is an abort, and a
     /// detached one would read this object after it is gone.
     ~State() {
+        StopResign();
         if (heartbeat_running.exchange(false)) {
             heartbeat_wake.notify_all();
         }
         if (heartbeat.joinable()) {
             heartbeat.join();
+        }
+    }
+
+    /// Ends the re-sign-in worker and waits for it.
+    void StopResign() {
+        {
+            std::lock_guard lock{resign_mutex};
+            resign_stop = true;
+            resign_pending.clear();
+        }
+        resign_wake.notify_all();
+        if (resign.joinable()) {
+            resign.join();
         }
     }
 
@@ -1258,6 +1285,63 @@ bool Enabled() {
     return !state.server_host.empty();
 }
 
+// A sign-in the server refused as "device id in use" is tried again: the claim of a process that
+// stopped, crashed or was killed lasts a while on the server (nothing released it), and a person
+// who started Harbor again in that time would otherwise stay signed out for the whole run.
+namespace {
+constexpr auto FirstResignDelay = std::chrono::seconds(15);
+constexpr auto ResignDelay = std::chrono::seconds(30);
+constexpr int MaxResignAttempts = 20; // ~10 minutes, long past any claim
+
+void ResignInLoop(State& state) {
+    for (int attempt = 0; attempt < MaxResignAttempts; ++attempt) {
+        std::set<std::string> uids;
+        {
+            std::unique_lock lock{state.resign_mutex};
+            state.resign_wake.wait_for(lock, attempt == 0 ? FirstResignDelay : ResignDelay,
+                                       [&state] { return state.resign_stop; });
+            if (state.resign_stop || state.resign_pending.empty()) {
+                break;
+            }
+            uids = state.resign_pending;
+        }
+        for (const auto& uid : uids) {
+            const bool ok = Ensure(uid); // a refusal puts the user back by itself
+            if (ok || !DeviceIdInUse()) {
+                std::lock_guard lock{state.resign_mutex};
+                state.resign_pending.erase(uid);
+                if (ok) {
+                    LOG_INFO(WebService, "[OpenPak] Re-sign-in worker: signed in after the device id came free "
+                                         "(attempt {})", attempt + 1);
+                }
+            }
+        }
+    }
+    std::lock_guard lock{state.resign_mutex};
+    state.resign_pending.clear();
+    state.resign_active = false;
+}
+
+void ScheduleResignIn(State& state, const std::string& uid) {
+    std::lock_guard lock{state.resign_mutex};
+    if (state.resign_stop) {
+        return;
+    }
+    state.resign_pending.insert(uid);
+    if (state.resign_active) {
+        return;
+    }
+    if (state.resign.joinable()) {
+        state.resign.join(); // the last worker has ended: it cleared resign_active on its way out
+    }
+    state.resign_active = true;
+    state.resign = std::thread([&state] { ResignInLoop(state); });
+    LOG_INFO(WebService, "[OpenPak] The device id is in use elsewhere; trying to sign in again "
+                         "in {} s, then every {} s", FirstResignDelay.count(),
+             ResignDelay.count());
+}
+} // namespace
+
 bool Ensure(const std::string& uid) {
     if (!Enabled()) {
         return false;
@@ -1282,6 +1366,9 @@ bool Ensure(const std::string& uid) {
     if (!SignIn(state, who, {}, error)) {
         // An empty token is the whole error path: the guest sees a console that is not online.
         LOG_WARNING(WebService, "[OpenPak] Sign-in failed: {}", error);
+        if (DeviceIdInUse()) {
+            ScheduleResignIn(state, who);
+        }
         return false;
     }
 
@@ -1711,8 +1798,14 @@ void StartHeartbeat(std::function<std::string()> current_title_id) {
         state.heartbeat_wake.notify_all();
     });
 
+    std::lock_guard lifecycle{state.lifecycle_mutex};
     if (state.heartbeat_running.exchange(true)) {
         return;
+    }
+    {
+        // After a GoOffline the refused users are retried again.
+        std::lock_guard lock{state.resign_mutex};
+        state.resign_stop = false;
     }
 
     // Pushed changes arrive between beats; the beat below stays as the fallback.
@@ -1887,8 +1980,10 @@ void ForgetAllProfiles() {
 
 void GoOffline() {
     State& state = Get();
+    std::lock_guard lifecycle{state.lifecycle_mutex};
 
     Push::Stop();
+    state.StopResign();
 
     if (state.heartbeat_running.exchange(false)) {
         state.heartbeat_wake.notify_all();
