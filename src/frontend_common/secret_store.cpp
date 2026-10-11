@@ -36,6 +36,12 @@ bool InstallSecretStore() {
     if (installed) {
         return *installed;
     }
+    if (OpenPak::HasSecretStore()) {
+        // The host already chose its store (the setup self-test installs one in memory, so it never
+        // reads or writes the person's keychain).
+        installed = true;
+        return true;
+    }
     auto store = CreatePlatformSecretStore();
     if (!store) {
         LOG_WARNING(Frontend, "harbor: no password store on this system; OpenPak keeps its "

@@ -12,10 +12,13 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "core/hle/service/set/setting_formats/system_settings.h"
+#include "core/openpak/secret_store.h"
 #include "harbor_setup/chime.h"
 #include "harbor_setup/device_check.h"
 #include "harbor_setup/driver_catalog.h"
@@ -32,6 +35,28 @@ using namespace HarborSetup;
 
 int checks = 0;
 int failures = 0;
+
+// The wizard's account page asks the secret store whether an OpenPak account is already signed in.
+// On a developer's machine the system keychain says yes, and the page then goes to the server instead
+// of showing its form. The self-test keeps its own store in memory: it never reads the keychain or
+// contacts a server.
+class MemorySecretStore final : public OpenPak::SecretStore {
+public:
+    std::optional<std::string> Load(std::string_view key, bool*) override {
+        const auto it = values.find(std::string{key});
+        return it == values.end() ? std::nullopt : std::optional{it->second};
+    }
+    bool Store(std::string_view key, std::string_view secret) override {
+        values[std::string{key}] = std::string{secret};
+        return true;
+    }
+    void Erase(std::string_view key) override {
+        values.erase(std::string{key});
+    }
+
+private:
+    std::map<std::string, std::string> values;
+};
 
 void Check(bool ok, const std::string& what) {
     checks++;
@@ -462,6 +487,8 @@ int main() {
     const char* tmp = std::getenv("TMPDIR");
     const auto dir = std::filesystem::path(tmp ? tmp : ".") / "harbor-setup-selftest";
     std::filesystem::create_directories(dir);
+    OpenPak::SetSecretStore(std::make_shared<MemorySecretStore>());
+    OpenPak::SetSecretStoreDecided();
 
     TestRecord(dir);
     TestResume();
