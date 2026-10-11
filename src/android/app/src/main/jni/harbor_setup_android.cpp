@@ -596,6 +596,13 @@ JNIEXPORT jint JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_powerRequest(
     return static_cast<jint>(HarborSetup::ConsolePowerRequest(EmulationSession::GetInstance().System()));
 }
 
+/// Why the host stopped the console (e.g. the GPU was lost), cleared once read; "" when it did not.
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_hostStopReason(JNIEnv* env,
+                                                                                    jobject) {
+    return Common::Android::ToJString(env,
+                                      EmulationSession::GetInstance().System().TakeHostStopReason());
+}
+
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setJoyconsDetached(JNIEnv*, jobject,
                                                                                      jboolean detached) {
     Harbor::SetJoyconsDetached(EmulationSession::GetInstance().System().HIDCore(),

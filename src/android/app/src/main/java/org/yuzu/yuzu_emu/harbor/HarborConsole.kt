@@ -224,6 +224,9 @@ object HarborConsole {
      * Harbor; anything else is the "Harbor stopped" screen.
      */
     fun onConsoleStopped(activity: EmulationActivity) {
+        // A host failure (the GPU was lost) names itself; read it on every stop so it never
+        // outlives this one.
+        val hostReason = HarborNative.hostStopReason()
         when (HarborNative.powerRequest()) {
             POWER_REBOOT -> {
                 Log.info("[Harbor] the console restarts")
@@ -234,7 +237,12 @@ object HarborConsole {
                 HarborNative.stopOpenPak()
                 activity.finishAndRemoveTask()
             }
-            else -> showStopped(activity, activity.getString(R.string.harbor_stop_root_exited))
+            else -> {
+                showStopped(
+                    activity,
+                    hostReason.ifEmpty { activity.getString(R.string.harbor_stop_root_exited) }
+                )
+            }
         }
     }
 

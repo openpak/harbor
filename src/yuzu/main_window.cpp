@@ -2530,6 +2530,9 @@ void MainWindow::OnEmulationStopped() {
     if (harbor_console) {
         // Harbor console mode shows no game list; a stopped-console page comes later. HOME's power
         // menu: a restart boots the console again, turning it off closes Harbor.
+        // A host failure (the GPU was lost) names itself; taken on every stop so it never
+        // outlives this one.
+        const std::string host_reason = QtCommon::system->TakeHostStopReason();
         switch (HarborSetup::ConsolePowerRequest(*QtCommon::system)) {
         case HarborSetup::PowerRequest::Reboot:
             QTimer::singleShot(0, this, [this] { HarborRestartConsole(); });
@@ -2540,8 +2543,14 @@ void MainWindow::OnEmulationStopped() {
             break;
         case HarborSetup::PowerRequest::None:
             // The console stopped on its own: "Harbor stopped". A stop the user asked for (the
-            // Harbor menu, closing the window) shows nothing.
-            if (harbor_guest_exit.exchange(false) && harbor_stopped_page) {
+            // Harbor menu, closing the window) shows nothing. A host failure (the GPU was lost)
+            // names itself.
+            if (!host_reason.empty() && harbor_stopped_page) {
+                harbor_guest_exit = false;
+                LOG_INFO(Frontend, "harbor: the console stopped: {}", host_reason);
+                harbor_stopped_page->ShowStopped(QString::fromStdString(host_reason),
+                                                 HarborDesktop::DarkTheme(nullptr));
+            } else if (harbor_guest_exit.exchange(false) && harbor_stopped_page) {
                 LOG_INFO(Frontend, "harbor: the console stopped: its root program exited");
                 harbor_stopped_page->ShowStopped(tr("The console's root program exited."),
                                                  HarborDesktop::DarkTheme(nullptr));

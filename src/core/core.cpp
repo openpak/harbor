@@ -523,6 +523,9 @@ struct System::Impl {
     Core::SpeedLimiter speed_limiter;
     ExecuteProgramCallback execute_program_callback;
     ExitCallback exit_callback;
+
+    std::mutex host_stop_mutex;
+    std::string host_stop_reason; ///< Harbor: why the host stopped the console (StopForHostFailure).
     ApplicationChangedCallback application_changed_callback;
 
     std::optional<Service::Services> services;
@@ -1053,6 +1056,20 @@ void System::Exit() {
     } else {
         LOG_CRITICAL(Core, "exit_callback must be initialized by the frontend");
     }
+}
+
+void System::StopForHostFailure(std::string reason) {
+    LOG_CRITICAL(Core, "harbor: the console stops: {}", reason);
+    {
+        std::scoped_lock lock{impl->host_stop_mutex};
+        impl->host_stop_reason = std::move(reason);
+    }
+    Exit();
+}
+
+std::string System::TakeHostStopReason() {
+    std::scoped_lock lock{impl->host_stop_mutex};
+    return std::exchange(impl->host_stop_reason, {});
 }
 
 void System::RegisterApplicationChangedCallback(ApplicationChangedCallback&& callback) {

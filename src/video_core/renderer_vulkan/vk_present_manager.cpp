@@ -390,6 +390,11 @@ void PresentManager::CopyToSwapchain(Frame* frame) {
             // Draw to swapchain.
             return CopyToSwapchainImpl(frame);
         } catch (const vk::Exception& except) {
+            if (except.GetResult() == VK_ERROR_DEVICE_LOST) {
+                // Harbor: the loss stops the console; this frame is dropped.
+                device.ReportLoss();
+                return;
+            }
             if (except.GetResult() != VK_ERROR_SURFACE_LOST_KHR) {
                 throw;
             }
@@ -549,8 +554,9 @@ void PresentManager::CopyToSwapchainImpl(Frame* frame) {
         case VK_SUCCESS:
             break;
         case VK_ERROR_DEVICE_LOST:
+            // Harbor: the loss stops the console; nothing is presented any more.
             device.ReportLoss();
-            [[fallthrough]];
+            return;
         default:
             vk::Check(result);
             break;

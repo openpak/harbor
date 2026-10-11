@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <limits>
 #include <thread>
 
 #include <ranges>
@@ -58,7 +59,21 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
 
 MasterSemaphore::~MasterSemaphore() = default;
 
+void MasterSemaphore::MarkLost() {
+    {
+        // Under free_mutex, so the fence waiter cannot store an older tick over this one.
+        std::scoped_lock lock{free_mutex};
+        lost.store(true, std::memory_order_release);
+        gpu_tick.store((std::numeric_limits<u64>::max)(), std::memory_order_release);
+    }
+    gpu_tick.notify_all();
+    wait_cv.notify_all();
+}
+
 void MasterSemaphore::Refresh() {
+    if (lost.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!semaphore) {
         // If we don't support timeline semaphores, there's nothing to refresh
         return;
@@ -104,7 +119,16 @@ void MasterSemaphore::Wait(u64 tick) {
     }
 
     // If none of the above is hit, fallback to a regular wait
-    while (!semaphore.Wait(tick)) {
+    try {
+        while (!semaphore.Wait(tick)) {
+        }
+    } catch (const vk::Exception& exception) {
+        if (exception.GetResult() != VK_ERROR_DEVICE_LOST) {
+            throw;
+        }
+        device.ReportLoss();
+        MarkLost();
+        return;
     }
 
     Refresh();
@@ -345,15 +369,27 @@ void MasterSemaphore::WaitThread(std::stop_token token) {
             wait_queue.pop();
         }
 
-        fence.Wait();
-        fence.Reset();
+        if (fence.Wait() == VK_ERROR_DEVICE_LOST) {
+            device.ReportLoss();
+            MarkLost();
+        }
+        try {
+            fence.Reset();
+        } catch (const vk::Exception&) {
+            if (!lost.load(std::memory_order_acquire)) {
+                throw;
+            }
+        }
 
         {
             std::scoped_lock lock{free_mutex};
             free_queue.push_front(std::move(fence));
-            gpu_tick.store(host_tick, std::memory_order_release);
+            // After a loss gpu_tick stays at its maximum: every tick counts as reached.
+            if (!lost.load(std::memory_order_acquire)) {
+                gpu_tick.store(host_tick, std::memory_order_release);
+            }
         }
-        gpu_tick.notify_one();
+        gpu_tick.notify_all();
     }
 }
 

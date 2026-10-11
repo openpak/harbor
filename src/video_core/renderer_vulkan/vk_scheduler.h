@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <array>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <thread>
 #include <utility>
 #include <queue>
+#include <source_location>
 
 #include "common/alignment.h"
 #include "common/common_types.h"
@@ -32,6 +34,7 @@ class CommandPool;
 class Device;
 class Framebuffer;
 class GraphicsPipeline;
+class MemoryAllocator;
 class StateTracker;
 
 struct QueryCacheParams;
@@ -99,24 +102,40 @@ public:
         on_submit = std::move(func);
     }
 
+    /// Harbor GPU breadcrumbs (VK_AMD_buffer_marker): every recorded command is bracketed by
+    /// marker writes, so after a device loss the log names the command the GPU never finished.
+    /// Diagnostics only; costs GPU time, off unless HARBOR_GPU_BREADCRUMBS=1.
+    void EnableBreadcrumbs(MemoryAllocator& allocator);
+
+    /// Logs the breadcrumbs around where the GPU stopped (nothing when they are off).
+    void LogBreadcrumbs();
+
+    /// Labels the next recorded command with the shaders it binds (breadcrumbs only).
+    void TagNextCommand(u64 first, u64 second) noexcept {
+        pending_tag = {first, second};
+    }
+
     /// Send work to a separate thread.
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer, vk::CommandBuffer>
-    void RecordWithUploadBuffer(T&& command) {
-        if (chunk->Record(command)) {
+    void RecordWithUploadBuffer(T&& command,
+                                std::source_location where = std::source_location::current()) {
+        const std::array<u64, 2> tag = std::exchange(pending_tag, {});
+        if (chunk->Record(command, where, tag)) {
             return;
         }
         DispatchWork();
-        (void)chunk->Record(command);
+        (void)chunk->Record(command, where, tag);
     }
 
     template <typename T>
         requires std::is_invocable_v<T, vk::CommandBuffer>
-    void Record(T&& c) {
+    void Record(T&& c, std::source_location where = std::source_location::current()) {
         this->RecordWithUploadBuffer(
             [command = std::move(c)](vk::CommandBuffer cmdbuf, vk::CommandBuffer) {
                 command(cmdbuf);
-            });
+            },
+            where);
     }
 
     /// Returns the current command buffer tick.
@@ -186,9 +205,14 @@ private:
             next = next_;
         }
 
+        std::source_location where;   ///< Where it was recorded (breadcrumbs).
+        std::array<u64, 2> tag{};     ///< Shaders it binds, when tagged (breadcrumbs).
+
     private:
         Command* next = nullptr;
     };
+
+    struct Breadcrumbs;
 
     template <typename T>
     class TypedCommand final : public Command {
@@ -210,10 +234,12 @@ private:
 
     class CommandChunk final {
     public:
-        void ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf);
+        /// Returns false when a command failed with VK_ERROR_DEVICE_LOST (the rest still ran).
+        bool ExecuteAll(vk::CommandBuffer cmdbuf, vk::CommandBuffer upload_cmdbuf,
+                        Breadcrumbs* crumbs);
 
         template <typename T>
-        bool Record(T& command) {
+        bool Record(T& command, std::source_location where, const std::array<u64, 2>& tag) {
             using FuncType = TypedCommand<T>;
             static_assert(sizeof(FuncType) < sizeof(data), "Lambda is too large");
 
@@ -223,6 +249,8 @@ private:
             }
             Command* const current_last = last;
             last = new (data.data() + command_offset) FuncType(std::move(command));
+            last->where = where;
+            last->tag = tag;
 
             if (current_last) {
                 current_last->SetNext(last);
@@ -287,6 +315,13 @@ private:
 
     u64 SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_semaphore);
 
+    /// A submission or command failed with VK_ERROR_DEVICE_LOST: releases every waiter, logs the
+    /// breadcrumbs once and reports the loss (which stops the console).
+    void OnDeviceLost();
+
+    /// HARBOR_SIMULATE_GPU_LOSS test hook; see the definition.
+    bool SimulatedLoss();
+
     void AllocateNewContext();
 
     void EndPendingOperations();
@@ -310,6 +345,11 @@ private:
 
     std::unique_ptr<CommandChunk> chunk;
     std::function<void()> on_submit;
+
+    std::array<u64, 2> pending_tag{};          ///< Tag for the next recorded command.
+    u64 submissions = 0;                       ///< Submissions so far (SimulatedLoss).
+    std::unique_ptr<Breadcrumbs> breadcrumbs;  ///< Set once, under execution_mutex.
+    std::shared_ptr<int> loss_token = std::make_shared<int>(0); ///< Expires with the scheduler.
 
     State state;
 

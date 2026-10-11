@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstddef>
 #include <fstream>
 #include <iostream>
@@ -364,6 +365,14 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
     const auto subgroup_stage_bit{[subgroup_stages](VkShaderStageFlags flag, Shader::Stage stage) {
         return (subgroup_stages & flag) != 0 ? (1u << static_cast<u32>(stage)) : 0u;
     }};
+    // Harbor diagnostics (harbor-driver-env.txt on Android): HARBOR_NO_FRAGMENT_SUBGROUPS=1 compiles
+    // fragment shaders without subgroup operations (shuffles become the lane's own value), to test
+    // whether they hang the GPU.
+    const char* const no_fragment_subgroups = std::getenv("HARBOR_NO_FRAGMENT_SUBGROUPS");
+    const bool fragment_subgroups = !no_fragment_subgroups || no_fragment_subgroups[0] != '1';
+    if (!fragment_subgroups) {
+        LOG_WARNING(Render_Vulkan, "harbor: fragment shaders compile without subgroup operations");
+    }
     const u32 supported_subgroup_stages{
         subgroup_stage_bit(VK_SHADER_STAGE_VERTEX_BIT, Shader::Stage::VertexA) |
         subgroup_stage_bit(VK_SHADER_STAGE_VERTEX_BIT, Shader::Stage::VertexB) |
@@ -372,7 +381,8 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         subgroup_stage_bit(VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT,
                            Shader::Stage::TessellationEval) |
         subgroup_stage_bit(VK_SHADER_STAGE_GEOMETRY_BIT, Shader::Stage::Geometry) |
-        subgroup_stage_bit(VK_SHADER_STAGE_FRAGMENT_BIT, Shader::Stage::Fragment) |
+        (fragment_subgroups ? subgroup_stage_bit(VK_SHADER_STAGE_FRAGMENT_BIT, Shader::Stage::Fragment)
+                            : 0u) |
         subgroup_stage_bit(VK_SHADER_STAGE_COMPUTE_BIT, Shader::Stage::Compute)};
     profile = Shader::Profile{
         .supported_spirv = device.SupportedSpirvVersion(),

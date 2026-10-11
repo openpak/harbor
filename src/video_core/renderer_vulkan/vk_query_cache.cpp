@@ -91,8 +91,9 @@ public:
         case VK_SUCCESS:
             return;
         case VK_ERROR_DEVICE_LOST:
+            // Harbor: the loss stops the console; the results are left as they are.
             device.ReportLoss();
-            [[fallthrough]];
+            return;
         default:
             throw vk::Exception(query_result);
         }

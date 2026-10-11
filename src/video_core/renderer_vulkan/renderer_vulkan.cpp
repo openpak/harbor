@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -182,6 +183,15 @@ try
     , frame_gen(memory_allocator, scheduler)
 #endif
 {
+    // Harbor: a lost GPU (it hung and the driver reset it) stops the console onto the "Harbor
+    // stopped" screen instead of an uncaught VK_ERROR_DEVICE_LOST aborting the process.
+    device.AddLossHandler([&gpu = gpu] {
+        gpu.StopConsoleForHostFailure(
+            "The graphics driver stopped responding: the GPU hung and the driver reset it.");
+    });
+    if (const char* crumbs = std::getenv("HARBOR_GPU_BREADCRUMBS"); crumbs && crumbs[0] == '1') {
+        scheduler.EnableBreadcrumbs(memory_allocator);
+    }
 
     if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
         turbo_mode.emplace(instance, dld);

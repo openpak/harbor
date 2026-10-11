@@ -7,6 +7,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -115,7 +117,8 @@ VK_DEFINE_HANDLE(VmaAllocator)
     EXTENSION(NV, VIEWPORT_SWIZZLE, viewport_swizzle)                                              \
     EXTENSION(EXT, FILTER_CUBIC, filter_cubic)                                                     \
     EXTENSION(IMG, FILTER_CUBIC, filter_cubic_img)                                                 \
-    EXTENSION(QCOM, FILTER_CUBIC_WEIGHTS, filter_cubic_weights)
+    EXTENSION(QCOM, FILTER_CUBIC_WEIGHTS, filter_cubic_weights)                                     \
+    EXTENSION(AMD, BUFFER_MARKER, buffer_marker)
 
 // Define extensions which must be supported.
 #define FOR_EACH_VK_MANDATORY_EXTENSION(EXTENSION_NAME)                                            \
@@ -244,8 +247,23 @@ public:
     bool IsFormatSupported(VkFormat wanted_format, VkFormatFeatureFlags wanted_usage,
                            FormatType format_type) const;
 
-    /// Reports a device loss.
+    /// Reports a device loss. The first report logs it and runs the loss handlers (once each);
+    /// later reports only return. Callers stop using the GPU's results instead of throwing.
     void ReportLoss() const;
+
+    /// Whether the device has been lost (a submission, wait or present returned
+    /// VK_ERROR_DEVICE_LOST). Nothing the GPU does afterwards completes.
+    bool IsLost() const noexcept {
+        return lost.load(std::memory_order_acquire);
+    }
+
+    /// Runs `handler` on the first device loss (at once when the device is already lost).
+    void AddLossHandler(std::function<void()> handler) const;
+
+    /// Whether VK_AMD_buffer_marker is available (GPU breadcrumbs).
+    bool IsAmdBufferMarkerSupported() const noexcept {
+        return extensions.buffer_marker;
+    }
 
     /// Reports a shader to Nsight Aftermath.
     void SaveShader(std::span<const u32> spirv) const;
@@ -1250,6 +1268,10 @@ private:
 
     /// Nsight Aftermath GPU crash tracker
     std::unique_ptr<NsightAftermathTracker> nsight_aftermath_tracker;
+
+    mutable std::atomic<bool> lost{false};               ///< VK_ERROR_DEVICE_LOST was seen.
+    mutable std::mutex loss_mutex;                       ///< Guards loss_handlers.
+    mutable std::vector<std::function<void()>> loss_handlers; ///< Run on the first loss.
 };
 
 } // namespace Vulkan

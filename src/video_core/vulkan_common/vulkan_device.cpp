@@ -895,12 +895,38 @@ VkFormat Device::GetSupportedFormat(VkFormat wanted_format, VkFormatFeatureFlags
 }
 
 void Device::ReportLoss() const {
+    if (lost.exchange(true, std::memory_order_acq_rel)) {
+        // Every submission, wait and present after the first loss fails the same way.
+        return;
+    }
     LOG_CRITICAL(Render_Vulkan, "Device loss occurred!");
 
-    // Wait for the log to flush, and for Nsight Aftermath to dump its results when it runs.
-    // Without Aftermath 15 s only froze the screen before the crash.
-    std::this_thread::sleep_for(nsight_aftermath_tracker ? std::chrono::seconds{15}
-                                                         : std::chrono::seconds{1});
+    // Harbor: the handlers stop the console (the "Harbor stopped" screen) and release everything
+    // waiting for the GPU, instead of an uncaught vk::Exception aborting the process.
+    std::vector<std::function<void()>> handlers;
+    {
+        std::scoped_lock lock{loss_mutex};
+        handlers.swap(loss_handlers);
+    }
+    for (const auto& handler : handlers) {
+        handler();
+    }
+
+    // Nsight Aftermath needs time to write its dump; without it there is nothing to wait for.
+    if (nsight_aftermath_tracker) {
+        std::this_thread::sleep_for(std::chrono::seconds{15});
+    }
+}
+
+void Device::AddLossHandler(std::function<void()> handler) const {
+    {
+        std::scoped_lock lock{loss_mutex};
+        if (!IsLost()) {
+            loss_handlers.push_back(std::move(handler));
+            return;
+        }
+    }
+    handler();
 }
 
 void Device::SaveShader(std::span<const u32> spirv) const {

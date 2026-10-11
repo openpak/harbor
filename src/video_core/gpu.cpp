@@ -442,6 +442,10 @@ GPU::GPU(Core::System& system, bool is_async, bool use_nvdec)
 
 GPU::~GPU() = default;
 
+void GPU::StopConsoleForHostFailure(std::string reason) {
+    impl->system.StopForHostFailure(std::move(reason));
+}
+
 std::shared_ptr<Control::ChannelState> GPU::AllocateChannel() {
     return impl->AllocateChannel();
 }

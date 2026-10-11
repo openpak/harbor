@@ -7,6 +7,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -144,6 +145,10 @@ public:
 
     /// Binds a renderer to the GPU.
     void BindRenderer(std::unique_ptr<VideoCore::RendererBase> renderer);
+
+    /// Harbor: the host GPU failed for good (device lost): stops the console with `reason`
+    /// (Core::System::StopForHostFailure). Any thread.
+    void StopConsoleForHostFailure(std::string reason);
 
     /// Flush all current written commands into the host GPU for execution.
     void FlushCommands();

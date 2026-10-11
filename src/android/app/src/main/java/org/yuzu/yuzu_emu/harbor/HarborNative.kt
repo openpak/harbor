@@ -53,6 +53,9 @@ object HarborNative {
     /** What HOME's power menu asked for when the console stopped: 0 nothing, 1 turn off, 2 restart. */
     external fun powerRequest(): Int
 
+    /** Why the host stopped the console (e.g. the GPU was lost), cleared once read; "" if it did not. */
+    external fun hostStopReason(): String
+
     /** The Joy-Cons off (true) or back on the console's rails. */
     external fun setJoyconsDetached(detached: Boolean)
 
