@@ -223,7 +223,7 @@ object HarborMenuBridge {
                     when (argument) {
                         "backup" -> HarborConsole.askBackupPassphrase(activity)
                         "restore" -> HarborConsole.confirmRestore(activity)
-                        "new-console" -> HarborConsole.confirmNewConsole(activity)
+                        "new-console" -> HarborConsole.makeNewConsole(activity)
                     }
                 }
                 ""

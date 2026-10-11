@@ -193,26 +193,15 @@ void Restore(QWidget* parent, const WhileStopped& while_stopped) {
     QMessageBox::information(parent, title, outcome);
 }
 
-void MakeNew(QWidget* parent, const WhileStopped& while_stopped) {
-    const QString title = QObject::tr("Make this a new console");
-    if (QMessageBox::warning(
-            parent, title,
-            QObject::tr("This console gets a new identity: a new serial number, device id, "
-                        "network addresses and keys. Its OpenPak sign-ins are dropped, so every "
-                        "user links their Nintendo Account again. Users, games and saves stay.\n\n"
-                        "Make this a new console?"),
-            QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
-        return;
-    }
+std::string MakeNew(const WhileStopped& while_stopped) {
+    // Confirmed in the Harbor menu (a Borealis dialog); the outcome is a line on the console's
+    // screen once HOME is back.
     bool made = false;
     while_stopped([&] { made = Harbor::MakeNewConsole(); });
-    if (made) {
-        QMessageBox::information(parent, title,
-                                 QObject::tr("This is a new console. Link each user's Nintendo "
-                                             "Account again in System Settings > Users."));
-    } else {
-        QMessageBox::critical(parent, title, QObject::tr("No new identity could be made."));
-    }
+    LOG_INFO(Frontend, "harbor: new console identity {}", made ? "made" : "not made");
+    return made ? "This is a new console. Link each user's Nintendo Account again in System Settings › "
+                  "Users."
+                : "No new identity could be made.";
 }
 
 void WarnIfLocked(QWidget* parent) {

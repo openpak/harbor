@@ -70,6 +70,9 @@ import org.yuzu.yuzu_emu.NativeLibrary
 import org.yuzu.yuzu_emu.R
 import org.yuzu.yuzu_emu.activities.EmulationActivity
 import org.yuzu.yuzu_emu.harbor.HarborConsole
+import org.yuzu.yuzu_emu.harbor.HarborNative
+import org.yuzu.yuzu_emu.harbor.HarborScreenActivity
+import org.yuzu.yuzu_emu.harbor.HarborScreenView
 import org.yuzu.yuzu_emu.harbor.HarborPanelInput
 import org.yuzu.yuzu_emu.harbor.HarborTheme
 import org.yuzu.yuzu_emu.databinding.DialogOverlayAdjustBinding
@@ -963,6 +966,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         } ?: run {
             binding.loadingTitle.text = ""
         }
+        if (HarborConsole.active) {
+            // Harbor: the console starts behind its own boot page (Borealis), not Eden's card.
+            binding.loadingIndicator.visibility = View.GONE
+            harborShowLoading(getString(R.string.harbor_starting))
+        }
         binding.loadingTitle.isSelected = true
         binding.loadingText.isSelected = true
 
@@ -990,6 +998,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         emulationViewModel.shaderMessage.collect(viewLifecycleOwner) {
             if (it.isNotEmpty()) {
                 binding.loadingText.text = it
+                if (harborLoading != null) {
+                    harborShowLoading(it)
+                }
             }
         }
 
@@ -1000,6 +1011,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 )
                 ViewUtils.showView(binding.surfaceInputOverlay)
                 ViewUtils.hideView(binding.loadingIndicator)
+                harborHideLoading()
 
                 emulationState.updateSurface()
 
@@ -1029,7 +1041,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         emulationViewModel.isEmulationStopping.collect(viewLifecycleOwner) {
             if (it) {
                 binding.loadingText.setText(R.string.shutting_down)
-                ViewUtils.showView(binding.loadingIndicator)
+                if (HarborConsole.active) {
+                    harborShowLoading(getString(R.string.harbor_stopping))
+                } else {
+                    ViewUtils.showView(binding.loadingIndicator)
+                }
                 ViewUtils.hideView(binding.inputContainer)
                 ViewUtils.hideView(binding.showStatsOverlayText)
             } else if (deferGameSetupUntilStopCompletes) {
@@ -1061,7 +1077,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 binding.drawerLayout
                     .setDrawerLockMode(DrawerLayout.LOCK_MODE_LOCKED_CLOSED)
                 ViewUtils.hideView(binding.surfaceInputOverlay)
-                ViewUtils.showView(binding.loadingIndicator)
+                if (HarborConsole.active) {
+                    harborShowLoading(getString(R.string.harbor_starting))
+                } else {
+                    ViewUtils.showView(binding.loadingIndicator)
+                }
             }
         }
 
@@ -1519,7 +1539,32 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         super.onPause()
     }
 
+    /** Harbor's boot page (a Borealis host page) laid over the console's screen while it starts or stops. */
+    private var harborLoading: View? = null
+
+    private fun harborShowLoading(text: String) {
+        val container = _binding?.emulationContainer ?: return
+        if (harborLoading == null) {
+            val frame = HarborScreenView.frame(requireContext())
+            (frame.getChildAt(0) as? android.view.SurfaceView)?.setZOrderMediaOverlay(true)
+            container.addView(
+                frame,
+                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            )
+            harborLoading = frame
+        }
+        HarborNative.showHostPage(HarborScreenActivity.KIND_STATUS, text)
+    }
+
+    private fun harborHideLoading() {
+        val view = harborLoading ?: return
+        harborLoading = null
+        (view.parent as? ViewGroup)?.removeView(view)
+        HarborNative.endHostPage()
+    }
+
     override fun onDestroyView() {
+        harborHideLoading()
         super.onDestroyView()
         amiiboLoadJob?.cancel()
         amiiboLoadJob = null
@@ -2107,7 +2152,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         emulationViewModel.setIsEmulationStopping(true)
         _binding?.let {
             binding.loadingText.setText(R.string.shutting_down)
-            ViewUtils.showView(binding.loadingIndicator)
+            if (HarborConsole.active) {
+                harborShowLoading(getString(R.string.harbor_stopping))
+            } else {
+                ViewUtils.showView(binding.loadingIndicator)
+            }
             ViewUtils.hideView(binding.inputContainer)
             ViewUtils.hideView(binding.showStatsOverlayText)
         }

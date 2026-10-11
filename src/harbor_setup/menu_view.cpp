@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #include "common/logging.h"
 #include "common/scm_rev.h"
@@ -15,6 +16,7 @@
 #include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/menu_view.h"
+#include "harbor_setup/title_settings.h"
 #include "harbor_setup/ui.h"
 #include "harbor_setup/view.h"
 #ifdef HAS_LSFG
@@ -97,6 +99,7 @@ void MenuActivity::onContentAvailable() {
 void MenuActivity::Show(MenuPage page) {
     capture.End();
     focus_key.clear();
+    scope_game = false; // every opening starts on All games
     if (page == MenuPage::CrashReport) {
         sub = Sub::None;
         screen = Screen::Crash;
@@ -202,6 +205,15 @@ void MenuActivity::Back() {
     if (capture.Active()) {
         capture.End();
         Render();
+        return;
+    }
+    if (dialog) {
+        // B is the dialog's first button (Cancel, Close).
+        const auto action = dialog->buttons.empty() ? std::function<void()>{} : dialog->buttons.front().second;
+        CloseDialog();
+        if (action) {
+            action();
+        }
         return;
     }
     if (screen == Screen::Host) {
@@ -412,6 +424,22 @@ void MenuActivity::Render() {
     auto* frame = new brls::Box(brls::Axis::COLUMN);
     frame->setDimensions(CanvasWidth, CanvasHeight);
     frame->setPadding(0, 32, 0, 32);
+    if (dialog) {
+        // The page behind a dialog is not drawn: the dialog stands alone on the dimmed paper.
+        delete frame;
+        root->setBackgroundColor(dark ? nvgRGB(0x10, 0x10, 0x10) : nvgRGB(0x9a, 0x9a, 0x9a));
+        root->addView(DialogView());
+        brls::View* focus = by_key.count(focus_key) ? by_key[focus_key] : nullptr;
+        if (!focus && !pane_rows.empty()) {
+            focus = pane_rows.front();
+        }
+        if (focus) {
+            brls::Application::giveFocus(focus);
+            focus_key = keys.count(focus) ? keys[focus] : "";
+        }
+        rendering = false;
+        return;
+    }
     root->addView(frame);
     if (screen == Screen::Menu) {
         frame->addView(Header("Harbor"));
@@ -419,6 +447,10 @@ void MenuActivity::Render() {
     } else if (screen == Screen::Crash) {
         frame->addView(Header(CrashTitle()));
         frame->addView(CrashBody());
+    } else if (screen == Screen::Host && sub == Sub::None && host_page.kind == HostPageKind::Status) {
+        // As a console starts: black, Harbor's mark in the middle, a spinner and one line.
+        root->setBackgroundColor(nvgRGB(0, 0, 0));
+        frame->addView(HostBody());
     } else if (screen == Screen::Host) {
         frame->addView(Header(HostTitle()));
         frame->addView(HostBody());
@@ -426,7 +458,9 @@ void MenuActivity::Render() {
         frame->addView(Header("Harbor Settings"));
         frame->addView(SettingsBody());
     }
-    frame->addView(Footer());
+    if (!(screen == Screen::Host && sub == Sub::None && host_page.kind == HostPageKind::Status)) {
+        frame->addView(Footer());
+    }
 
     // The categories and the pane reach each other sideways.
     if (!pane_rows.empty()) {
@@ -675,6 +709,88 @@ brls::View* MenuActivity::MenuBody() {
     return body;
 }
 
+// ---- System dialogs ----
+
+void MenuActivity::OpenDialog(Dialog next) {
+    dialog = std::move(next);
+    focus_key = "dialog:0";
+    Render();
+}
+
+void MenuActivity::CloseDialog() {
+    if (!dialog) {
+        return;
+    }
+    focus_key = dialog->return_key;
+    dialog.reset();
+    Render();
+}
+
+brls::View* MenuActivity::DialogView() {
+    const auto& p = CurrentPalette();
+    auto* panel = new brls::Box(brls::Axis::COLUMN);
+    panel->setWidth(720);
+    panel->setBackgroundColor(p.selected);
+    panel->setCornerRadius(8);
+    auto* body = new brls::Box(brls::Axis::COLUMN);
+    body->setPadding(40, 48, 36, 48);
+    if (!dialog->title.empty()) {
+        auto* title = MakeText(dialog->title, 24, p.ink, true);
+        title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+        body->addView(title);
+    }
+    auto* text = MakeText(dialog->text, 18, p.ink2, true);
+    text->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    text->setMarginTop(dialog->title.empty() ? 0 : 18);
+    body->addView(text);
+    panel->addView(body);
+
+    auto* buttons = new brls::Box(brls::Axis::ROW);
+    buttons->setLineTop(1);
+    buttons->setLineColor(p.line);
+    std::vector<brls::View*> row;
+    for (std::size_t i = 0; i < dialog->buttons.size(); i++) {
+        auto* button = new brls::Box(brls::Axis::ROW);
+        button->setGrow(1);
+        button->setHeight(72);
+        button->setJustifyContent(brls::JustifyContent::CENTER);
+        button->setAlignItems(brls::AlignItems::CENTER);
+        button->setFocusable(true);
+        button->setHighlightCornerRadius(0);
+        button->setHighlightPadding(-3);
+        if (i > 0) {
+            button->setLineLeft(1);
+            button->setLineColor(p.line);
+        }
+        button->registerClickAction([this, i](brls::View*) {
+            auto action = dialog->buttons[i].second;
+            CloseDialog();
+            if (action) {
+                action();
+            }
+            return true;
+        });
+        button->addGestureRecognizer(new brls::TapGestureRecognizer(button));
+        button->addView(MakeText(dialog->buttons[i].first, 20, i + 1 == dialog->buttons.size() ? p.accent : p.ink));
+        Remember(button, "dialog:" + std::to_string(i));
+        pane_rows.push_back(button);
+        row.push_back(button);
+        buttons->addView(button);
+    }
+    for (std::size_t i = 0; i < row.size(); i++) {
+        row[i]->setCustomNavigationRoute(brls::FocusDirection::UP, row[i]);
+        row[i]->setCustomNavigationRoute(brls::FocusDirection::DOWN, row[i]);
+    }
+    panel->addView(buttons);
+
+    auto* frame = new brls::Box(brls::Axis::COLUMN);
+    frame->setDimensions(CanvasWidth, CanvasHeight);
+    frame->setJustifyContent(brls::JustifyContent::CENTER);
+    frame->setAlignItems(brls::AlignItems::CENTER);
+    frame->addView(panel);
+    return frame;
+}
+
 // ---- Host pages (outside the console) ----
 
 std::string MenuActivity::HostTitle() const {
@@ -753,10 +869,29 @@ brls::View* MenuActivity::HostBody() {
     body->addView(column);
 
     if (host_page.kind == HostPageKind::Status) {
-        auto* label = MakeText(host_page.text, 24, p.ink, true);
-        label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
         column->setAlignItems(brls::AlignItems::CENTER);
-        column->addView(new Shape(64, 64, PaintEmblem));
+        column->addView(new Shape(144, 144, PaintMark));
+        // A spinner as the console's: dots on a ring, one lit, moving round.
+        auto* spinner = new Shape(40, 40, [](NVGcontext* vg, float x, float y, float w, float h) {
+            constexpr int Dots = 8;
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+            const int lit = static_cast<int>((ms / 110) % Dots);
+            for (int i = 0; i < Dots; i++) {
+                const float angle = static_cast<float>(i) * 2.0f * NVG_PI / Dots - NVG_PI / 2;
+                const int age = (lit - i + Dots) % Dots;
+                nvgBeginPath(vg);
+                nvgCircle(vg, x + w / 2 + std::cos(angle) * w * 0.38f, y + h / 2 + std::sin(angle) * h * 0.38f,
+                          w * 0.07f);
+                nvgFillColor(vg, nvgRGBA(255, 255, 255, static_cast<unsigned char>(255 - age * 28)));
+                nvgFill(vg);
+            }
+        });
+        spinner->setMarginTop(56);
+        column->addView(spinner);
+        auto* label = MakeText(host_page.text, 18, nvgRGB(0xa0, 0xa0, 0xa0), true);
+        label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
         label->setMarginTop(20);
         column->addView(label);
         // Nothing to choose: the column holds the focus (Borealis always has a focused view).
@@ -1119,12 +1254,159 @@ void MenuActivity::ChoicePane(brls::Box* pane) {
     }
 }
 
+namespace {
+
+/// The scales the Resolution row offers, with what the console draws at in handheld and docked.
+struct ScaleOption {
+    Settings::ResolutionSetup setup;
+    const char* label;
+};
+constexpr ScaleOption ScaleOptions[] = {
+    {Settings::ResolutionSetup::Res1_2X, "0.5× (360p handheld / 540p docked)"},
+    {Settings::ResolutionSetup::Res3_4X, "0.75× (540p handheld / 810p docked)"},
+    {Settings::ResolutionSetup::Res1X, "1× (720p handheld / 1080p docked)"},
+    {Settings::ResolutionSetup::Res3_2X, "1.5× (1080p handheld / 1620p docked)"},
+    {Settings::ResolutionSetup::Res2X, "2× (1440p handheld / 2160p docked)"},
+};
+
+std::string ScaleLabel(Settings::ResolutionSetup setup) {
+    for (const auto& option : ScaleOptions) {
+        if (option.setup == setup) {
+            return option.label;
+        }
+    }
+    return std::string(Settings::CanonicalizeEnum(setup));
+}
+
+} // namespace
+
+std::optional<u64> MenuActivity::ScopeTitle() const {
+    if (!scope_game || !host.System().IsPoweredOn()) {
+        return std::nullopt;
+    }
+    return TitleSettings::RunningTitle();
+}
+
+std::string MenuActivity::ScopedValue(Settings::BasicSetting& setting) const {
+    // This game: what it runs with (its own value, else the console-wide one).
+    return ScopeTitle() ? setting.ToString() : TitleSettings::GlobalValue(setting);
+}
+
+void MenuActivity::SetScoped(Settings::BasicSetting& setting, const std::string& value) {
+    if (const auto title = ScopeTitle()) {
+        TitleSettings::SetOverride(*title, setting, value);
+        return;
+    }
+    TitleSettings::SetGlobalValue(setting, value);
+    host.SaveConfig();
+}
+
 void MenuActivity::DisplayPane(brls::Box* pane) {
+    const auto running = host.System().IsPoweredOn() ? TitleSettings::RunningTitle() : std::nullopt;
+    if (!running) {
+        scope_game = false;
+    }
+    if (running) {
+        // While a game runs: the rows below change every game's values, or this game's own.
+        const auto name = TitleSettings::TitleName(host.System(), *running);
+        Choice next{.title = "Settings for", .current = scope_game ? "game" : "all"};
+        next.options.emplace_back("all", "All games");
+        next.options.emplace_back("game", "This game (" + name + ")");
+        next.chosen = [this](const std::string& id) { scope_game = id == "game"; };
+        pane->addView(Row("scope", "Settings for", scope_game ? "This game (" + name + ")" : "All games",
+                          [this, next] { OpenChoice(next); }, true, true));
+    }
+    const auto title = ScopeTitle();
+    // A row's value, marked when it is this game's own.
+    const auto mark = [&](const Settings::BasicSetting& setting, std::string text) {
+        if (title && TitleSettings::HasOverride(*title, setting)) {
+            text += " (this game)";
+        }
+        return text;
+    };
+    bool any_override = false;
+    if (running) {
+        for (const auto* setting : TitleSettings::PerGame()) {
+            any_override |= TitleSettings::HasOverride(*running, *setting);
+        }
+    }
+    if (running && !title && any_override) {
+        pane->addView(Note("This game has values of its own for some of these: Settings for, This game."));
+    }
+
     pane->addView(Toggle("fps", "Show FPS", host.ShowFps(), [this](bool on) { host.SetShowFps(on); }));
     if (host.HasDeviceLine()) {
         pane->addView(Toggle("device-line", "Show the device and driver under the FPS", host.ShowDeviceLine(),
                              [this](bool on) { host.SetShowDeviceLine(on); }, host.ShowFps()));
     }
+
+    // Resolution: the console's, fixed when it starts (Eden builds its images at that scale).
+    {
+        auto& setting = Settings::values.resolution_setup;
+        const bool automatic = host.HasAutoResolution() && host.AutoResolution();
+        const auto global = static_cast<Settings::ResolutionSetup>(std::stoll(TitleSettings::GlobalValue(setting)));
+        Choice next{.title = "Resolution",
+                    .current = automatic ? std::string{"auto"} : std::to_string(static_cast<int>(global))};
+        if (host.HasAutoResolution()) {
+            next.options.emplace_back("auto", "Automatic (follows the window)");
+        }
+        for (const auto& option : ScaleOptions) {
+            next.options.emplace_back(std::to_string(static_cast<int>(option.setup)), option.label);
+        }
+        next.chosen = [this, current = next.current](const std::string& id) {
+            if (id == current) {
+                return;
+            }
+            if (id == "auto") {
+                host.SetAutoResolution(true);
+            } else {
+                if (host.HasAutoResolution()) {
+                    host.SetAutoResolution(false);
+                }
+                TitleSettings::SetGlobalValue(Settings::values.resolution_setup, id);
+                host.SaveConfig();
+            }
+            LOG_INFO(Frontend, "harbor: resolution {} chosen; used from the console's next start",
+                     id == "auto" ? "automatic" : id);
+            restart_needed = host.System().IsPoweredOn();
+        };
+        pane->addView(Row("resolution", "Resolution", automatic ? "Automatic" : ScaleLabel(global),
+                          [this, next] { OpenChoice(next); }, !title, true));
+        pane->addView(Note(title ? "The resolution is the whole console's: it is set when the console starts, "
+                                   "so it is the same for every game."
+                                 : "Used from the console's next start (Restart)."));
+    }
+
+    // Asynchronous shaders: taken at each draw, so a change applies at once.
+    {
+        auto& setting = Settings::values.use_asynchronous_shaders;
+        const bool on = ScopedValue(setting) == "true";
+        pane->addView(Toggle("async", mark(setting, "Asynchronous shaders"), on, [this](bool enable) {
+            SetScoped(Settings::values.use_asynchronous_shaders, enable ? "true" : "false");
+            LOG_INFO(Frontend, "harbor: asynchronous shaders {}{}", enable ? "on" : "off",
+                     ScopeTitle() ? " for this game" : "");
+        }));
+        pane->addView(Note("Draws without the shaders still being built, for fewer stutters, at the cost of "
+                           "brief missing effects. Applies at once."));
+    }
+    if (restart_needed) {
+        pane->addView(Row("display:restart", "Restart now", "", [this] {
+            restart_needed = false;
+            Close([this] { host.Restart(); });
+        }));
+    }
+    if (title && any_override) {
+        pane->addView(Row("display:defaults", "Use the default", "Every game's values", [this, title] {
+            for (auto* setting : TitleSettings::PerGame()) {
+                if (TitleSettings::HasOverride(*title, *setting)) {
+                    TitleSettings::ClearOverride(*title, *setting);
+                }
+            }
+            focus_key = "scope";
+            Render();
+        }));
+    }
+
     if (host.HasDriverChoice()) {
         const auto current = host.CurrentDriver();
         std::string current_name = "The phone's own";
@@ -1138,7 +1420,7 @@ void MenuActivity::DisplayPane(brls::Box* pane) {
             sub = Sub::Driver;
             focus_key.clear();
             Render();
-        }, true, true));
+        }, !title, true));
     }
 
     pane->addView(Heading("Frame generation (experimental)"));
@@ -1155,77 +1437,71 @@ void MenuActivity::DisplayPane(brls::Box* pane) {
                            "Scaling. Choose it to turn frame generation on."));
         pane->addView(Row("lossless:choose", "Choose Lossless.dll…", "", [this] {
             Close([this] { host.ChooseLosslessDll(); });
-        }, true, true));
+        }, !title, true));
         return;
     }
     auto& v = Settings::values;
-    const bool on = v.frame_gen.GetValue();
-    pane->addView(Toggle("framegen", "Frame generation", on, [this](bool enable) {
+    const bool on = ScopedValue(v.frame_gen) == "true";
+    const u32 multiplier = static_cast<u32>(std::stoul(ScopedValue(v.frame_gen_multiplier)));
+    const u32 target = static_cast<u32>(std::stoul(ScopedValue(v.frame_gen_target_rate)));
+    pane->addView(Toggle("framegen", mark(v.frame_gen, "Frame generation"), on, [this, multiplier](bool enable) {
         auto& values = Settings::values;
-        values.frame_gen.SetValue(enable);
-        if (enable && values.frame_gen_multiplier.GetValue() < 2) {
-            values.frame_gen_multiplier.SetValue(2);
+        SetScoped(values.frame_gen, enable ? "true" : "false");
+        if (enable && multiplier < 2) {
+            SetScoped(values.frame_gen_multiplier, "2");
         }
-        LOG_INFO(Frontend, "harbor: frame generation {}", enable ? "on" : "off");
-        host.SaveConfig();
+        LOG_INFO(Frontend, "harbor: frame generation {}{}", enable ? "on" : "off",
+                 ScopeTitle() ? " for this game" : "");
     }));
-    const bool fixed = v.frame_gen_target_rate.GetValue() == 0;
+    const bool fixed = target == 0;
     {
-        Choice next{.title = "Frame multiplier", .current = std::to_string(v.frame_gen_multiplier.GetValue())};
+        Choice next{.title = "Frame multiplier", .current = std::to_string(multiplier)};
         for (const int m : {2, 3, 4}) {
             next.options.emplace_back(std::to_string(m), std::to_string(m) + "x");
         }
         next.chosen = [this](const std::string& id) {
-            Settings::values.frame_gen_multiplier.SetValue(static_cast<u32>(std::stoi(id)));
-            Settings::values.frame_gen_target_rate.SetValue(0);
-            host.SaveConfig();
+            SetScoped(Settings::values.frame_gen_multiplier, id);
+            SetScoped(Settings::values.frame_gen_target_rate, "0");
         };
         pane->addView(Row("framegen:multiplier", "Frame multiplier",
-                          std::to_string(v.frame_gen_multiplier.GetValue()) + "x",
+                          mark(v.frame_gen_multiplier, std::to_string(multiplier) + "x"),
                           [this, next] { OpenChoice(next); }, on && fixed, true));
     }
     {
-        const auto target = v.frame_gen_target_rate.GetValue();
         Choice next{.title = "Target frame rate", .current = std::to_string(target)};
         next.options.emplace_back("0", "Use a fixed multiplier");
         for (const int rate : {60, 90, 120}) {
             next.options.emplace_back(std::to_string(rate), std::to_string(rate) + " FPS");
         }
-        next.chosen = [this](const std::string& id) {
-            Settings::values.frame_gen_target_rate.SetValue(static_cast<u32>(std::stoi(id)));
-            host.SaveConfig();
-        };
+        next.chosen = [this](const std::string& id) { SetScoped(Settings::values.frame_gen_target_rate, id); };
         pane->addView(Row("framegen:target", "Target frame rate",
-                          target == 0 ? "Fixed multiplier" : std::to_string(target) + " FPS",
+                          mark(v.frame_gen_target_rate, target == 0 ? "Fixed multiplier" : std::to_string(target) + " FPS"),
                           [this, next] { OpenChoice(next); }, on, true));
     }
     {
-        const bool automatic = v.frame_gen_flow_scale_auto.GetValue();
-        const auto scale = v.frame_gen_flow_scale.GetValue();
-        Choice next{.title = "Motion estimation resolution",
-                    .current = automatic ? std::string{"0"} : std::to_string(scale)};
+        const bool automatic = ScopedValue(v.frame_gen_flow_scale_auto) == "true";
+        const auto scale = ScopedValue(v.frame_gen_flow_scale);
+        Choice next{.title = "Motion estimation resolution", .current = automatic ? std::string{"0"} : scale};
         next.options.emplace_back("0", "Auto");
         for (const int value : {50, 75, 100}) {
             next.options.emplace_back(std::to_string(value), std::to_string(value) + "%");
         }
         next.chosen = [this](const std::string& id) {
-            const int value = std::stoi(id);
-            Settings::values.frame_gen_flow_scale_auto.SetValue(value == 0);
-            if (value != 0) {
-                Settings::values.frame_gen_flow_scale.SetValue(static_cast<u32>(value));
+            SetScoped(Settings::values.frame_gen_flow_scale_auto, id == "0" ? "true" : "false");
+            if (id != "0") {
+                SetScoped(Settings::values.frame_gen_flow_scale, id);
             }
-            host.SaveConfig();
         };
         pane->addView(Row("framegen:flow", "Motion estimation resolution",
-                          automatic ? "Auto" : std::to_string(scale) + "%",
+                          mark(v.frame_gen_flow_scale_auto, automatic ? "Auto" : scale + "%"),
                           [this, next] { OpenChoice(next); }, on, true));
     }
     pane->addView(Row("lossless:replace", "Replace Lossless.dll…", "", [this] {
         Close([this] { host.ChooseLosslessDll(); });
-    }, true, true));
+    }, !title, true));
     pane->addView(Row("lossless:remove", "Remove Lossless.dll", "The console restarts", [this] {
         Close([this] { host.RemoveLosslessDll(); });
-    }));
+    }, !title));
 #else
     pane->addView(Note("This build of Harbor has no frame generation."));
 #endif
@@ -1393,7 +1669,20 @@ void MenuActivity::HarborPane(brls::Box* pane) {
         Close([this] { host.ConsoleAction("restore"); });
     }, true, true));
     pane->addView(Row("console:new", "Make this a new console…", "", [this] {
-        Close([this] { host.ConsoleAction("new-console"); });
+        OpenDialog({
+            .title = "Make this a new console",
+            .text = "This console gets a new identity: a new serial number, device id, network addresses "
+                    "and keys. Its OpenPak sign-ins are dropped, so every user links their Nintendo "
+                    "Account again. Users, games and saves stay.\n\nThe console stops while this is done "
+                    "and starts again.",
+            .buttons = {{"Cancel", {}},
+                        {"Make a new console",
+                         [this] {
+                             LOG_INFO(Frontend, "harbor: menu: making this a new console");
+                             Close([this] { host.ConsoleAction("new-console"); });
+                         }}},
+            .return_key = "console:new",
+        });
     }, true, true));
     pane->addView(Note("A backup holds the console's system memory and its device key, locked with a "
                        "passphrase. The console stops while it is written or restored."));

@@ -115,6 +115,15 @@ public:
         return false;
     }
     virtual void SetShowDeviceLine(bool show) {}
+    /// Desktop: the render scale follows the window at each console start (Automatic), unless a
+    /// fixed one is chosen.
+    virtual bool HasAutoResolution() {
+        return false;
+    }
+    virtual bool AutoResolution() {
+        return false;
+    }
+    virtual void SetAutoResolution(bool automatic) {}
     /// Whether this GPU can run frame generation at all.
     virtual bool FrameGenSupported() = 0;
     /// The user's Lossless.dll: picked, checked and installed (the console restarts).

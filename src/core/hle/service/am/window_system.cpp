@@ -29,6 +29,9 @@
 namespace Service::AM {
 
 namespace {
+
+std::function<void(u64)> application_started_hook;
+std::function<void(u64)> application_exited_hook;
 // am's overlay notices (ovln source "overlay"), as the Ryujinx Harbor sends them.
 constexpr u32 AmOverlayNotificationHomeRefused = 2000;
 constexpr u32 AmOverlayNotificationRecordingUnavailable = 8101;
@@ -45,6 +48,11 @@ void SendAmOverlayNotification(u32 tag) {
 // How long a caller's ChangeIntoForeground waits for it to close a completed applet's accessor.
 constexpr std::chrono::nanoseconds ForegroundHoldTimeout = std::chrono::seconds{1};
 } // namespace
+
+void SetApplicationHooks(std::function<void(u64)> started, std::function<void(u64)> exited) {
+    application_started_hook = std::move(started);
+    application_exited_hook = std::move(exited);
+}
 
 WindowSystem::WindowSystem(Core::System& system) : m_system(system) {
     m_foreground_hold_event = Core::Timing::CreateEvent(
@@ -157,6 +165,9 @@ bool WindowSystem::TrackApplet(std::shared_ptr<Applet> applet, bool is_applicati
     }
 
     if (started_application_id) {
+        if (application_started_hook) {
+            application_started_hook(*started_application_id);
+        }
         Service::Friend::OnApplicationStarted(m_system, *started_application_id);
         // A console's am holds olsc's IForbiddenSaveDataIndication while an application runs.
         Service::OLSC::TransferQueue::OnApplicationStarted(m_system, *started_application_id);
@@ -726,6 +737,9 @@ void WindowSystem::PruneTerminatedAppletsLocked() {
         // If this was the application, we should try to switch to the home menu.
         if (applet.get() == m_application) {
             m_application = nullptr;
+            if (application_exited_hook) {
+                application_exited_hook(applet->program_id);
+            }
             Service::Friend::OnApplicationExited();
             Service::OLSC::TransferQueue::OnApplicationExited(m_system, applet->program_id);
             m_foreground_requested_applet = m_home_menu;

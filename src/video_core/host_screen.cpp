@@ -38,17 +38,19 @@ bool Active() {
 }
 
 namespace {
-std::atomic_bool guest_frame{false};
+std::atomic<u64> guest_frames{0};
 } // namespace
 
 void NoteGuestFrame() {
-    if (!guest_frame.load(std::memory_order_relaxed)) {
-        guest_frame = true;
-    }
+    guest_frames.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool GuestFrameShown() {
-    return guest_frame.load();
+    return guest_frames.load() > 0;
+}
+
+u64 GuestFrames() {
+    return guest_frames.load();
 }
 
 namespace {

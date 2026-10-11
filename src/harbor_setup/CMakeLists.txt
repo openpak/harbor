@@ -115,6 +115,8 @@ add_library(harbor_setup_core STATIC
     menu_input.h
     record.cpp
     record.h
+    title_settings.cpp
+    title_settings.h
     wizard.cpp
     wizard.h)
 target_link_libraries(harbor_setup_core PUBLIC common core frontend_common hid_core input_common video_core nlohmann_json::nlohmann_json
