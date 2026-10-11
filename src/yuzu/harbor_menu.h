@@ -113,6 +113,8 @@ private:
     std::mutex notice_mutex;
     std::string notice;
     std::chrono::steady_clock::time_point notice_until{};
+    bool notice_shown = false;
+    u64 notice_frames = 0;
     int player1_callback = -1;
     int handheld_callback = -1;
 };

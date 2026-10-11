@@ -74,6 +74,49 @@ void PaintEmblem(NVGcontext* vg, float x, float y, float w, float h) {
     nvgFill(vg);
 }
 
+// Harbor's colour mark: the emblem on its navy tile (Welcome, the boot page).
+void PaintMark(NVGcontext* vg, float x, float y, float w, float h) {
+    nvgTranslate(vg, x, y);
+    nvgScale(vg, w / 512.0f, h / 512.0f);
+    const auto fill = [&](NVGcolor colour) {
+        nvgFillColor(vg, colour);
+        nvgFill(vg);
+    };
+
+    nvgBeginPath(vg);
+    nvgRoundedRect(vg, 0, 0, 512, 512, 112);
+    nvgFillPaint(vg, nvgLinearGradient(vg, 0, 0, 512, 512, Hex(0x213b61), Hex(0x09172c)));
+    nvgFill(vg);
+
+    nvgBeginPath(vg);
+    nvgRoundedRectVarying(vg, 106, 142, 90, 212, 52, 0, 0, 52);
+    fill(Hex(0x42decb));
+    nvgBeginPath(vg);
+    nvgRoundedRectVarying(vg, 316, 142, 90, 212, 0, 52, 52, 0);
+    fill(Hex(0xff7b78));
+    nvgBeginPath(vg);
+    ControllerDots(vg);
+    fill(Hex(0x16304b));
+    nvgBeginPath(vg);
+    Polygon(vg, {228, 153, 256, 119, 284, 153});
+    nvgRoundedRect(vg, 228, 206, 56, 12, 6);
+    Polygon(vg, {239, 229, 273, 229, 294, 355, 218, 355});
+    fill(Hex(0xf4f7ff));
+    nvgBeginPath(vg);
+    nvgRect(vg, 235, 164, 42, 34);
+    fill(Hex(0xffda88));
+    nvgBeginPath(vg);
+    nvgRect(vg, 249, 164, 14, 34);
+    fill(Hex(0xfff4cf));
+    nvgBeginPath(vg);
+    Polygon(vg, {235, 253, 277, 253, 280, 271, 232, 271});
+    Polygon(vg, {227, 304, 285, 304, 288, 322, 224, 322});
+    fill(Hex(0x193251));
+    nvgBeginPath(vg);
+    Wave(vg);
+    fill(Hex(0x59decf));
+}
+
 // A footer glyph: a disc in the ink colour with the button's letter in the paper colour.
 void PaintButtonGlyph(NVGcontext* vg, float x, float y, float w, float h, const std::string& letter,
                       float alpha) {

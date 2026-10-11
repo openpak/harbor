@@ -26,12 +26,12 @@ namespace {
 const Palette light_palette = {
     Hex(0xebebeb), Hex(0xffffff), Hex(0x292929), Hex(0x424242), Hex(0x737373),
     Hex(0xc9c9c9), Hex(0x484848), Hex(0x3156ef), Hex(0x15803d), Hex(0xe7f6ec),
-    Hex(0xb91c1c), Hex(0xfdecec), Hex(0xa16207), Hex(0xfdf5e1), Hex(0x39efd2),
+    Hex(0xb91c1c), Hex(0xfdecec), Hex(0xa16207), Hex(0xfdf5e1), Hex(0x0094be),
 };
 const Palette dark_palette = {
     Hex(0x2d2d2d), Hex(0x202020), Hex(0xffffff), Hex(0xd6d6d6), Hex(0xa3a3a3),
     Hex(0x4a4a4a), Hex(0xbdbdbd), Hex(0x7998ff), Hex(0x4ade80), Hex(0x2c3b31),
-    Hex(0xf87171), Hex(0x432f2f), Hex(0xfbbf24), Hex(0x403823), Hex(0x39efd2),
+    Hex(0xf87171), Hex(0x432f2f), Hex(0xfbbf24), Hex(0x403823), Hex(0x3ad7f2),
 };
 bool dark_theme = false;
 
@@ -41,49 +41,6 @@ constexpr float HeaderHeight = 68;
 constexpr float FooterHeight = 61;
 constexpr float AdvanceHeight = 80;
 constexpr float PaneWidth = 800;
-
-// The colour mark on Welcome: the same drawing on its navy tile.
-void PaintMark(NVGcontext* vg, float x, float y, float w, float h) {
-    nvgTranslate(vg, x, y);
-    nvgScale(vg, w / 512.0f, h / 512.0f);
-    const auto fill = [&](NVGcolor colour) {
-        nvgFillColor(vg, colour);
-        nvgFill(vg);
-    };
-
-    nvgBeginPath(vg);
-    nvgRoundedRect(vg, 0, 0, 512, 512, 112);
-    nvgFillPaint(vg, nvgLinearGradient(vg, 0, 0, 512, 512, Hex(0x213b61), Hex(0x09172c)));
-    nvgFill(vg);
-
-    nvgBeginPath(vg);
-    nvgRoundedRectVarying(vg, 106, 142, 90, 212, 52, 0, 0, 52);
-    fill(Hex(0x42decb));
-    nvgBeginPath(vg);
-    nvgRoundedRectVarying(vg, 316, 142, 90, 212, 0, 52, 52, 0);
-    fill(Hex(0xff7b78));
-    nvgBeginPath(vg);
-    ControllerDots(vg);
-    fill(Hex(0x16304b));
-    nvgBeginPath(vg);
-    Polygon(vg, {228, 153, 256, 119, 284, 153});
-    nvgRoundedRect(vg, 228, 206, 56, 12, 6);
-    Polygon(vg, {239, 229, 273, 229, 294, 355, 218, 355});
-    fill(Hex(0xf4f7ff));
-    nvgBeginPath(vg);
-    nvgRect(vg, 235, 164, 42, 34);
-    fill(Hex(0xffda88));
-    nvgBeginPath(vg);
-    nvgRect(vg, 249, 164, 14, 34);
-    fill(Hex(0xfff4cf));
-    nvgBeginPath(vg);
-    Polygon(vg, {235, 253, 277, 253, 280, 271, 232, 271});
-    Polygon(vg, {227, 304, 285, 304, 288, 322, 224, 322});
-    fill(Hex(0x193251));
-    nvgBeginPath(vg);
-    Wave(vg);
-    fill(Hex(0x59decf));
-}
 
 void PaintVerdict(NVGcontext* vg, float x, float y, float w, float h, CheckLevel level) {
     const auto& p = CurrentPalette();
@@ -159,15 +116,18 @@ void SetDarkTheme(bool dark) {
 }
 
 void ApplyBorealisStyle() {
-    // Focus: a static 3-unit mint ring over the lit row colour of each theme.
-    brls::getStyle().addMetric("brls/highlight/stroke_width", 3);
+    // Focus: OpenPak's selection cursor (website/web/src/input.css, --cursor and --cursor-2): a
+    // 4-unit cyan ring that breathes to the lighter cyan, over the lit row colour of each theme.
+    brls::getStyle().addMetric("brls/highlight/stroke_width", 4);
     for (const bool dark : {false, true}) {
         brls::Theme theme = dark ? brls::Theme::getDarkTheme() : brls::Theme::getLightTheme();
-        theme.addColor("brls/highlight/color1", nvgRGB(0x39, 0xef, 0xd2));
-        theme.addColor("brls/highlight/color2", nvgRGB(0x39, 0xdf, 0xe4));
+        const NVGcolor cursor = dark ? nvgRGB(0x3a, 0xd7, 0xf2) : nvgRGB(0x00, 0x94, 0xbe);
+        const NVGcolor cursor_2 = dark ? nvgRGB(0xa2, 0xef, 0xff) : nvgRGB(0x39, 0xc9, 0xea);
+        theme.addColor("brls/highlight/color1", cursor);
+        theme.addColor("brls/highlight/color2", cursor_2);
         theme.addColor("brls/highlight/background",
                        dark ? nvgRGB(0x20, 0x20, 0x20) : nvgRGB(0xff, 0xff, 0xff));
-        theme.addColor("brls/click_pulse", nvgRGBA(0x39, 0xef, 0xd2, 38));
+        theme.addColor("brls/click_pulse", WithAlpha(cursor, 0.15f));
     }
 }
 

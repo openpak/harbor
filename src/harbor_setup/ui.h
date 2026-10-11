@@ -41,6 +41,9 @@ void Polygon(NVGcontext* vg, std::initializer_list<float> points);
 void Wave(NVGcontext* vg);
 void ControllerDots(NVGcontext* vg);
 
+/// Harbor's colour mark (the emblem on its navy tile).
+void PaintMark(NVGcontext* vg, float x, float y, float w, float h);
+
 /// The monochrome header emblem in the ink colour.
 void PaintEmblem(NVGcontext* vg, float x, float y, float w, float h);
 

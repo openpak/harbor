@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <string>
+
 #include <functional>
 
 class QWidget;
@@ -18,7 +20,7 @@ using WhileStopped = std::function<void(std::function<void()> change)>;
 
 void BackUp(QWidget* parent, const WhileStopped& while_stopped);
 void Restore(QWidget* parent, const WhileStopped& while_stopped);
-void MakeNew(QWidget* parent, const WhileStopped& while_stopped);
+std::string MakeNew(const WhileStopped& while_stopped);
 
 /// At console start: a console whose keys are not on this computer is told so once (it runs, but
 /// cannot sign in to OpenPak until it is restored from a backup or made a new console).

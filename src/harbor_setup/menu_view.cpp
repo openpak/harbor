@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 #include "common/logging.h"
 #include "common/scm_rev.h"
@@ -204,6 +205,15 @@ void MenuActivity::Back() {
     if (capture.Active()) {
         capture.End();
         Render();
+        return;
+    }
+    if (dialog) {
+        // B is the dialog's first button (Cancel, Close).
+        const auto action = dialog->buttons.empty() ? std::function<void()>{} : dialog->buttons.front().second;
+        CloseDialog();
+        if (action) {
+            action();
+        }
         return;
     }
     if (screen == Screen::Host) {
@@ -414,6 +424,22 @@ void MenuActivity::Render() {
     auto* frame = new brls::Box(brls::Axis::COLUMN);
     frame->setDimensions(CanvasWidth, CanvasHeight);
     frame->setPadding(0, 32, 0, 32);
+    if (dialog) {
+        // The page behind a dialog is not drawn: the dialog stands alone on the dimmed paper.
+        delete frame;
+        root->setBackgroundColor(dark ? nvgRGB(0x10, 0x10, 0x10) : nvgRGB(0x9a, 0x9a, 0x9a));
+        root->addView(DialogView());
+        brls::View* focus = by_key.count(focus_key) ? by_key[focus_key] : nullptr;
+        if (!focus && !pane_rows.empty()) {
+            focus = pane_rows.front();
+        }
+        if (focus) {
+            brls::Application::giveFocus(focus);
+            focus_key = keys.count(focus) ? keys[focus] : "";
+        }
+        rendering = false;
+        return;
+    }
     root->addView(frame);
     if (screen == Screen::Menu) {
         frame->addView(Header("Harbor"));
@@ -421,6 +447,10 @@ void MenuActivity::Render() {
     } else if (screen == Screen::Crash) {
         frame->addView(Header(CrashTitle()));
         frame->addView(CrashBody());
+    } else if (screen == Screen::Host && sub == Sub::None && host_page.kind == HostPageKind::Status) {
+        // As a console starts: black, Harbor's mark in the middle, a spinner and one line.
+        root->setBackgroundColor(nvgRGB(0, 0, 0));
+        frame->addView(HostBody());
     } else if (screen == Screen::Host) {
         frame->addView(Header(HostTitle()));
         frame->addView(HostBody());
@@ -428,7 +458,9 @@ void MenuActivity::Render() {
         frame->addView(Header("Harbor Settings"));
         frame->addView(SettingsBody());
     }
-    frame->addView(Footer());
+    if (!(screen == Screen::Host && sub == Sub::None && host_page.kind == HostPageKind::Status)) {
+        frame->addView(Footer());
+    }
 
     // The categories and the pane reach each other sideways.
     if (!pane_rows.empty()) {
@@ -677,6 +709,88 @@ brls::View* MenuActivity::MenuBody() {
     return body;
 }
 
+// ---- System dialogs ----
+
+void MenuActivity::OpenDialog(Dialog next) {
+    dialog = std::move(next);
+    focus_key = "dialog:0";
+    Render();
+}
+
+void MenuActivity::CloseDialog() {
+    if (!dialog) {
+        return;
+    }
+    focus_key = dialog->return_key;
+    dialog.reset();
+    Render();
+}
+
+brls::View* MenuActivity::DialogView() {
+    const auto& p = CurrentPalette();
+    auto* panel = new brls::Box(brls::Axis::COLUMN);
+    panel->setWidth(720);
+    panel->setBackgroundColor(p.selected);
+    panel->setCornerRadius(8);
+    auto* body = new brls::Box(brls::Axis::COLUMN);
+    body->setPadding(40, 48, 36, 48);
+    if (!dialog->title.empty()) {
+        auto* title = MakeText(dialog->title, 24, p.ink, true);
+        title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+        body->addView(title);
+    }
+    auto* text = MakeText(dialog->text, 18, p.ink2, true);
+    text->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    text->setMarginTop(dialog->title.empty() ? 0 : 18);
+    body->addView(text);
+    panel->addView(body);
+
+    auto* buttons = new brls::Box(brls::Axis::ROW);
+    buttons->setLineTop(1);
+    buttons->setLineColor(p.line);
+    std::vector<brls::View*> row;
+    for (std::size_t i = 0; i < dialog->buttons.size(); i++) {
+        auto* button = new brls::Box(brls::Axis::ROW);
+        button->setGrow(1);
+        button->setHeight(72);
+        button->setJustifyContent(brls::JustifyContent::CENTER);
+        button->setAlignItems(brls::AlignItems::CENTER);
+        button->setFocusable(true);
+        button->setHighlightCornerRadius(0);
+        button->setHighlightPadding(-3);
+        if (i > 0) {
+            button->setLineLeft(1);
+            button->setLineColor(p.line);
+        }
+        button->registerClickAction([this, i](brls::View*) {
+            auto action = dialog->buttons[i].second;
+            CloseDialog();
+            if (action) {
+                action();
+            }
+            return true;
+        });
+        button->addGestureRecognizer(new brls::TapGestureRecognizer(button));
+        button->addView(MakeText(dialog->buttons[i].first, 20, i + 1 == dialog->buttons.size() ? p.accent : p.ink));
+        Remember(button, "dialog:" + std::to_string(i));
+        pane_rows.push_back(button);
+        row.push_back(button);
+        buttons->addView(button);
+    }
+    for (std::size_t i = 0; i < row.size(); i++) {
+        row[i]->setCustomNavigationRoute(brls::FocusDirection::UP, row[i]);
+        row[i]->setCustomNavigationRoute(brls::FocusDirection::DOWN, row[i]);
+    }
+    panel->addView(buttons);
+
+    auto* frame = new brls::Box(brls::Axis::COLUMN);
+    frame->setDimensions(CanvasWidth, CanvasHeight);
+    frame->setJustifyContent(brls::JustifyContent::CENTER);
+    frame->setAlignItems(brls::AlignItems::CENTER);
+    frame->addView(panel);
+    return frame;
+}
+
 // ---- Host pages (outside the console) ----
 
 std::string MenuActivity::HostTitle() const {
@@ -755,10 +869,29 @@ brls::View* MenuActivity::HostBody() {
     body->addView(column);
 
     if (host_page.kind == HostPageKind::Status) {
-        auto* label = MakeText(host_page.text, 24, p.ink, true);
-        label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
         column->setAlignItems(brls::AlignItems::CENTER);
-        column->addView(new Shape(64, 64, PaintEmblem));
+        column->addView(new Shape(144, 144, PaintMark));
+        // A spinner as the console's: dots on a ring, one lit, moving round.
+        auto* spinner = new Shape(40, 40, [](NVGcontext* vg, float x, float y, float w, float h) {
+            constexpr int Dots = 8;
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count();
+            const int lit = static_cast<int>((ms / 110) % Dots);
+            for (int i = 0; i < Dots; i++) {
+                const float angle = static_cast<float>(i) * 2.0f * NVG_PI / Dots - NVG_PI / 2;
+                const int age = (lit - i + Dots) % Dots;
+                nvgBeginPath(vg);
+                nvgCircle(vg, x + w / 2 + std::cos(angle) * w * 0.38f, y + h / 2 + std::sin(angle) * h * 0.38f,
+                          w * 0.07f);
+                nvgFillColor(vg, nvgRGBA(255, 255, 255, static_cast<unsigned char>(255 - age * 28)));
+                nvgFill(vg);
+            }
+        });
+        spinner->setMarginTop(56);
+        column->addView(spinner);
+        auto* label = MakeText(host_page.text, 18, nvgRGB(0xa0, 0xa0, 0xa0), true);
+        label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
         label->setMarginTop(20);
         column->addView(label);
         // Nothing to choose: the column holds the focus (Borealis always has a focused view).
@@ -1536,7 +1669,20 @@ void MenuActivity::HarborPane(brls::Box* pane) {
         Close([this] { host.ConsoleAction("restore"); });
     }, true, true));
     pane->addView(Row("console:new", "Make this a new console…", "", [this] {
-        Close([this] { host.ConsoleAction("new-console"); });
+        OpenDialog({
+            .title = "Make this a new console",
+            .text = "This console gets a new identity: a new serial number, device id, network addresses "
+                    "and keys. Its OpenPak sign-ins are dropped, so every user links their Nintendo "
+                    "Account again. Users, games and saves stay.\n\nThe console stops while this is done "
+                    "and starts again.",
+            .buttons = {{"Cancel", {}},
+                        {"Make a new console",
+                         [this] {
+                             LOG_INFO(Frontend, "harbor: menu: making this a new console");
+                             Close([this] { host.ConsoleAction("new-console"); });
+                         }}},
+            .return_key = "console:new",
+        });
     }, true, true));
     pane->addView(Note("A backup holds the console's system memory and its device key, locked with a "
                        "passphrase. The console stops while it is written or restored."));

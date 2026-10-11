@@ -23,6 +23,7 @@
 #include "common/logging.h"
 #include "core/core.h"
 #include "video_core/gpu.h"
+#include "video_core/host_screen.h"
 #include "video_core/renderer_base.h"
 #include "frontend_common/joycon_rails.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -245,12 +246,22 @@ void HarborMenu::SetStats(double fps_, double speed_) {
 }
 
 /// "N FPS · speed N%", as on Android, and the GPU and its driver under it when chosen.
+/// A notice waits for four seconds of the console's pictures (past its boot logo, a notice made
+/// while it restarts), then stays eight seconds.
+constexpr u64 NoticeWaitFrames = 240;
+
 std::optional<std::string> HarborMenu::HudText() {
     auto& system = *QtCommon::system;
     std::string note;
     {
         std::scoped_lock lk{notice_mutex};
-        if (!notice.empty() && std::chrono::steady_clock::now() < notice_until) {
+        // Its time runs from when the console shows pictures again (NoticeWaitFrames).
+        if (!notice.empty() && !notice_shown && system.IsPoweredOn() &&
+            VideoCore::HostScreen::GuestFrames() >= notice_frames + NoticeWaitFrames) {
+            notice_shown = true;
+            notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        }
+        if (notice_shown && std::chrono::steady_clock::now() < notice_until) {
             note = notice;
         }
     }
@@ -274,7 +285,8 @@ void HarborMenu::HostNotice(const std::string& text) {
     LOG_INFO(Frontend, "harbor: notice: {}", text);
     std::scoped_lock lk{notice_mutex};
     notice = text;
-    notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    notice_shown = false;
+    notice_frames = VideoCore::HostScreen::GuestFrames();
 }
 
 bool HarborMenu::AutoResolution() {

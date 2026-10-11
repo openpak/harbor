@@ -141,6 +141,19 @@ private:
 
     HostPage host_page;
 
+    /// A system dialog over the page: a centred panel, its buttons along the bottom (as the
+    /// console's confirmations and errors). B is the first button's (Cancel).
+    struct Dialog {
+        std::string title;
+        std::string text;
+        std::vector<std::pair<std::string, std::function<void()>>> buttons;
+        std::string return_key; ///< the row the page's focus goes back to
+    };
+    std::optional<Dialog> dialog;
+    void OpenDialog(Dialog next);
+    void CloseDialog();
+    brls::View* DialogView();
+
     // Display & Performance: whose values the rows change while a game runs (All games, or that
     // game's own: title_settings.h), and whether a change waits for the console's next start.
     bool scope_game = false;

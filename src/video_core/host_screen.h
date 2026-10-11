@@ -43,6 +43,9 @@ bool Active();
 void NoteGuestFrame();
 /// Whether the console has put a picture on the screen since the process started.
 bool GuestFrameShown();
+/// How many pictures of its own the console has put on the screen since the process started (a
+/// notice waits for new ones before its time starts running).
+u64 GuestFrames();
 
 /// Whether any host layer (screen, overlay, sleep or dim shade) is in use: while not, presenting
 /// does nothing of Harbor's (one atomic read per frame).
