@@ -19,6 +19,7 @@
 #include "harbor_setup/chime.h"
 #include "harbor_setup/device_check.h"
 #include "harbor_setup/driver_catalog.h"
+#include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/keys.h"
 #include "harbor_setup/menu_input.h"
@@ -237,6 +238,38 @@ void TestDriverCatalog() {
     Check(ParseDriverReleases("not json", purple, a650).empty(), "drivers: broken JSON gives nothing");
 }
 
+// The downloads the setup, the Harbor menu and the stopped screen share (driver_recovery.h).
+void TestDriverDownloads() {
+    FakeHost host;
+    const std::atomic_bool cancel{false};
+    auto a650 = SampleDevice("phone");
+    a650.gpu = "Adreno (TM) 650";
+    a650.android_api = 31;
+    const auto listing = FetchDriverListing(host, a650, cancel);
+    Check(host.http_gets == static_cast<int>(DriverRepositories.size()) && listing.releases.empty() &&
+              listing.notice && listing.notice->find("MrPurple666: offline.") != std::string::npos &&
+              listing.notice->find("StevenMXZ: offline.") != std::string::npos,
+          "downloads: every publisher is asked, and each failure is named");
+    FakeHost other;
+    const auto none = FetchDriverListing(other, SampleDevice("warn"), cancel);
+    Check(other.http_gets == 0 && none.releases.empty() && none.notice,
+          "downloads: a non-Adreno device never contacts GitHub");
+    DriverRelease bad;
+    bad.download_url = "https://example.com/x.zip";
+    bad.size = 1000;
+    const auto refused = DownloadDriver(host, a650, bad, [](std::uint64_t) {}, {}, cancel);
+    Check(!refused.installed && refused.error == "This is not a supported GitHub driver download.",
+          "downloads: a URL outside the publishers' releases is refused before any request");
+    DriverRelease big;
+    big.download_url = "https://github.com/MrPurple666/purple-turnip/releases/download/t/x.zip";
+    big.file_name = "x.zip";
+    big.size = MaxDriverDownload + 1;
+    Check(!DownloadDriver(host, a650, big, [](std::uint64_t) {}, {}, cancel).installed,
+          "downloads: a package over 32 MiB is refused");
+    Check(DownloadProgressText(big, 1048576).starts_with("Downloading x.zip (1.0 / 32.0 MB)"),
+          "downloads: the progress words");
+}
+
 void TestFlow(const std::filesystem::path& dir) {
     FakeHost host;
     host.folders.push_back({"Switch", "/home/me/Games/Switch", true});
@@ -435,6 +468,7 @@ int main() {
     TestDeviceCheck();
     TestKeysCheck();
     TestDriverCatalog();
+    TestDriverDownloads();
     TestFlow(dir);
     TestPickerBackAndDriverPage(dir);
     TestConsoleTheme(dir);

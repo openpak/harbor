@@ -15,6 +15,7 @@
 
 #include "harbor_setup/device_check.h"
 #include "harbor_setup/driver_catalog.h"
+#include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
 #include "harbor_setup/record.h"
@@ -224,6 +225,7 @@ private:
     void FillDriverChoices(const std::string& selected);
     void ChooseRecommendedDriver();
     void InstallDriverPackage(const std::string& location, const std::string& file_name);
+    void FinishDriverInstall(const DriverInstall& result);
     std::vector<Folder>* CurrentFolders();
     std::string AccountProblem() const;
     void EnterAccount();
