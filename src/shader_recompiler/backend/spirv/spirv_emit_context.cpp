@@ -1499,7 +1499,12 @@ void EmitContext::DefineInputs(const IR::Program& program) {
         layer = DefineInput(*this, U32[1], false, spv::BuiltIn::Layer);
         Decorate(layer, spv::Decoration::Flat);
     }
-    if (loads.AnyComponent(IR::Attribute::PositionX)) {
+    // Harbor: fragment shaders lower quad shuffles with derivatives (EmitQuadRead), which need
+    // the pixel's position in its 2x2 quad.
+    const bool quad_lowering{stage == Stage::Fragment &&
+                             (info.uses_quad_shuffles || info.uses_subgroup_shuffles ||
+                              info.uses_fswzadd)};
+    if (loads.AnyComponent(IR::Attribute::PositionX) || quad_lowering) {
         const bool is_fragment{stage == Stage::Fragment};
         if (!is_fragment && profile.has_broken_spirv_position_input) {
             need_input_position_indirect = true;

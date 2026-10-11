@@ -48,6 +48,16 @@ void Shuffle(TranslatorVisitor& v, u64 insn, const IR::U32& index, const IR::U32
         BitField<48, 3, IR::Pred> pred;
     } const shfl{insn};
 
+    // A register operand that is a constant (RZ) counts as an immediate: NVN's quad broadcast of
+    // lane 0 reads its index from RZ.
+    if (!index_is_imm && index.IsImmediate()) {
+        index_is_imm = true;
+        index_imm = index.U32();
+    }
+    if (!mask_is_imm && mask.IsImmediate()) {
+        mask_is_imm = true;
+        mask_imm = mask.U32();
+    }
     const bool is_quad_candidate{mask_is_imm && mask_imm == QUAD_MASK && index_is_imm &&
                                   v.env.ShaderStage() == Stage::Fragment};
     if (is_quad_candidate) {
