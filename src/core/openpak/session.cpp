@@ -1311,7 +1311,7 @@ void ResignInLoop(State& state) {
                 std::lock_guard lock{state.resign_mutex};
                 state.resign_pending.erase(uid);
                 if (ok) {
-                    LOG_INFO(WebService, "[OpenPak] Signed in after the device id came free "
+                    LOG_INFO(WebService, "[OpenPak] Re-sign-in worker: signed in after the device id came free "
                                          "(attempt {})", attempt + 1);
                 }
             }
