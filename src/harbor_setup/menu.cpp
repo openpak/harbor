@@ -586,10 +586,20 @@ void OpenHostNow(const HostPage& page) {
     activity->ShowHost(page);
 }
 
+/// How long OpenPak may refuse this console's identity before the menu offers a new console: the
+/// server's claim (45 s) plus the re-sign-in attempts after it (15 s, then every 30 s).
+constexpr auto IdentityRetryWindow = std::chrono::seconds(120);
+
+/// The size Borealis lays the pages out for. Its own, not the picture's: the FPS line
+/// (DrawHud) sizes the picture first when it is on, and Borealis then never got a size and
+/// drew nothing (a black menu).
+std::pair<int, int> canvas_size{};
+
 void DrawFrame() {
     const auto [width, height] = ConsoleResolution();
-    if (target.width != width || target.height != height) {
-        target.Resize(width, height);
+    target.Resize(width, height);
+    if (canvas_size != std::pair{width, height}) {
+        canvas_size = {width, height};
         // At once (onWindowResized waits 100 ms): the design canvas scales to the new size.
         brls::Application::setWindowSize(width, height);
         FitCanvas();
@@ -790,10 +800,50 @@ void MenuSetHost(MenuHost& host) {
     });
     // OpenPak refused this console's identity (another live console has it): the menu offers to
     // make this one a new console, on every frontend alike.
+    // OpenPak refused this console's identity because another live console claims it. Most often
+    // that is this console's own last process (killed before it could end its session): Harbor
+    // signs in again by itself (session.cpp, ResignInLoop) once the claim lapses. Only a refusal
+    // that outlasts that (a real second copy) offers to make this one a new console.
     OpenPak::Session::SetDeviceIdInUseHook([] {
-        LOG_INFO(Frontend, "harbor: menu: this console's identity is in use elsewhere; offering a "
-                           "new console");
-        MenuOpen(MenuPage::Console);
+        LOG_INFO(Frontend, "harbor: OpenPak refused this console's identity; signing in again by itself");
+        if (menu_host) {
+            menu_host->HostNotice("Signing in to OpenPak…");
+        }
+        std::thread([] {
+            Common::SetCurrentThreadName("HarborIdentityWait");
+            const auto deadline = std::chrono::steady_clock::now() + IdentityRetryWindow;
+            while (std::chrono::steady_clock::now() < deadline) {
+                {
+                    std::scoped_lock lk{mutex};
+                    if (stopping) {
+                        return;
+                    }
+                }
+                if (!OpenPak::Session::DeviceIdInUse()) {
+                    LOG_INFO(Frontend, "harbor: signed in to OpenPak again; no new console needed");
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            // Still refused: wait for the menu to be free, then offer the new console.
+            while (OpenPak::Session::DeviceIdInUse()) {
+                {
+                    std::scoped_lock lk{mutex};
+                    if (stopping) {
+                        return;
+                    }
+                    if (!want_open) {
+                        break;
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            if (OpenPak::Session::DeviceIdInUse()) {
+                LOG_INFO(Frontend, "harbor: menu: this console's identity is still in use elsewhere; "
+                                   "offering a new console");
+                MenuOpen(MenuPage::Console);
+            }
+        }).detach();
     });
     if (host.HasHud()) {
         // The FPS line is drawn by the menu's thread, so it starts now (closed).
