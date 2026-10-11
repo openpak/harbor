@@ -86,6 +86,83 @@ Id SelectValue(EmitContext& ctx, Id in_range, Id value, Id src_thread_id) {
         ctx.OpGroupNonUniformShuffle(ctx.U32[1], SubgroupScope(ctx), value, src_thread_id), value);
 }
 
+// Harbor: quad shuffles in fragment shaders are lowered with fine derivatives instead of subgroup
+// operations. GPUs without a native shuffle (Adreno 6xx before the a660: Turnip's ir3 turns the
+// shuffle into a loop over the lanes it reads) can spin forever when part of the 2x2 quad is
+// helper pixels, which hung the GPU (VK_ERROR_DEVICE_LOST) in Dinkum. Derivatives are defined
+// over exactly that quad, helper pixels included, on every GPU, so this is used everywhere.
+
+bool LowerFragmentQuad(EmitContext& ctx) {
+    return ctx.stage == Stage::Fragment && ctx.profile.support_derivative_control &&
+           ctx.input_position.value != 0;
+}
+
+/// Whether a shuffle never leaves the 2x2 quad: lane bits 2-4 of the source come from the
+/// invocation's own lane (an immediate segmentation mask covering them).
+bool ShuffleStaysInQuad(EmitContext& ctx, IR::Inst* inst) {
+    if (!LowerFragmentQuad(ctx)) {
+        return false;
+    }
+    const IR::Value segmentation_mask{inst->Arg(3)};
+    return segmentation_mask.IsImmediate() && (segmentation_mask.U32() & 0x1cu) == 0x1cu;
+}
+
+/// The pixel's position in its quad as a lane index: bit 0 = x, bit 1 = y (the guest's and
+/// Vulkan's quad order).
+Id QuadPosition(EmitContext& ctx) {
+    const Id frag_coord{ctx.OpLoad(ctx.F32[4], ctx.input_position)};
+    const Id x{ctx.OpConvertFToU(ctx.U32[1], ctx.OpCompositeExtract(ctx.F32[1], frag_coord, 0U))};
+    const Id y{ctx.OpConvertFToU(ctx.U32[1], ctx.OpCompositeExtract(ctx.F32[1], frag_coord, 1U))};
+    const Id one{ctx.Const(1U)};
+    return ctx.OpBitwiseOr(ctx.U32[1], ctx.OpBitwiseAnd(ctx.U32[1], x, one),
+                           ctx.OpShiftLeftLogical(ctx.U32[1], ctx.OpBitwiseAnd(ctx.U32[1], y, one),
+                                                  one));
+}
+
+/// `value` as held by quad lane `target` (0-3), read through fine derivatives. Bit-exact: each
+/// 16-bit half travels as a float holding an integer below 2^16, where every sum and difference
+/// below is exact, and the result is rounded back.
+Id QuadRead(EmitContext& ctx, Id value, Id target, Id position) {
+    const Id one{ctx.Const(1U)};
+    const Id own_x{ctx.OpConvertUToF(ctx.F32[1], ctx.OpBitwiseAnd(ctx.U32[1], position, one))};
+    const Id own_y{ctx.OpConvertUToF(ctx.F32[1], ctx.OpShiftRightLogical(ctx.U32[1], position, one))};
+    const Id target_x{ctx.OpConvertUToF(ctx.F32[1], ctx.OpBitwiseAnd(ctx.U32[1], target, one))};
+    const Id target_y{ctx.OpConvertUToF(
+        ctx.F32[1], ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpShiftRightLogical(ctx.U32[1], target, one), one))};
+    const Id step_x{ctx.OpFSub(ctx.F32[1], target_x, own_x)}; // -1, 0 or 1
+    const Id step_y{ctx.OpFSub(ctx.F32[1], target_y, own_y)};
+
+    const auto read_half{[&](Id half) {
+        const Id dx{ctx.OpDPdxFine(ctx.F32[1], half)};   // right - left, in this row
+        const Id dy{ctx.OpDPdyFine(ctx.F32[1], half)};   // bottom - top, in this column
+        const Id dxy{ctx.OpDPdyFine(ctx.F32[1], dx)};    // the other column's dy minus this one's
+        const Id dy_target{ctx.OpFAdd(ctx.F32[1], dy, ctx.OpFMul(ctx.F32[1], step_x, dxy))};
+        Id result{ctx.OpFAdd(ctx.F32[1], half, ctx.OpFMul(ctx.F32[1], step_x, dx))};
+        result = ctx.OpFAdd(ctx.F32[1], result, ctx.OpFMul(ctx.F32[1], step_y, dy_target));
+        result = ctx.OpFClamp(ctx.F32[1], ctx.OpRoundEven(ctx.F32[1], result), ctx.Const(0.0f),
+                              ctx.Const(65535.0f));
+        return ctx.OpConvertFToU(ctx.U32[1], result);
+    }};
+    const Id low{read_half(
+        ctx.OpConvertUToF(ctx.F32[1], ctx.OpBitwiseAnd(ctx.U32[1], value, ctx.Const(0xffffU))))};
+    const Id high{read_half(
+        ctx.OpConvertUToF(ctx.F32[1], ctx.OpShiftRightLogical(ctx.U32[1], value, ctx.Const(16U))))};
+    return ctx.OpBitwiseOr(ctx.U32[1], low, ctx.OpShiftLeftLogical(ctx.U32[1], high, ctx.Const(16U)));
+}
+
+/// A quad-confined shuffle through QuadRead: `src_of` maps the quad position to the source lane;
+/// in_range follows the guest's clamp exactly as the subgroup path does.
+template <typename SourceLane, typename InRange>
+Id QuadShuffle(EmitContext& ctx, IR::Inst* inst, Id value, SourceLane&& src_of,
+               InRange&& in_range_of) {
+    const Id position{QuadPosition(ctx)};
+    const Id src_thread_id{src_of(position)};
+    const Id in_range{in_range_of(position, src_thread_id)};
+    SetInBoundsFlag(inst, in_range);
+    const Id target{ctx.OpBitwiseAnd(ctx.U32[1], src_thread_id, ctx.Const(3U))};
+    return ctx.OpSelect(ctx.U32[1], in_range, QuadRead(ctx, value, target, position), value);
+}
+
 Id AddPartitionBase(EmitContext& ctx, Id thread_id) {
     const Id partition_idx{ctx.OpShiftRightLogical(ctx.U32[1], GetThreadId(ctx), ctx.Const(5u))};
     const Id partition_base{ctx.OpShiftLeftLogical(ctx.U32[1], partition_idx, ctx.Const(5u))};
@@ -198,6 +275,21 @@ Id EmitSubgroupGeMask(EmitContext& ctx) {
 
 Id EmitShuffleIndex(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clamp,
                     Id segmentation_mask) {
+    if (ShuffleStaysInQuad(ctx, inst)) {
+        const Id not_seg{ctx.OpNot(ctx.U32[1], segmentation_mask)};
+        return QuadShuffle(
+            ctx, inst, value,
+            [&](Id position) {
+                const Id min_id{ComputeMinThreadId(ctx, position, segmentation_mask)};
+                return ctx.OpBitwiseOr(ctx.U32[1], ctx.OpBitwiseAnd(ctx.U32[1], index, not_seg),
+                                       min_id);
+            },
+            [&](Id position, Id src) {
+                const Id min_id{ComputeMinThreadId(ctx, position, segmentation_mask)};
+                return ctx.OpSLessThanEqual(ctx.U1, src,
+                                            ComputeMaxThreadId(ctx, min_id, clamp, not_seg));
+            });
+    }
     const Id not_seg_mask{ctx.OpNot(ctx.U32[1], segmentation_mask)};
     const Id thread_id{EmitLaneId(ctx)};
     const Id min_thread_id{ComputeMinThreadId(ctx, thread_id, segmentation_mask)};
@@ -217,6 +309,14 @@ Id EmitShuffleIndex(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id cla
 
 Id EmitShuffleUp(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clamp,
                  Id segmentation_mask) {
+    if (ShuffleStaysInQuad(ctx, inst)) {
+        return QuadShuffle(
+            ctx, inst, value, [&](Id position) { return ctx.OpISub(ctx.U32[1], position, index); },
+            [&](Id position, Id src) {
+                return ctx.OpSGreaterThanEqual(
+                    ctx.U1, src, GetMaxThreadId(ctx, position, clamp, segmentation_mask));
+            });
+    }
     const Id thread_id{EmitLaneId(ctx)};
     const Id max_thread_id{GetMaxThreadId(ctx, thread_id, clamp, segmentation_mask)};
     Id src_thread_id{ctx.OpISub(ctx.U32[1], thread_id, index)};
@@ -232,6 +332,14 @@ Id EmitShuffleUp(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clamp,
 
 Id EmitShuffleDown(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clamp,
                    Id segmentation_mask) {
+    if (ShuffleStaysInQuad(ctx, inst)) {
+        return QuadShuffle(
+            ctx, inst, value, [&](Id position) { return ctx.OpIAdd(ctx.U32[1], position, index); },
+            [&](Id position, Id src) {
+                return ctx.OpSLessThanEqual(
+                    ctx.U1, src, GetMaxThreadId(ctx, position, clamp, segmentation_mask));
+            });
+    }
     const Id thread_id{EmitLaneId(ctx)};
     const Id max_thread_id{GetMaxThreadId(ctx, thread_id, clamp, segmentation_mask)};
     Id src_thread_id{ctx.OpIAdd(ctx.U32[1], thread_id, index)};
@@ -247,6 +355,15 @@ Id EmitShuffleDown(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clam
 
 Id EmitShuffleButterfly(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id clamp,
                         Id segmentation_mask) {
+    if (ShuffleStaysInQuad(ctx, inst)) {
+        return QuadShuffle(
+            ctx, inst, value,
+            [&](Id position) { return ctx.OpBitwiseXor(ctx.U32[1], position, index); },
+            [&](Id position, Id src) {
+                return ctx.OpSLessThanEqual(
+                    ctx.U1, src, GetMaxThreadId(ctx, position, clamp, segmentation_mask));
+            });
+    }
     const Id thread_id{EmitLaneId(ctx)};
     const Id max_thread_id{GetMaxThreadId(ctx, thread_id, clamp, segmentation_mask)};
     Id src_thread_id{ctx.OpBitwiseXor(ctx.U32[1], thread_id, index)};
@@ -261,6 +378,10 @@ Id EmitShuffleButterfly(EmitContext& ctx, IR::Inst* inst, Id value, Id index, Id
 }
 
 Id EmitQuadBroadcast(EmitContext& ctx, Id value, Id lane) {
+    if (LowerFragmentQuad(ctx)) {
+        const Id target{ctx.OpBitwiseAnd(ctx.U32[1], lane, ctx.Const(3U))};
+        return QuadRead(ctx, value, target, QuadPosition(ctx));
+    }
     if (ctx.profile.support_quad_shuffles) {
         return ctx.OpGroupNonUniformQuadBroadcast(ctx.U32[1], SubgroupScope(ctx), value, lane);
     }
@@ -272,12 +393,18 @@ Id EmitQuadBroadcast(EmitContext& ctx, Id value, Id lane) {
 
 Id EmitQuadSwap(EmitContext& ctx, Id value, Id direction) {
     const Id xor_mask{ctx.OpIAdd(ctx.U32[1], direction, ctx.Const(1u))};
+    if (LowerFragmentQuad(ctx)) {
+        const Id position{QuadPosition(ctx)};
+        const Id target{ctx.OpBitwiseXor(ctx.U32[1], position, xor_mask)};
+        return QuadRead(ctx, value, target, position);
+    }
     return ctx.OpGroupNonUniformShuffleXor(ctx.U32[1], SubgroupScope(ctx), value, xor_mask);
 }
 
 Id EmitFSwizzleAdd(EmitContext& ctx, Id op_a, Id op_b, Id swizzle) {
     const Id three{ctx.Const(3U)};
-    Id mask{GetThreadId(ctx)};
+    // In fragment shaders the pixel's real quad position, as the lowered quad shuffles use.
+    Id mask{LowerFragmentQuad(ctx) ? QuadPosition(ctx) : GetThreadId(ctx)};
     mask = ctx.OpBitwiseAnd(ctx.U32[1], mask, three);
     mask = ctx.OpShiftLeftLogical(ctx.U32[1], mask, ctx.Const(1U));
     mask = ctx.OpShiftRightLogical(ctx.U32[1], swizzle, mask);
