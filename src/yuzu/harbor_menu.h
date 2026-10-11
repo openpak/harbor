@@ -72,9 +72,19 @@ public:
     void ChooseLosslessDll() override;
     void RemoveLosslessDll() override;
 
+    // Graphics drivers: only with the harness's test store (harbor_test_drivers.h).
+    bool HasDriverChoice() override;
+    std::vector<HarborSetup::MenuChoice> Drivers() override;
+    std::string CurrentDriver() override;
+    void ChooseDriver(const std::string& id) override;
+    HarborSetup::Host* DriverHost() override;
+    HarborSetup::DeviceInfo DriverDevice() override;
+
     std::optional<HarborSetup::KeyboardDefaults> DefaultKeyboard() override;
     std::string KeyName(int code) override;
     void ConsoleAction(const std::string& name) override;
+    /// "Save a copy…": the report copied where the user picks.
+    void ShareCrashReport(const Common::HarborCrash::Report& report) override;
 
 private:
     void OnGui(std::function<void()> work);

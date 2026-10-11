@@ -738,6 +738,39 @@ void MenuBack() {
     }
 }
 
+void MenuOfferCrashReport() {
+    {
+        std::scoped_lock lk{mutex};
+        static bool started = false;
+        if (!menu_host || started) {
+            return;
+        }
+        started = true;
+    }
+    using Common::HarborCrash::Consent;
+    if (Common::HarborCrash::GetConsent() != Consent::Unasked && !Common::HarborCrash::PeekOffer()) {
+        return;
+    }
+    LOG_INFO(Frontend, "harbor: crash reports: the question or a report waits for the console's picture");
+    // A thread of its own that ends by itself; detached, as the process may end without a shutdown.
+    std::thread([] {
+        Common::SetCurrentThreadName("HarborCrashOffer");
+        while (true) {
+            {
+                std::scoped_lock lk{mutex};
+                if (stopping) {
+                    return;
+                }
+                if (VideoCore::HostScreen::GuestFrameShown() && !want_open) {
+                    break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+        MenuOpen(MenuPage::CrashReport);
+    }).detach();
+}
+
 void MenuShutdown() {
     {
         std::scoped_lock lk{mutex};

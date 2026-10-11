@@ -41,7 +41,6 @@
 #include "bootmanager.h"
 #include "frontend_common/joycon_rails.h"
 #include "frontend_common/secret_store.h"
-#include "common/harbor_crash.h"
 #include "yuzu/harbor_console_menu.h"
 #include "harbor_control.h"
 #include "harbor_desktop.h"
@@ -655,6 +654,10 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                         HarborSetup::MenuOpen(MenuPage::Controllers);
                     } else if (name == "console") {
                         HarborSetup::MenuOpen(MenuPage::Console);
+                    } else if (name == "drivers") {
+                        HarborSetup::MenuOpen(MenuPage::Drivers);
+                    } else if (name == "crash-reports") {
+                        HarborSetup::MenuOpen(MenuPage::CrashReport);
                     } else if (name == "close") {
                         HarborSetup::MenuClose();
                     } else if (name == "back") {
@@ -724,14 +727,9 @@ MainWindow::MainWindow(bool has_broken_vulkan)
         connect(
             game_list, &GameList::PopulatingCompleted, this,
             [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
-        // Crash reports: asked once (off until accepted); a report from last time is offered.
-        QTimer::singleShot(0, this, [this] {
-            if (Common::HarborCrash::GetConsent() == Common::HarborCrash::Consent::Unasked) {
-                HarborDesktop::AskCrashConsent(this);
-            } else {
-                HarborDesktop::OfferLastCrashReport(this);
-            }
-        });
+        // Crash reports: asked once (off until accepted), or a report from last time offered, on
+        // the Harbor menu's page once the console's picture is up.
+        HarborSetup::MenuOfferCrashReport();
     }
 
     // HOME session: the bars around the picture follow the console theme.

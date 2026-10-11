@@ -5,20 +5,15 @@
 #include <cmath>
 #include <mutex>
 
-#include <QDir>
-#include <QFile>
-#include <QFileDialog>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QStyleHints>
 #include <QVBoxLayout>
 
 #include "common/fs/path_util.h"
-#include "common/harbor_crash.h"
 #include "common/logging.h"
 #include "core/core.h"
 #include "core/hle/service/am/applet.h"
@@ -39,41 +34,6 @@ QSettings& Preferences() {
             Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "harbor-desktop.ini")),
         QSettings::IniFormat);
     return settings;
-}
-
-/// One report: its summary, the text under "Show Details...", and Save a copy / Delete / Keep.
-void ShowReport(QWidget* parent, const Common::HarborCrash::Report& report, const QString& title) {
-    QMessageBox box(parent);
-    box.setIcon(QMessageBox::Information);
-    box.setWindowTitle(title);
-    box.setText(QObject::tr("Harbor saved a crash report: %1 (%2).")
-                    .arg(QString::fromStdString(report.summary), QString::fromStdString(report.when)));
-    box.setInformativeText(
-        QObject::tr("The report is kept on this computer only; nothing has been sent. Show Details "
-                    "to read it, save a copy to share it yourself, or delete it."));
-    box.setDetailedText(QString::fromStdString(Common::HarborCrash::Read(report)));
-    auto* save = box.addButton(QObject::tr("Save a copy..."), QMessageBox::ActionRole);
-    auto* delete_button = box.addButton(QObject::tr("Delete"), QMessageBox::DestructiveRole);
-    auto* keep = box.addButton(QObject::tr("Keep"), QMessageBox::RejectRole);
-    box.setDefaultButton(keep);
-    box.exec();
-
-    if (box.clickedButton() == save) {
-        const QString target = QFileDialog::getSaveFileName(
-            parent, QObject::tr("Save a copy of the crash report"),
-            QDir::home().filePath(QString::fromStdString(report.name)),
-            QObject::tr("Text files (*.txt)"));
-        if (!target.isEmpty()) {
-            QFile::remove(target);
-            const bool copied = QFile::copy(
-                QString::fromStdString(Common::FS::PathToUTF8String(report.path)), target);
-            LOG_INFO(Frontend, "harbor: crash report {} {}", report.name,
-                     copied ? "saved as a copy" : "could not be copied");
-        }
-    } else if (box.clickedButton() == delete_button) {
-        Common::HarborCrash::Delete(report);
-        LOG_INFO(Frontend, "harbor: crash report {} deleted", report.name);
-    }
 }
 
 } // namespace
@@ -140,37 +100,6 @@ std::array<u8, 3> LetterboxColour(Core::System& system, bool* known) {
         return {0x2d, 0x2d, 0x2d};
     }
     return {0xeb, 0xeb, 0xeb};
-}
-
-void AskCrashConsent(QWidget* parent) {
-    QMessageBox box(parent);
-    box.setIcon(QMessageBox::Question);
-    box.setWindowTitle(QObject::tr("Crash reports"));
-    box.setText(QObject::tr("Keep crash reports on this computer?"));
-    box.setInformativeText(QObject::tr(
-        "If Harbor or a game crashes, Harbor can save a report on this computer: what crashed and "
-        "the last lines of its log, with account ids, names, tokens and typed text removed. "
-        "Nothing is sent anywhere. At the next start Harbor offers the report: you can read it, "
-        "save a copy to share it yourself, or delete it."));
-    auto* keep = box.addButton(QObject::tr("Keep reports"), QMessageBox::AcceptRole);
-    auto* decline = box.addButton(QObject::tr("Don't keep"), QMessageBox::RejectRole);
-    box.setDefaultButton(decline);
-    box.exec();
-    // Closed without an answer: asked again next time; until then nothing is kept.
-    if (box.clickedButton() == keep || box.clickedButton() == decline) {
-        const bool accepted = box.clickedButton() == keep;
-        Common::HarborCrash::SetConsent(accepted);
-        LOG_INFO(Frontend, "harbor: crash reports {}", accepted ? "kept from now on" : "not kept");
-    }
-}
-
-void OfferLastCrashReport(QWidget* parent) {
-    const auto report = Common::HarborCrash::TakeOffer();
-    if (!report) {
-        return;
-    }
-    LOG_INFO(Frontend, "harbor: offering crash report {}", report->name);
-    ShowReport(parent, *report, QObject::tr("Harbor crashed last time"));
 }
 
 bool DarkTheme(Core::System* running) {

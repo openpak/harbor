@@ -45,6 +45,12 @@ SPDX-License-Identifier: AGPL-3.0-only
     <string name="harbor_driver_installing">Installing the driver…</string>
     <string name="harbor_driver_installed">%1$s is installed. It is chosen; the console uses it from its next start.</string>
     <string name="harbor_driver_install_failed">The driver could not be installed: %1$s</string>
+    <string name="harbor_driver_download">Download a driver…</string>
+    <string name="harbor_driver_download_title">Download a driver</string>
+    <string name="harbor_driver_checking">Checking GitHub releases…</string>
+    <string name="harbor_driver_downloading_one">Downloading the driver…</string>
+    <string name="harbor_driver_refresh">Refresh GitHub drivers</string>
+    <string name="harbor_driver_none_found">No matching releases were found. You can keep the phone\'s driver or install a file.</string>
     <string name="harbor_driver_api">%1$s requires Android API %2$s; this phone has API %3$d. Choose another driver.</string>
     <string name="harbor_menu_touch_controls">Touch controls</string>
     <string name="harbor_pad_hide">Hide touch controls</string>

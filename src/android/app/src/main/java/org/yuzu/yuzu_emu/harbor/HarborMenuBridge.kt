@@ -145,6 +145,14 @@ object HarborMenuBridge {
                 ""
             }
 
+            // Crash reports: the Harbor menu's Share passes "path\nname" of the report.
+            "shareCrashReport" -> {
+                val path = argument.substringBefore('\n')
+                val name = argument.substringAfter('\n', path)
+                onUi { activity -> HarborCrashReports.share(activity, path, name) }
+                ""
+            }
+
             // A short host-side notice from the core (e.g. online play locking the speed).
             "notice" -> {
                 onUi { activity -> Toast.makeText(activity, argument, Toast.LENGTH_LONG).show() }

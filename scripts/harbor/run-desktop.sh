@@ -203,7 +203,7 @@ LAUNCH="$RUN/launch.sh"
     echo "export SDL_APP_ID='org.openpak.harbor.harness'"
     [ "$AUTO_SLEEP" = 1 ] && echo "export HARBOR_AUTO_SLEEP=1"
     # The setup wizard's scripted answers (test-harness.md), passed on from this shell.
-    for v in HARBOR_SETUP_PICKS HARBOR_SETUP_TEXT HARBOR_SETUP_AUTO; do
+    for v in HARBOR_SETUP_PICKS HARBOR_SETUP_TEXT HARBOR_SETUP_AUTO HARBOR_TEST_DRIVER_STORE; do
         [ -n "${!v:-}" ] && printf 'export %s=%q\n' "$v" "${!v}"
     done
     # Console mode (--console) is the owner's: the setup wizard when the setup is not complete,

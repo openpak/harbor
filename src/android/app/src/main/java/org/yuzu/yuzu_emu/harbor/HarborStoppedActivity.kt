@@ -165,11 +165,98 @@ class HarborStoppedActivity : ComponentActivity() {
             val label = if (flat[i * 3 + 2].isEmpty()) flat[i * 3 + 1] else "${flat[i * 3 + 1]} (${flat[i * 3 + 2]})"
             list.add(mark(id, label) to { choose(id) })
         }
+        if (HarborNative.canBrowseDrivers()) {
+            list.add(getString(R.string.harbor_driver_download) to { showDownloads(null) })
+        }
         list.add(getString(R.string.harbor_driver_install) to { driverPicker.launch(arrayOf("*/*")) })
         list.add(getString(R.string.harbor_start_again) to ::startAgain)
         list.add(getString(R.string.harbor_back) to { showStopped(intent.getStringExtra(EXTRA_REASON).orEmpty()) })
         show(getString(R.string.harbor_menu_driver), status ?: getString(R.string.harbor_driver_lead), list)
         onBack = { showStopped(intent.getStringExtra(EXTRA_REASON).orEmpty()) }
+    }
+
+    /** The last GitHub catalogue (HarborNative.driverCatalogue), fetched when the page first opens. */
+    private var catalogue: Array<String>? = null
+
+    /**
+     * The setup's GitHub driver catalogue, as in the setup and the Harbor menu: the same publishers,
+     * filters and checks (harbor_setup/driver_recovery.h). A download is installed and chosen, and
+     * used from the console's next start.
+     */
+    private fun showDownloads(status: String?) {
+        val listing = catalogue
+        if (listing == null) {
+            runDriverWork(getString(R.string.harbor_driver_checking), { HarborNative.driverCatalogue() }) { result ->
+                catalogue = result
+                showDownloads(result.firstOrNull()?.takeIf { it.isNotEmpty() })
+            }
+            return
+        }
+        val count = (listing.size - 1) / 4
+        val list = mutableListOf<Pair<String, () -> Unit>>()
+        for (i in 0 until count) {
+            val title = listing[1 + i * 4]
+            val detail = listing[2 + i * 4]
+            val file = listing[3 + i * 4]
+            list.add("$title\n$detail\n$file" to { downloadDriver(i) })
+        }
+        list.add(getString(R.string.harbor_driver_refresh) to {
+            catalogue = null
+            showDownloads(null)
+        })
+        list.add(getString(R.string.harbor_back) to { showDrivers(null) })
+        val note = status ?: if (count == 0) getString(R.string.harbor_driver_none_found) else null
+        show(
+            getString(R.string.harbor_driver_download_title),
+            listOfNotNull(note, HarborNative.driverDownloadLead()).joinToString("\n\n"),
+            list
+        )
+        onBack = { showDrivers(null) }
+    }
+
+    private fun downloadDriver(index: Int) {
+        runDriverWork(getString(R.string.harbor_driver_downloading_one), { HarborNative.downloadDriver(index) }) { result ->
+            if (result.size >= 4 && result[2].isEmpty() && result[0].isNotEmpty()) {
+                Log.info("[Harbor] stopped screen: ${result[0]} downloaded and chosen")
+                driverChanged = true
+                showDrivers(getString(R.string.harbor_driver_installed, result[1]))
+            } else {
+                showDownloads(result.getOrNull(2) ?: getString(R.string.harbor_driver_not_saved))
+            }
+        }
+    }
+
+    /**
+     * A blocking catalogue call on a worker thread: its progress shown twice a second and a Cancel
+     * button; navigation is locked until it ends.
+     */
+    private fun runDriverWork(start: String, work: () -> Array<String>, done: (Array<String>) -> Unit) {
+        show(
+            getString(R.string.harbor_driver_download_title),
+            start,
+            listOf(getString(R.string.cancel) to { HarborNative.cancelDriverWork() })
+        )
+        onBack = {}
+        var finished = false
+        val ticker = object : Runnable {
+            override fun run() {
+                if (finished) return
+                HarborNative.driverProgress().takeIf { it.isNotEmpty() }?.let { message.text = it }
+                message.postDelayed(this, PROGRESS_MS)
+            }
+        }
+        message.postDelayed(ticker, PROGRESS_MS)
+        thread(name = "HarborDriverDownload") {
+            val result = try {
+                work()
+            } catch (e: Exception) {
+                arrayOf("", "", e.message ?: e.javaClass.simpleName, "")
+            }
+            runOnUiThread {
+                finished = true
+                if (!isFinishing) done(result)
+            }
+        }
     }
 
     /**
@@ -335,6 +422,7 @@ class HarborStoppedActivity : ComponentActivity() {
         private const val EXTRA_CANNOT_START = "harborCannotStart"
         private const val EXTRA_DRIVER_FAILED = "harborDriverFailed"
         private const val MAX_WIDTH_DP = 560
+        private const val PROGRESS_MS = 500L
 
         /** "Harbor stopped" with `reason`; the caller finishes its own screen. */
         fun stopped(context: Context, reason: String): Intent =

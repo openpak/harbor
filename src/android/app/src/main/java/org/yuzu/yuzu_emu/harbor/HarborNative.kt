@@ -80,6 +80,24 @@ object HarborNative {
     /** Downloads, installs and selects the recommended driver: [id, name, error]. Not on the UI thread. */
     external fun installRecommendedDriver(): Array<String>
 
+    /** Whether the setup's GitHub driver catalogue is offered on this phone. */
+    external fun canBrowseDrivers(): Boolean
+
+    /** What the catalogue is, or why it is not offered here. */
+    external fun driverDownloadLead(): String
+
+    /** Fetches the catalogue: [notice, then title, detail, file, recommended per package]. Blocking. */
+    external fun driverCatalogue(): Array<String>
+
+    /** Downloads, installs and chooses package `index` of the last catalogue: [id, name, error, cancelled]. Blocking. */
+    external fun downloadDriver(index: Int): Array<String>
+
+    /** The words for the running catalogue fetch or download. */
+    external fun driverProgress(): String
+
+    /** Cancels the running catalogue fetch or download (not an install). */
+    external fun cancelDriverWork()
+
     /** The console's power button pressed briefly: sleep, or wake when asleep (HarborSleep). */
     external fun powerShortPress()
 

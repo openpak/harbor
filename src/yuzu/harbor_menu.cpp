@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
 #include <QGuiApplication>
 #include <QKeySequence>
 #include <QMetaObject>
@@ -29,6 +32,7 @@
 #include "qt_common/qt_common.h"
 #include "harbor_setup/menu_input.h"
 #include "yuzu/harbor_menu.h"
+#include "yuzu/harbor_test_drivers.h"
 #ifdef HAS_LSFG
 #include "yuzu/harbor_frame_gen.h"
 #endif
@@ -306,4 +310,60 @@ std::string HarborMenu::KeyName(int code) {
 
 void HarborMenu::ConsoleAction(const std::string& name) {
     OnGui([this, name] { hooks.console_action(name); });
+}
+
+bool HarborMenu::HasDriverChoice() {
+    return HarborDesktop::TestDriverStore() != nullptr;
+}
+
+std::vector<HarborSetup::MenuChoice> HarborMenu::Drivers() {
+    std::vector<HarborSetup::MenuChoice> out;
+    auto* store = HarborDesktop::TestDriverStore();
+    if (!store) {
+        return out;
+    }
+    out.push_back({"", "The phone's own driver", ""});
+    for (const auto& driver : store->InstalledDrivers()) {
+        out.push_back({driver.id, driver.name, driver.detail});
+    }
+    return out;
+}
+
+std::string HarborMenu::CurrentDriver() {
+    auto* store = HarborDesktop::TestDriverStore();
+    return store ? store->CurrentDriver() : std::string{};
+}
+
+void HarborMenu::ChooseDriver(const std::string& id) {
+    // The test store only records the choice: the desktop does not load phone drivers.
+    if (auto* store = HarborDesktop::TestDriverStore()) {
+        store->SelectDriver(id, nullptr);
+        HostNotice("Graphics driver chosen (test store)");
+    }
+}
+
+HarborSetup::Host* HarborMenu::DriverHost() {
+    return HarborDesktop::TestDriverStore();
+}
+
+HarborSetup::DeviceInfo HarborMenu::DriverDevice() {
+    auto* store = HarborDesktop::TestDriverStore();
+    return store ? store->Probe() : HarborSetup::DeviceInfo{};
+}
+
+void HarborMenu::ShareCrashReport(const Common::HarborCrash::Report& report) {
+    OnGui([this, report] {
+        const QString target = QFileDialog::getSaveFileName(
+            window, QObject::tr("Save a copy of the crash report"),
+            QDir::home().filePath(QString::fromStdString(report.name)), QObject::tr("Text files (*.txt)"));
+        if (target.isEmpty()) {
+            LOG_INFO(Frontend, "harbor: crash report {}: no copy saved", report.name);
+            return;
+        }
+        QFile::remove(target);
+        const bool copied =
+            QFile::copy(QString::fromStdString(Common::FS::PathToUTF8String(report.path)), target);
+        LOG_INFO(Frontend, "harbor: crash report {} {}", report.name,
+                 copied ? "saved as a copy" : "could not be copied");
+    });
 }

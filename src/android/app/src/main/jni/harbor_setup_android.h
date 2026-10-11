@@ -7,6 +7,11 @@ namespace Core::HID {
 class HIDCore;
 }
 
+namespace HarborSetup {
+class Host;
+struct DeviceInfo;
+} // namespace HarborSetup
+
 namespace Harbor {
 
 /// Whether this process boots the console (HOME menu) rather than a game picked from Eden's list.
@@ -23,5 +28,12 @@ void StartWithJoyconsAttached();
 /// rails again: the reverse. Player 1 and Handheld carry the same mappings, so every physical pad
 /// and the touch overlay follow. Not saved: the next console start is attached again.
 void SetJoyconsDetached(Core::HID::HIDCore& hid, bool detached);
+
+/// The setup's driver store and network (the wizard's host, HarborSetupBridge), for the Harbor
+/// menu's and the stopped screen's driver downloads. Needs HarborNative.initialize in this process.
+HarborSetup::Host& DriverHost();
+
+/// This phone, probed once: what the driver catalogue is filtered for.
+const HarborSetup::DeviceInfo& Device();
 
 } // namespace Harbor
