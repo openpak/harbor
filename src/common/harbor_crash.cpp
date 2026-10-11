@@ -1191,8 +1191,10 @@ std::vector<Report> List() {
     return ListLocked();
 }
 
-std::optional<Report> TakeOffer() {
-    std::scoped_lock lk{g_state_mutex};
+namespace {
+
+/// The newest report not offered yet; g_state_mutex held.
+std::optional<Report> PendingOfferLocked() {
     if (g_consent != Consent::Accepted) {
         return std::nullopt;
     }
@@ -1204,8 +1206,23 @@ std::optional<Report> TakeOffer() {
     if (offered == reports.front().name) {
         return std::nullopt;
     }
-    WriteFile(g_dir / OfferedName, reports.front().name);
     return reports.front();
+}
+
+} // namespace
+
+std::optional<Report> PeekOffer() {
+    std::scoped_lock lk{g_state_mutex};
+    return PendingOfferLocked();
+}
+
+std::optional<Report> TakeOffer() {
+    std::scoped_lock lk{g_state_mutex};
+    auto report = PendingOfferLocked();
+    if (report) {
+        WriteFile(g_dir / OfferedName, report->name);
+    }
+    return report;
 }
 
 std::string Read(const Report& report) {

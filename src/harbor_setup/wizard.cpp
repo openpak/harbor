@@ -94,18 +94,6 @@ std::string CountFolders(const std::optional<std::vector<std::string>>& folders)
     return folders->size() == 1 ? "1 folder" : std::to_string(folders->size()) + " folders";
 }
 
-std::string Lower(std::string text) {
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return text;
-}
-
-std::string Megabytes(std::uint64_t bytes) {
-    char text[32];
-    std::snprintf(text, sizeof(text), "%.1f", static_cast<double>(bytes) / 1048576.0);
-    return text;
-}
-
 } // namespace
 
 Wizard::Wizard(Host& host_, std::filesystem::path record_path_, const Readiness& readiness,
@@ -742,52 +730,31 @@ bool Wizard::CanBrowseDrivers() const {
 }
 
 std::string Wizard::DownloadLead() const {
-    return CanBrowseDrivers()
-               ? "Choose from recent Turnip and Qualcomm releases on GitHub. Packages are filtered for "
-                 "your GPU; Android requirements are checked before installation. You can always "
-                 "switch back to the phone's driver."
-               : "Online downloads are not available for this GPU or Android version. You can still "
-                 "install a compatible AdrenoTools driver file.";
+    return DriverDownloadLead(device);
 }
 
 void Wizard::InstallDriverPackage(const std::string& location, const std::string& file_name) {
     // Worker thread.
-    auto flag = alive;
-    const auto finish = [this, flag](std::string message, Tone tone, std::optional<std::string> chosen) {
-        post([this, flag, message, tone, chosen] {
-            if (!*flag) {
-                return;
-            }
-            EndWork();
-            if (chosen) {
-                FillDriverChoices(*chosen);
-            }
-            ShowStatus(message, tone);
-            Notify();
-        });
-    };
+    FinishDriverInstall(HarborSetup::InstallDriverPackage(host, device, location, file_name));
+}
 
-    const auto package = host.InspectDriver(location);
-    if (!package.error.empty()) {
-        finish(package.error, Tone::Bad, std::nullopt);
-        return;
-    }
-    if (const auto problem = DriverPackageProblem(package.name, package.library_name, package.min_api, device);
-        !problem.empty()) {
-        host.DiscardDriver(package);
-        LOG_WARNING(Frontend, "harbor: driver {} refused: {}", file_name, problem);
-        finish(problem, Tone::Bad, std::nullopt);
-        return;
-    }
-    std::string error;
-    const auto installed = host.CommitDriver(package, &error);
-    if (!installed) {
-        finish(error.empty() ? "The driver could not be installed." : error, Tone::Bad, std::nullopt);
-        return;
-    }
-    LOG_INFO(Frontend, "harbor: driver {} installed", installed->id);
-    finish(installed->name + " is installed. It is chosen; the phone's driver stays one tap away.",
-           Tone::Ok, installed->id);
+void Wizard::FinishDriverInstall(const DriverInstall& result) {
+    // Worker thread.
+    auto flag = alive;
+    post([this, flag, result] {
+        if (!*flag) {
+            return;
+        }
+        EndWork();
+        if (result.installed) {
+            FillDriverChoices(result.installed->id);
+            ShowStatus(result.installed->name + " is installed. It is chosen; the phone's driver stays one tap away.",
+                       Tone::Ok);
+        } else {
+            ShowStatus(result.error, result.cancelled ? Tone::Warn : Tone::Bad);
+        }
+        Notify();
+    });
 }
 
 void Wizard::InstallDriverFile() {
@@ -814,33 +781,7 @@ void Wizard::BrowseDrivers() {
     }
     auto flag = alive;
     StartWork("Checking GitHub releases", true, [this, flag] {
-        DriverListing listing;
-        std::vector<std::string> errors;
-        for (const char* repository : DriverRepositories) {
-            if (cancel_requested) {
-                break;
-            }
-            std::string error;
-            const auto json = host.HttpGet(ReleasesUrl(repository), MaxReleasesResponse, cancel_requested, &error);
-            const std::string owner = std::string(repository).substr(0, std::string(repository).find('/'));
-            if (!json) {
-                errors.push_back(owner + ": " + error);
-                continue;
-            }
-            auto releases = ParseDriverReleases(*json, repository, device, &error);
-            if (!error.empty()) {
-                errors.push_back(owner + ": " + error);
-            }
-            listing.releases.insert(listing.releases.end(), releases.begin(), releases.end());
-        }
-        RankDriverListing(listing, device);
-        if (!errors.empty()) {
-            std::string notice;
-            for (const auto& e : errors) {
-                notice += (notice.empty() ? "" : " ") + e + (e.ends_with('.') ? "" : ".");
-            }
-            listing.notice = notice;
-        }
+        const auto listing = FetchDriverListing(host, device, cancel_requested);
         const bool cancelled = cancel_requested.load();
         post([this, flag, listing, cancelled] {
             if (!*flag) {
@@ -879,59 +820,18 @@ void Wizard::Download(size_t index) {
         return;
     }
     const auto release = downloads[index];
-    auto flag = alive;
-    StartWork("Downloading " + release.file_name, true, [this, flag, release] {
-        const auto fail = [this, flag](std::string message, Tone tone) {
-            post([this, flag, message, tone] {
-                if (!*flag) {
-                    return;
-                }
-                EndWork();
-                ShowStatus(message, tone);
-                Notify();
-            });
-        };
-        if (!AllowedDriverDownload(release.download_url) || release.size == 0 ||
-            release.size > MaxDriverDownload) {
-            fail("This is not a supported GitHub driver download.", Tone::Bad);
-            return;
-        }
-        const auto result = host.Download(
-            release.download_url, release.size,
+    StartWork("Downloading " + release.file_name, true, [this, release] {
+        FinishDriverInstall(DownloadDriver(
+            host, device, release,
             [this, &release](std::uint64_t received) {
-                ReportProgress("Downloading " + release.file_name + " (" + Megabytes(received) + " / " +
-                                   Megabytes(release.size) + " MB)",
+                ReportProgress(DownloadProgressText(release, received),
                                static_cast<double>(received) / static_cast<double>(release.size));
             },
-            cancel_requested);
-        if (cancel_requested) {
-            std::error_code ec;
-            std::filesystem::remove(result.path, ec);
-            fail("Download cancelled. Your selected driver is unchanged.", Tone::Warn);
-            return;
-        }
-        if (!result.error.empty()) {
-            fail("The driver could not be downloaded: " + result.error, Tone::Bad);
-            return;
-        }
-        const auto cleanup = [&] {
-            std::error_code ec;
-            std::filesystem::remove(result.path, ec);
-        };
-        if (result.size != release.size) {
-            cleanup();
-            fail("The download was incomplete. Try again.", Tone::Bad);
-            return;
-        }
-        if (release.digest && Lower(result.sha256) != Lower(release.digest->substr(7))) {
-            cleanup();
-            fail("The download checksum did not match GitHub's release asset. Try again.", Tone::Bad);
-            return;
-        }
-        cancellable = false;
-        ReportProgress("Installing " + release.file_name, std::nullopt);
-        InstallDriverPackage(result.path, release.file_name);
-        cleanup();
+            [this, &release] {
+                cancellable = false;
+                ReportProgress("Installing " + release.file_name, std::nullopt);
+            },
+            cancel_requested));
     });
 }
 

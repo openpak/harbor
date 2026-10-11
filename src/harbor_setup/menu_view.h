@@ -3,17 +3,23 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <borealis.hpp>
 
+#include "harbor_setup/driver_catalog.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
+#include "harbor_setup/wizard.h"
 
 namespace HarborSetup {
 
@@ -40,10 +46,12 @@ public:
     void Tick();
 
 private:
-    enum class Screen { Menu, Settings };
+    enum class Screen { Menu, Settings, Crash };
+    /// The crash-report page: the consent question, last time's report, or its text.
+    enum class CrashView { Consent, Offer, Text };
     enum class Category { Display, Controllers, Touch, Harbor };
     /// A sub-page inside the Settings pane.
-    enum class Sub { None, Player, Choice };
+    enum class Sub { None, Player, Choice, Driver, Downloads };
 
     struct Choice {
         std::string title;
@@ -60,6 +68,8 @@ private:
     brls::View* Header(const std::string& title);
     brls::View* Footer();
     brls::View* MenuBody();
+    brls::View* CrashBody();
+    std::string CrashTitle() const;
     brls::View* SettingsBody();
     void CategoryPane(brls::Box* pane);
     void DisplayPane(brls::Box* pane);
@@ -68,6 +78,8 @@ private:
     void TouchPane(brls::Box* pane);
     void HarborPane(brls::Box* pane);
     void ChoicePane(brls::Box* pane);
+    void DriverPane(brls::Box* pane);
+    void DownloadsPane(brls::Box* pane);
     brls::View* CapturePanel();
 
     brls::Box* Row(const std::string& key, const std::string& title, const std::string& value,
@@ -81,6 +93,18 @@ private:
 
     void StartCapture(const std::string& what, InputCapture::Kind kind,
                       std::function<void(const Common::ParamPackage&)> done);
+
+    // Graphics driver downloads: the setup's GitHub catalogue and installs (driver_recovery.h),
+    // run on a worker thread whose results come back to the menu's thread in Tick.
+    bool CanDownloadDrivers();
+    void OpenDownloads();
+    void BrowseDrivers();
+    void DownloadDriver(std::size_t index);
+    void CancelDriverWork();
+    void DriverWork(std::string stage, std::function<void()> work);
+    void DriverPost(std::function<void()> done);
+    void DriverProgress(std::string stage, std::optional<double> fraction);
+    void DriverStatus(std::string text, Tone tone);
 
     MenuHost& host;
     std::function<void(std::function<void()>)> close;
@@ -102,6 +126,25 @@ private:
     brls::Label* capture_label = nullptr;
     int capture_seconds = 0;
     int capture_step = -1;
+
+    CrashView crash_view = CrashView::Consent;
+    std::optional<Common::HarborCrash::Report> crash_report;
+
+    std::optional<DeviceInfo> driver_device;
+    std::vector<DriverRelease> driver_releases;
+    bool driver_listed = false;
+    bool driver_busy = false;
+    std::string driver_status;
+    Tone driver_tone = Tone::None;
+    std::string driver_installed; ///< downloaded and chosen here: "Restart now" restarts into it
+    std::atomic_bool driver_cancel{false};
+    std::atomic_bool driver_cancellable{false};
+    std::atomic<double> driver_fraction{-1.0};
+    std::mutex driver_mutex;
+    std::string driver_stage; ///< the progress words (guarded by driver_mutex)
+    std::vector<std::function<void()>> driver_posts; ///< guarded by driver_mutex
+    std::thread driver_worker;
+    brls::Label* driver_label = nullptr;
 
     brls::Box* root = nullptr;
     brls::ScrollingFrame* pane_scroll = nullptr;

@@ -145,6 +145,9 @@ u32 HardwareComposer::ComposeLocked(f32* out_speed_scale, Display& display,
     const bool host_screen_changed =
         !composition_stack.empty() && VideoCore::HostScreen::TakeChanged();
     if ((has_acquired_buffer || host_screen_changed) && !composition_stack.empty()) {
+        if (has_acquired_buffer) {
+            VideoCore::HostScreen::NoteGuestFrame();
+        }
         // Sort back-to-front: lower z first, higher z last so top-most draws last (on top).
         std::stable_sort(composition_stack.begin(), composition_stack.end(),
                          [&](const HwcLayer& l, const HwcLayer& r) { return l.z_index < r.z_index; });

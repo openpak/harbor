@@ -12,6 +12,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/openpak/session.h"
+#include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/menu_view.h"
 #include "harbor_setup/ui.h"
@@ -54,6 +55,10 @@ MenuActivity::MenuActivity(MenuHost& host_, std::function<void(std::function<voi
 
 MenuActivity::~MenuActivity() {
     brls::Application::getGlobalFocusChangeEvent()->unsubscribe(focus_subscription);
+    driver_cancel = true;
+    if (driver_worker.joinable()) {
+        driver_worker.join();
+    }
 }
 
 brls::View* MenuActivity::createContentView() {
@@ -91,8 +96,37 @@ void MenuActivity::onContentAvailable() {
 
 void MenuActivity::Show(MenuPage page) {
     capture.End();
-    sub = Sub::None;
     focus_key.clear();
+    if (page == MenuPage::CrashReport) {
+        sub = Sub::None;
+        screen = Screen::Crash;
+        if (Common::HarborCrash::GetConsent() == Common::HarborCrash::Consent::Unasked) {
+            crash_view = CrashView::Consent;
+            focus_key = "crash:decline"; // as the desktop's dialog had it: nothing kept unless chosen
+            LOG_INFO(Frontend, "harbor: asking whether to keep crash reports");
+        } else if (auto report = Common::HarborCrash::TakeOffer()) {
+            crash_report = std::move(report);
+            crash_view = CrashView::Offer;
+            focus_key = "crash:keep-report";
+            LOG_INFO(Frontend, "harbor: offering crash report {}", crash_report->name);
+        } else {
+            screen = Screen::Menu;
+            Render();
+            Close();
+            return;
+        }
+        Render();
+        return;
+    }
+    if (driver_busy) {
+        // A driver download goes on while the menu is closed: it opens on its progress again.
+        screen = Screen::Settings;
+        category = Category::Display;
+        sub = Sub::Downloads;
+        Render();
+        return;
+    }
+    sub = Sub::None;
     switch (page) {
     case MenuPage::Menu:
         screen = Screen::Menu;
@@ -115,6 +149,18 @@ void MenuActivity::Show(MenuPage page) {
         category = Category::Harbor;
         focus_key = "console:new";
         break;
+    case MenuPage::Drivers:
+        screen = Screen::Settings;
+        category = Category::Display;
+        if (host.HasDriverChoice()) {
+            sub = Sub::Driver;
+            pane_return_key = "driver";
+        } else {
+            focus_key = "category:display";
+        }
+        break;
+    case MenuPage::CrashReport:
+        break; // handled above
     }
     Render();
 }
@@ -134,6 +180,21 @@ void MenuActivity::Back() {
         Render();
         return;
     }
+    if (screen == Screen::Crash) {
+        if (crash_view == CrashView::Text) {
+            crash_view = CrashView::Offer;
+            focus_key = "crash:view";
+            Render();
+            return;
+        }
+        // Closed without an answer: the question comes again next time; until then nothing is kept.
+        if (crash_view == CrashView::Consent) {
+            LOG_INFO(Frontend, "harbor: crash-report question closed without an answer");
+        }
+        screen = Screen::Menu;
+        Close();
+        return;
+    }
     if (screen == Screen::Menu) {
         Close();
         return;
@@ -147,6 +208,22 @@ void MenuActivity::Back() {
     if (sub == Sub::Player) {
         sub = Sub::None;
         focus_key = "player:" + std::to_string(player);
+        Render();
+        return;
+    }
+    if (sub == Sub::Downloads) {
+        if (driver_busy) {
+            // Locked while a download runs: X cancels it.
+            return;
+        }
+        sub = Sub::Driver;
+        focus_key = "driver:download";
+        Render();
+        return;
+    }
+    if (sub == Sub::Driver) {
+        sub = Sub::None;
+        focus_key = "driver";
         Render();
         return;
     }
@@ -166,6 +243,19 @@ void MenuActivity::Back() {
 
 void MenuActivity::Tick() {
     frames++;
+    std::vector<std::function<void()>> posts;
+    std::string stage;
+    {
+        std::scoped_lock lk{driver_mutex};
+        posts.swap(driver_posts);
+        stage = driver_stage;
+    }
+    for (auto& post : posts) {
+        post();
+    }
+    if (driver_label && driver_busy && driver_label->getFullText() != stage) {
+        driver_label->setText(stage);
+    }
     if (capture.Active()) {
         if (auto param = capture.Poll()) {
             auto done = std::move(capture_done);
@@ -213,13 +303,19 @@ void MenuActivity::BindActions(brls::View* target) {
         Back();
         return true;
     }, true);
-    // HOME leaves the menu, as it leaves a console's settings.
+    // HOME leaves the menu, as it leaves a console's settings (not while a driver downloads).
     target->registerAction("Close", brls::BUTTON_GUIDE, [this](brls::View*) {
-        Close();
+        if (!driver_busy) {
+            Close();
+        }
         return true;
     }, true);
-    // X clears an assigned button or stick.
+    // X clears an assigned button or stick, and cancels a driver download.
     target->registerAction("Clear", brls::BUTTON_X, [this](brls::View*) {
+        if (driver_busy) {
+            CancelDriverWork();
+            return true;
+        }
         if (screen != Screen::Settings) {
             return true;
         }
@@ -263,6 +359,7 @@ void MenuActivity::Render() {
     pane_rows.clear();
     pane_scroll = nullptr;
     capture_label = nullptr;
+    driver_label = nullptr;
 
     auto* frame = new brls::Box(brls::Axis::COLUMN);
     frame->setDimensions(CanvasWidth, CanvasHeight);
@@ -271,6 +368,9 @@ void MenuActivity::Render() {
     if (screen == Screen::Menu) {
         frame->addView(Header("Harbor"));
         frame->addView(MenuBody());
+    } else if (screen == Screen::Crash) {
+        frame->addView(Header(CrashTitle()));
+        frame->addView(CrashBody());
     } else {
         frame->addView(Header("Harbor Settings"));
         frame->addView(SettingsBody());
@@ -292,7 +392,10 @@ void MenuActivity::Render() {
             }
         }
         for (auto* row : pane_rows) {
-            if (back) {
+            if (driver_busy && sub == Sub::Downloads) {
+                // Locked while a driver downloads.
+                row->setCustomNavigationRoute(brls::FocusDirection::LEFT, row);
+            } else if (back) {
                 row->setCustomNavigationRoute(brls::FocusDirection::LEFT, back);
             }
         }
@@ -381,12 +484,20 @@ brls::View* MenuActivity::Footer() {
         hint("B", "Cancel", [this] { Back(); });
         return bar;
     }
+    if (driver_busy) {
+        // Navigation is locked while a driver downloads; X cancels until it installs.
+        if (driver_cancellable) {
+            hint("X", "Cancel", [this] { CancelDriverWork(); });
+        }
+        return bar;
+    }
     const bool clearable = screen == Screen::Settings &&
                            (sub == Sub::Player || (sub == Sub::None && category == Category::Controllers));
     if (clearable) {
         hint("X", "Clear", [] { brls::Application::onControllerButtonPressed(brls::BUTTON_X, false); });
     }
-    hint("B", screen == Screen::Menu ? "Close" : "Back", [this] { Back(); });
+    const bool closes = screen == Screen::Menu || (screen == Screen::Crash && crash_view != CrashView::Text);
+    hint("B", closes ? "Close" : "Back", [this] { Back(); });
     hint("A", "OK", [] { brls::Application::onControllerButtonPressed(brls::BUTTON_A, false); });
     return bar;
 }
@@ -501,6 +612,141 @@ brls::View* MenuActivity::MenuBody() {
     return body;
 }
 
+// ---- Crash reports ----
+
+std::string MenuActivity::CrashTitle() const {
+    switch (crash_view) {
+    case CrashView::Consent:
+        return "Crash reports";
+    case CrashView::Offer:
+        return "Harbor crashed last time";
+    case CrashView::Text:
+        return crash_report ? crash_report->name : "Crash report";
+    }
+    return "Crash reports";
+}
+
+brls::View* MenuActivity::CrashBody() {
+    const auto& p = CurrentPalette();
+    const std::string device = host.IsAndroid() ? "phone" : "computer";
+
+    if (crash_view == CrashView::Text) {
+        // The report's text (already scrubbed), in parts the pad and the touch screen scroll through.
+        auto* frame = new brls::ScrollingFrame();
+        frame->setGrow(1);
+        auto* column = new brls::Box(brls::Axis::COLUMN);
+        column->setPadding(16, 40, 24, 40);
+        const std::string text = crash_report ? Common::HarborCrash::Read(*crash_report) : std::string{};
+        constexpr std::size_t LinesPerPart = 16;
+        constexpr std::size_t MaxLines = 4000;
+        std::size_t start = 0, lines = 0, part = 0;
+        std::string chunk;
+        while (start < text.size() && lines < MaxLines) {
+            const std::size_t end = std::min(text.find('\n', start), text.size());
+            chunk += (chunk.empty() ? "" : "\n") + text.substr(start, end - start);
+            start = end + 1;
+            lines++;
+            if (lines % LinesPerPart == 0 || start >= text.size() || lines == MaxLines) {
+                auto* box = new brls::Box(brls::Axis::COLUMN);
+                box->setFocusable(true);
+                box->setHideHighlight(true);
+                box->addView(MakeText(chunk, 15, p.ink, true));
+                // Borealis measures a wrapped label one leading short of what it draws.
+                box->setMarginBottom(6);
+                Remember(box, "crash:text:" + std::to_string(part++));
+                pane_rows.push_back(box);
+                column->addView(box);
+                chunk.clear();
+            }
+        }
+        if (part == 0) {
+            auto* box = new brls::Box(brls::Axis::COLUMN);
+            box->setFocusable(true);
+            box->setHideHighlight(true);
+            box->addView(MakeText("The report could not be read.", 18, p.ink2, true));
+            Remember(box, "crash:text:0");
+            pane_rows.push_back(box);
+            column->addView(box);
+        }
+        frame->setContentView(column);
+        return frame;
+    }
+
+    auto* body = new brls::Box(brls::Axis::COLUMN);
+    body->setGrow(1);
+    body->setAlignItems(brls::AlignItems::CENTER);
+    body->setJustifyContent(brls::JustifyContent::CENTER);
+    auto* column = new brls::Box(brls::Axis::COLUMN);
+    column->setWidth(760);
+    const auto paragraph = [&](const std::string& text, float size, NVGcolor colour, float top) {
+        auto* label = MakeText(text, size, colour, true);
+        label->setMargins(top, 20, 0, 20);
+        column->addView(label);
+    };
+    auto* list = new brls::Box(brls::Axis::COLUMN);
+    list->setMarginTop(24);
+    list->setLineTop(1);
+    list->setLineColor(p.line);
+
+    if (crash_view == CrashView::Consent) {
+        paragraph("Keep crash reports on this " + device + "?", 24, p.ink, 0);
+        paragraph("If Harbor or a game crashes, Harbor can save a report on this " + device +
+                      ": what crashed and the last lines of its log, with account ids, names, tokens and "
+                      "typed text removed. Nothing is sent anywhere. At the next start Harbor offers the "
+                      "report: you can read it, " +
+                      (host.IsAndroid() ? std::string("share it yourself") : std::string("save a copy to share it yourself")) +
+                      ", or delete it.",
+                  18, p.ink2, 14);
+        const auto answer = [this](bool accepted) {
+            return [this, accepted] {
+                host.SetCrashReportConsent(accepted);
+                LOG_INFO(Frontend, "harbor: crash reports {}", accepted ? "kept from now on" : "not kept");
+                screen = Screen::Menu;
+                Close();
+            };
+        };
+        list->addView(Row("crash:keep", "Keep reports", "", answer(true)));
+        list->addView(Row("crash:decline", "Don't keep", "", answer(false)));
+        column->addView(list);
+        auto* note = MakeText("Closing this asks again at the next start; until then nothing is kept. Harbor "
+                              "Settings › Harbor changes the answer later.",
+                              16, p.muted, true);
+        note->setMargins(14, 20, 0, 20);
+        column->addView(note);
+    } else {
+        const auto& report = *crash_report;
+        paragraph("Harbor saved a crash report: " + report.summary + " (" + report.when + ").", 22, p.ink, 0);
+        paragraph("It is kept on this " + device + " only; nothing has been sent. View it, " +
+                      (host.IsAndroid() ? std::string("share it yourself") : std::string("save a copy to share it yourself")) +
+                      ", or delete it.",
+                  18, p.ink2, 14);
+        list->addView(Row("crash:view", "View", "", [this] {
+            crash_view = CrashView::Text;
+            focus_key.clear();
+            Render();
+        }, true, true));
+        list->addView(Row("crash:share", host.ShareCrashReportLabel(), "", [this] {
+            const auto shared = *crash_report;
+            LOG_INFO(Frontend, "harbor: crash report {} passed on by the user", shared.name);
+            screen = Screen::Menu;
+            Close([this, shared] { host.ShareCrashReport(shared); });
+        }));
+        list->addView(Row("crash:delete", "Delete", "", [this] {
+            Common::HarborCrash::Delete(*crash_report);
+            LOG_INFO(Frontend, "harbor: crash report {} deleted", crash_report->name);
+            screen = Screen::Menu;
+            Close();
+        }));
+        list->addView(Row("crash:keep-report", "Keep", "", [this] {
+            screen = Screen::Menu;
+            Close();
+        }));
+        column->addView(list);
+    }
+    body->addView(column);
+    return body;
+}
+
 // ---- Settings ----
 
 brls::View* MenuActivity::SettingsBody() {
@@ -569,6 +815,14 @@ void MenuActivity::CategoryPane(brls::Box* pane) {
         ChoicePane(pane);
         return;
     }
+    if (sub == Sub::Driver) {
+        DriverPane(pane);
+        return;
+    }
+    if (sub == Sub::Downloads) {
+        DownloadsPane(pane);
+        return;
+    }
     if (sub == Sub::Player) {
         PlayerPane(pane);
         return;
@@ -632,24 +886,19 @@ void MenuActivity::DisplayPane(brls::Box* pane) {
                              [this](bool on) { host.SetShowDeviceLine(on); }, host.ShowFps()));
     }
     if (host.HasDriverChoice()) {
-        const auto drivers = host.Drivers();
         const auto current = host.CurrentDriver();
         std::string current_name = "The phone's own";
-        Choice next{.title = "Graphics driver", .current = current};
-        for (const auto& driver : drivers) {
-            const auto label = driver.detail.empty() ? driver.label : driver.label + " (" + driver.detail + ")";
-            next.options.emplace_back(driver.id, label);
+        for (const auto& driver : host.Drivers()) {
             if (driver.id == current) {
                 current_name = driver.label;
             }
         }
-        next.chosen = [this, current](const std::string& id) {
-            if (id != current) {
-                // A driver loads when the process starts: Harbor restarts into the console.
-                Close([this, id] { host.ChooseDriver(id); });
-            }
-        };
-        pane->addView(Row("driver", "Graphics driver", current_name, [this, next] { OpenChoice(next); }, true, true));
+        pane->addView(Row("driver", "Graphics driver", current_name, [this] {
+            pane_return_key = "driver";
+            sub = Sub::Driver;
+            focus_key.clear();
+            Render();
+        }, true, true));
     }
 
     pane->addView(Heading("Frame generation (experimental)"));
@@ -914,6 +1163,284 @@ void MenuActivity::HarborPane(brls::Box* pane) {
     pane->addView(Heading("About"));
     pane->addView(Info("about:version", "Version", Common::g_build_version));
     pane->addView(Info("about:licence", "Licence", "AGPL-3.0-only"));
+}
+
+// ---- Graphics drivers ----
+
+void MenuActivity::DriverPane(brls::Box* pane) {
+    const auto& p = CurrentPalette();
+    auto* title = MakeText("Graphics driver", 22, p.ink);
+    title->setMargins(8, 20, 12, 20);
+    pane->addView(title);
+    const auto current = host.CurrentDriver();
+    for (const auto& driver : host.Drivers()) {
+        const auto label = driver.detail.empty() ? driver.label : driver.label + " (" + driver.detail + ")";
+        auto* row = Row("driver:" + driver.id, label, "", [this, id = driver.id, current] {
+            if (id != current) {
+                // A driver loads when the process starts: Harbor restarts into the console.
+                Close([this, id] { host.ChooseDriver(id); });
+            }
+        });
+        if (driver.id == current) {
+            auto* tick = new Shape(16, 16, [](NVGcontext* vg, float x, float y, float w, float h) {
+                PaintLineGlyph(vg, x, y, w, h, CheckGlyph, CurrentPalette().accent);
+            });
+            tick->setMarginLeft(12);
+            row->addView(tick);
+        }
+        pane->addView(row);
+    }
+    if (host.DriverHost()) {
+        pane->addView(Row("driver:download", "Download a driver…", "", [this] { OpenDownloads(); }, true, true));
+    }
+    pane->addView(Note("The Vulkan driver the console starts with. Choosing an installed driver restarts "
+                       "Harbor with it; a downloaded driver is chosen and used from the console's next "
+                       "start."));
+}
+
+bool MenuActivity::CanDownloadDrivers() {
+    if (!host.DriverHost()) {
+        return false;
+    }
+    if (!driver_device) {
+        driver_device = host.DriverDevice();
+    }
+    return CanBrowseDrivers(*driver_device);
+}
+
+void MenuActivity::OpenDownloads() {
+    sub = Sub::Downloads;
+    focus_key.clear();
+    // The catalogue is fetched when the page is first opened, never before (G4.GPU.3).
+    if (!driver_listed && !driver_busy && CanDownloadDrivers()) {
+        BrowseDrivers();
+        return;
+    }
+    Render();
+}
+
+void MenuActivity::DownloadsPane(brls::Box* pane) {
+    const auto& p = CurrentPalette();
+    auto* title = MakeText("Download a driver", 22, p.ink);
+    title->setMargins(8, 20, 4, 20);
+    pane->addView(title);
+    const bool can = CanDownloadDrivers();
+    pane->addView(Note(DriverDownloadLead(driver_device.value_or(DeviceInfo{}))));
+
+    if (driver_busy) {
+        auto* panel = new brls::Box(brls::Axis::COLUMN);
+        panel->setMargins(24, 20, 16, 20);
+        std::string stage;
+        {
+            std::scoped_lock lk{driver_mutex};
+            stage = driver_stage;
+        }
+        driver_label = MakeText(stage, 18, p.ink, true);
+        panel->addView(driver_label);
+        auto* bar = new Shape(640, 8, [this](NVGcontext* vg, float x, float y, float w, float h) {
+            const auto& palette = CurrentPalette();
+            nvgBeginPath(vg);
+            nvgRoundedRect(vg, x, y, w, h, h / 2);
+            nvgFillColor(vg, palette.line);
+            nvgFill(vg);
+            const double fraction = driver_fraction.load();
+            float start = 0, width = 0;
+            if (fraction >= 0) {
+                width = w * static_cast<float>(std::clamp(fraction, 0.0, 1.0));
+            } else {
+                // The length is not known yet: a block sweeps along the track.
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+                width = w / 4;
+                start = (w - width) * static_cast<float>((ms % 1600) / 1600.0);
+            }
+            if (width > 0) {
+                nvgBeginPath(vg);
+                nvgRoundedRect(vg, x + start, y, width, h, h / 2);
+                nvgFillColor(vg, palette.accent);
+                nvgFill(vg);
+            }
+        });
+        bar->setMarginTop(14);
+        panel->addView(bar);
+        pane->addView(panel);
+        if (driver_cancellable) {
+            pane->addView(Row("download:cancel", "Cancel", "", [this] { CancelDriverWork(); }));
+        } else {
+            // Installing: nothing to choose, the panel holds the focus.
+            panel->setFocusable(true);
+            panel->setHideHighlight(true);
+            Remember(panel, "download:busy");
+            pane_rows.push_back(panel);
+        }
+        return;
+    }
+
+    if (!driver_status.empty()) {
+        const NVGcolor colour = driver_tone == Tone::Bad ? p.bad : driver_tone == Tone::Warn ? p.warn : p.ok;
+        auto* status = MakeText(driver_status, 18, colour, true);
+        status->setMargins(12, 20, 4, 20);
+        pane->addView(status);
+    }
+    if (!driver_installed.empty()) {
+        pane->addView(Row("download:restart", "Restart now", "", [this, id = driver_installed] {
+            Close([this, id] { host.ChooseDriver(id); });
+        }));
+    }
+    pane->addView(Row("download:browse", driver_listed ? "Refresh GitHub drivers" : "Browse GitHub drivers", "",
+                      [this] { BrowseDrivers(); }, can));
+    if (driver_releases.empty()) {
+        return;
+    }
+    pane->addView(Heading("Available on GitHub"));
+    for (std::size_t i = 0; i < driver_releases.size(); i++) {
+        const auto& release = driver_releases[i];
+        auto* row = new brls::Box(brls::Axis::ROW);
+        row->setMinHeight(64);
+        row->setPadding(10, 20, 10, 20);
+        row->setAlignItems(brls::AlignItems::CENTER);
+        row->setLineBottom(1);
+        row->setLineColor(p.line);
+        row->setFocusable(true);
+        row->setHighlightCornerRadius(0);
+        row->setHighlightPadding(-3);
+        row->registerClickAction([this, i](brls::View*) {
+            DownloadDriver(i);
+            return true;
+        });
+        row->addGestureRecognizer(new brls::TapGestureRecognizer(row));
+        auto* text = new brls::Box(brls::Axis::COLUMN);
+        text->setGrow(1);
+        text->setShrink(1);
+        auto* name = MakeText(release.title, 20, release.recommended ? p.accent : p.ink, true);
+        text->addView(name);
+        auto* detail = MakeText(release.Detail(), 15, p.ink2, true);
+        detail->setMarginTop(2);
+        text->addView(detail);
+        auto* file = MakeText(release.file_name, 14, p.muted, true);
+        text->addView(file);
+        row->addView(text);
+        auto* action = MakeText("Download", 18, p.accent);
+        action->setMarginLeft(12);
+        row->addView(action);
+        Remember(row, "download:" + release.download_url);
+        pane_rows.push_back(row);
+        pane->addView(row);
+    }
+}
+
+void MenuActivity::DriverPost(std::function<void()> done) {
+    std::scoped_lock lk{driver_mutex};
+    driver_posts.push_back(std::move(done));
+}
+
+void MenuActivity::DriverProgress(std::string stage, std::optional<double> fraction) {
+    driver_fraction = fraction.value_or(-1.0);
+    std::scoped_lock lk{driver_mutex};
+    driver_stage = std::move(stage);
+}
+
+void MenuActivity::DriverStatus(std::string text, Tone tone) {
+    driver_status = std::move(text);
+    driver_tone = driver_status.empty() ? Tone::None : tone;
+}
+
+void MenuActivity::DriverWork(std::string stage, std::function<void()> work) {
+    if (driver_worker.joinable()) {
+        driver_worker.join();
+    }
+    driver_busy = true;
+    driver_cancel = false;
+    driver_cancellable = true;
+    DriverProgress(std::move(stage), std::nullopt);
+    DriverStatus({}, Tone::None);
+    driver_worker = std::thread(std::move(work));
+    focus_key = "download:cancel";
+    Render();
+}
+
+void MenuActivity::CancelDriverWork() {
+    if (driver_busy && driver_cancellable) {
+        LOG_INFO(Frontend, "harbor: menu: driver download cancelled by the user");
+        driver_cancel = true;
+    }
+}
+
+void MenuActivity::BrowseDrivers() {
+    Host* store = host.DriverHost();
+    if (!store || driver_busy || !CanDownloadDrivers()) {
+        return;
+    }
+    const DeviceInfo device = *driver_device;
+    DriverWork("Checking GitHub releases", [this, store, device] {
+        auto listing = FetchDriverListing(*store, device, driver_cancel);
+        const bool cancelled = driver_cancel.load();
+        DriverPost([this, listing = std::move(listing), cancelled] {
+            driver_busy = false;
+            driver_cancellable = false;
+            if (cancelled) {
+                DriverStatus("Cancelled. Your selected driver is unchanged.", Tone::Warn);
+            } else {
+                driver_releases = listing.releases;
+                driver_listed = true;
+                if (listing.notice) {
+                    DriverStatus(*listing.notice, Tone::Warn);
+                } else if (driver_releases.empty()) {
+                    DriverStatus("No matching releases were found. You can keep the phone's driver.", Tone::Warn);
+                }
+            }
+            focus_key = driver_releases.empty() ? "download:browse" : "download:" + driver_releases.front().download_url;
+            Render();
+        });
+    });
+}
+
+void MenuActivity::DownloadDriver(std::size_t index) {
+    Host* store = host.DriverHost();
+    if (!store || driver_busy || index >= driver_releases.size() || !driver_device) {
+        return;
+    }
+    const DriverRelease release = driver_releases[index];
+    const DeviceInfo device = *driver_device;
+    DriverWork("Downloading " + release.file_name, [this, store, device, release] {
+        auto result = HarborSetup::DownloadDriver(
+            *store, device, release,
+            [this, &release](std::uint64_t received) {
+                DriverProgress(DownloadProgressText(release, received),
+                               static_cast<double>(received) / static_cast<double>(release.size));
+            },
+            [this, &release] {
+                driver_cancellable = false;
+                DriverProgress("Installing " + release.file_name, std::nullopt);
+                DriverPost([this] { Render(); }); // the Cancel row goes
+            },
+            driver_cancel);
+        std::string select_error;
+        const bool selected = result.installed && store->SelectDriver(result.installed->id, &select_error);
+        DriverPost([this, result = std::move(result), selected, select_error] {
+            driver_busy = false;
+            driver_cancellable = false;
+            if (result.installed && selected) {
+                LOG_INFO(Frontend, "harbor: menu: driver {} downloaded and chosen for the next start",
+                         result.installed->id);
+                driver_installed = result.installed->id;
+                DriverStatus(result.installed->name + " is installed and chosen. The console uses it from its next "
+                                                      "start.",
+                             Tone::Ok);
+                focus_key = "download:restart";
+            } else if (result.installed) {
+                DriverStatus(result.installed->name + " is installed, but it could not be chosen: " +
+                                 (select_error.empty() ? "the choice could not be saved." : select_error),
+                             Tone::Bad);
+                focus_key = "download:browse";
+            } else {
+                DriverStatus(result.error, result.cancelled ? Tone::Warn : Tone::Bad);
+                focus_key = "download:browse"; // next to the status, at the top
+            }
+            Render();
+        });
+    });
 }
 
 // ---- Assigning a button ----

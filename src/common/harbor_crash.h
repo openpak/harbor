@@ -81,6 +81,9 @@ std::vector<Report> List();
 /// at most once. Nothing when the consent is not given.
 std::optional<Report> TakeOffer();
 
+/// The report TakeOffer would give, without marking it offered.
+std::optional<Report> PeekOffer();
+
 /// The report's text (already scrubbed), empty when it cannot be read.
 std::string Read(const Report& report);
 

@@ -19,6 +19,7 @@
 #include "common/harbor_crash.h"
 #include "common/param_package.h"
 #include "common/settings_input.h"
+#include "harbor_setup/device_check.h"
 
 namespace Core {
 class System;
@@ -29,6 +30,8 @@ class InputSubsystem;
 }
 
 namespace HarborSetup {
+
+class Host;
 
 /// One entry of a list the frontend fills (graphics drivers).
 struct MenuChoice {
@@ -125,6 +128,16 @@ public:
     }
     /// Chooses the driver HOME and every title run with (the process restarts).
     virtual void ChooseDriver(const std::string& id) {}
+    /// The setup's driver store and network (host.h), through which the menu downloads drivers
+    /// from the setup's GitHub catalogue (driver_recovery.h); null where there is none. Its calls
+    /// are made from a worker thread of the menu's.
+    virtual Host* DriverHost() {
+        return nullptr;
+    }
+    /// The device the catalogue is filtered for (its GPU, Android version and ABIs).
+    virtual DeviceInfo DriverDevice() {
+        return {};
+    }
 
     // Controllers and Input.
     /// Android's accessibility HOME key for controllers without one: shown while it is off.
@@ -181,6 +194,12 @@ public:
     virtual void SetCrashReportConsent(bool consent) {
         Common::HarborCrash::SetCrashReportConsent(consent);
     }
+    /// The user's own way to pass a crash report on: Android's share sheet, a saved copy on the
+    /// desktop. Harbor itself never sends one.
+    virtual std::string ShareCrashReportLabel() {
+        return IsAndroid() ? "Share" : "Save a copy…";
+    }
+    virtual void ShareCrashReport(const Common::HarborCrash::Report& report) {}
 };
 
 /// Where the menu opens.
@@ -192,6 +211,11 @@ enum class MenuPage {
     /// Harbor › This console, opened when OpenPak refuses this console's identity because another
     /// console is live with it (a copied NAND): it offers "Make this a new console".
     Console,
+    /// Display & Performance › Graphics driver (Adreno): installed drivers and downloads.
+    Drivers,
+    /// Crash reports: asked once whether to keep them, or last time's report offered (view,
+    /// share, delete). MenuOfferCrashReport opens it.
+    CrashReport,
 };
 
 /// Once per process, before the first Open. The host outlives the menu.
@@ -207,5 +231,11 @@ bool MenuIsOpen();
 void MenuBack();
 /// At shutdown: the menu's thread ends (its GL context and Borealis go with the process).
 void MenuShutdown();
+
+/// Once per process, when the console starts (after MenuSetHost): when the crash-report question
+/// has not been answered, or a crash left a report not offered yet, the CrashReport page opens as
+/// soon as the console's picture is on the screen (never earlier: a page that is not seen must not
+/// take the console's input), and while the menu is closed.
+void MenuOfferCrashReport();
 
 } // namespace HarborSetup

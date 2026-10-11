@@ -14,8 +14,11 @@
 
 #include "common/android/android_common.h"
 #include "common/android/id_cache.h"
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "frontend_common/joycon_rails.h"
+#include "harbor_setup/device_check.h"
+#include "harbor_setup/host.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
 #include "harbor_setup_android.h"
@@ -159,6 +162,12 @@ public:
     void ChooseDriver(const std::string& id) override {
         Call("chooseDriver", id);
     }
+    HarborSetup::Host* DriverHost() override {
+        return HasDriverChoice() ? &Harbor::DriverHost() : nullptr;
+    }
+    HarborSetup::DeviceInfo DriverDevice() override {
+        return Harbor::Device();
+    }
 
     bool HasControllerHomeKey() override {
         return true;
@@ -208,6 +217,10 @@ public:
         Call("consoleAction", name);
     }
 
+    void ShareCrashReport(const Common::HarborCrash::Report& report) override {
+        Call("shareCrashReport", Common::FS::PathToUTF8String(report.path) + "\n" + report.name);
+    }
+
     void HostNotice(const std::string& text) override {
         LOG_INFO(Frontend, "harbor: notice: {}", text);
         // Notices come from guest service code, which runs on a Fiber: JNI there takes the process
@@ -236,6 +249,8 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initMenu(JNIE
         static AndroidMenuHost host;
         menu_host = &host;
         HarborSetup::MenuSetHost(host);
+        // The crash-report question, or last time's report, once the console's picture is up.
+        HarborSetup::MenuOfferCrashReport();
     });
     HARBOR_CRUMB("menu: initMenu done");
 }

@@ -38,6 +38,20 @@ bool Active() {
 }
 
 namespace {
+std::atomic_bool guest_frame{false};
+} // namespace
+
+void NoteGuestFrame() {
+    if (!guest_frame.load(std::memory_order_relaxed)) {
+        guest_frame = true;
+    }
+}
+
+bool GuestFrameShown() {
+    return guest_frame.load();
+}
+
+namespace {
 std::atomic_bool has_overlay{false};
 } // namespace
 

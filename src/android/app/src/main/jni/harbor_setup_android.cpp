@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include <jni.h>
 
@@ -398,6 +399,15 @@ void StartWithJoyconsAttached() {
                        "Player 1 disconnected)");
 }
 
+HarborSetup::Host& DriverHost() {
+    static AndroidHost host;
+    return host;
+}
+
+const HarborSetup::DeviceInfo& Device() {
+    return HarborDevice();
+}
+
 void SetJoyconsDetached(Core::HID::HIDCore& hid, bool detached) {
     using Core::HID::NpadIdType;
     using Core::HID::NpadStyleIndex;
@@ -719,6 +729,90 @@ JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_insta
     const std::atomic_bool cancel{false};
     const auto result = HarborSetup::InstallRecommendedDriver(host, HarborDevice(), cancel);
     return Common::Android::ToJStringArray(env, {result.id, result.name, result.error});
+}
+
+// The stopped screen's driver downloads: the setup's catalogue (driver_recovery.h) behind blocking
+// calls made from a Java worker thread, with the progress polled by the screen.
+namespace {
+std::mutex catalogue_mutex;
+std::vector<DriverRelease> catalogue;
+std::string catalogue_stage;
+std::atomic_bool catalogue_cancel{false};
+} // namespace
+
+/// Whether the GitHub catalogue is offered on this phone (an Adreno model, Android 9+, arm64).
+JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_canBrowseDrivers(JNIEnv*, jobject) {
+    return HarborSetup::CanBrowseDrivers(HarborDevice()) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_driverDownloadLead(JNIEnv* env, jobject) {
+    return Common::Android::ToJString(env, HarborSetup::DriverDownloadLead(HarborDevice()));
+}
+
+/// Fetches the catalogue: [notice, then title, detail, file name, recommended ("1" or "") per
+/// package]. Blocking.
+JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_driverCatalogue(JNIEnv* env, jobject) {
+    catalogue_cancel = false;
+    {
+        std::scoped_lock lk{catalogue_mutex};
+        catalogue_stage = "Checking GitHub releases";
+    }
+    auto listing = HarborSetup::FetchDriverListing(Harbor::DriverHost(), HarborDevice(), catalogue_cancel);
+    std::vector<std::string> out{catalogue_cancel ? "Cancelled. Your selected driver is unchanged."
+                                                  : listing.notice.value_or("")};
+    for (const auto& release : listing.releases) {
+        out.insert(out.end(), {release.title, release.Detail(), release.file_name, release.recommended ? "1" : ""});
+    }
+    std::scoped_lock lk{catalogue_mutex};
+    catalogue = std::move(listing.releases);
+    return Common::Android::ToJStringArray(env, out);
+}
+
+/// Downloads, installs and chooses a package of the last catalogue: [id, name, error, cancelled].
+/// Blocking; the progress is read with driverProgress.
+JNIEXPORT jobjectArray JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_downloadDriver(JNIEnv* env, jobject,
+                                                                                         jint index) {
+    DriverRelease release;
+    {
+        std::scoped_lock lk{catalogue_mutex};
+        if (index < 0 || static_cast<std::size_t>(index) >= catalogue.size()) {
+            return Common::Android::ToJStringArray(env, {"", "", "This driver is no longer listed.", ""});
+        }
+        release = catalogue[static_cast<std::size_t>(index)];
+        catalogue_stage = "Downloading " + release.file_name;
+    }
+    catalogue_cancel = false;
+    auto& host = Harbor::DriverHost();
+    const auto result = HarborSetup::DownloadDriver(
+        host, HarborDevice(), release,
+        [&release](std::uint64_t received) {
+            std::scoped_lock lk{catalogue_mutex};
+            catalogue_stage = HarborSetup::DownloadProgressText(release, received);
+        },
+        [&release] {
+            std::scoped_lock lk{catalogue_mutex};
+            catalogue_stage = "Installing " + release.file_name;
+        },
+        catalogue_cancel);
+    if (!result.installed) {
+        return Common::Android::ToJStringArray(env, {"", "", result.error, result.cancelled ? "1" : ""});
+    }
+    std::string error;
+    if (!host.SelectDriver(result.installed->id, &error)) {
+        return Common::Android::ToJStringArray(
+            env, {"", "", error.empty() ? "The driver choice could not be saved." : error, ""});
+    }
+    LOG_INFO(Frontend, "harbor: stopped screen: driver {} downloaded and chosen", result.installed->id);
+    return Common::Android::ToJStringArray(env, {result.installed->id, result.installed->name, "", ""});
+}
+
+JNIEXPORT jstring JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_driverProgress(JNIEnv* env, jobject) {
+    std::scoped_lock lk{catalogue_mutex};
+    return Common::Android::ToJString(env, catalogue_stage);
+}
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_cancelDriverWork(JNIEnv*, jobject) {
+    catalogue_cancel = true;
 }
 
 } // extern "C"

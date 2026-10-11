@@ -66,7 +66,7 @@ Written to `<run>/control` (the harness thread logs each one as `harbor-control:
 | `key <name>` | one key: `Enter`, `Backspace`, `Tab`, `Escape`, `Space`, `Up`, `Down`, `Left`, `Right`, `Delete`, `Home`, `End` |
 | `detach` / `attach` | Joy-Cons off / back on the rails: Handheld disconnects and Player 1 connects as dual Joy-Con, and back (F7 in the window toggles it); logs `harbor: Joy-Cons detached ...` |
 | `screenshot <png>` | renderer screenshot (frame only, no window chrome) |
-| `menu <name>` | the Harbor menu, drawn on the console's screen (screenshots show it): `harbor` (the menu), `settings`, `frame-gen` (Display & Performance), `controllers`, `back`, `close`; and the console entries `backup`, `restore`, `new-console`, whose host dialogs then take `key` and `type` |
+| `menu <name>` | the Harbor menu, drawn on the console's screen (screenshots show it): `harbor` (the menu), `settings`, `frame-gen` (Display & Performance), `controllers`, `drivers` (Graphics driver, with a test driver store), `crash-reports` (the crash-report question or last time's report, when there is one), `back`, `close`; and the console entries `backup`, `restore`, `new-console`, whose host dialogs then take `key` and `type` |
 | `hostkey <name> [ms]` | a key as the render window passes it on (the keyboard engine: controller mappings and the Harbor menu, which reads Enter, Space, Escape, Backspace, the arrows and X), not the guest's USB keyboard: `Enter`, `Escape`, `Backspace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Tab`, a letter or a digit |
 | `pad plug` / `pad unplug` | an SDL virtual gamepad, "Harbor test pad", that Eden's SDL driver finds as it finds a real pad (its own GUID): for press-to-assign, per-controller mappings and reconnects |
 | `pad tap <button> [ms]`, `pad down <button>`, `pad up <button>` | its buttons by SDL's names (`a b x y back guide start leftstick rightstick leftshoulder rightshoulder dpup dpdown dpleft dpright misc1`) or numbers |
@@ -111,7 +111,11 @@ variables answer its pickers and text fields without a dialog or a keyboard, in 
 | `HARBOR_SETUP_TEXT="<file>\|<n>\|=<text>\|..."` | the next text fields (the OpenPak account page): `<n>` is line `n` of `<file>`, only the value of a `key=value` line; `=<text>` is the text itself |
 | `HARBOR_SETUP_AUTO=1` | walks the wizard by itself: Next where it can, the next picker where a page needs a file or folder, Skip (Later) on the driver and account pages, then Start Harbor |
 
-`run-desktop.sh` passes these three on from its own environment. A first run end to end:
+`run-desktop.sh` passes these three on from its own environment, and also `HARBOR_TEST_DRIVER_STORE=<dir>`:
+the console's Harbor menu then has a graphics driver store in `<dir>`, as on an Adreno 650 phone on
+Android 12 (API 31), so the Graphics driver page and the setup's GitHub catalogue (real HTTPS
+downloads, checked and installed into `<dir>`, the choice in `<dir>/selected`) can be checked on a PC
+(`menu drivers`). The desktop never loads those drivers. A first run end to end:
 
 ```
 HARBOR_SETUP_AUTO=1 HARBOR_SETUP_PICKS="$SCR/run/<name>/games" scripts/harbor/run-desktop.sh <name> --fresh --console

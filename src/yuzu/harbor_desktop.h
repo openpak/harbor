@@ -40,12 +40,6 @@ Settings::ResolutionSetup AutoResolutionFor(int pixel_width, int pixel_height, b
 /// (MIT-licensed Ryujinx base).
 std::array<u8, 3> LetterboxColour(Core::System& system, bool* known);
 
-/// First console start: whether to keep crash reports on this computer (off until accepted).
-void AskCrashConsent(QWidget* parent);
-
-/// The newest crash report not offered yet, if any: view, save a copy, or delete it.
-void OfferLastCrashReport(QWidget* parent);
-
 /// Whether Harbor's own screens are dark: the console's colour set while it runs, its saved one
 /// while it is stopped, the desktop's before the console has booted once. Behaviour follows the
 /// Ryujinx Harbor (MIT-licensed Ryujinx base), App.FollowConsoleTheme.
