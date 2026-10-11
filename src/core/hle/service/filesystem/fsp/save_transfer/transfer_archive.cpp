@@ -24,9 +24,9 @@ std::span<const u8> Bytes(const InitialDataContent& content) {
 
 } // namespace
 
-std::array<u8, 0x20> MakeAad(u64 application_id, u64 archive_id) {
+std::array<u8, 0x20> MakeAad(u64 nsa_id, u64 archive_id) {
     std::array<u8, 0x20> aad{};
-    std::memcpy(aad.data(), &application_id, 8);
+    std::memcpy(aad.data(), &nsa_id, 8);
     std::memcpy(aad.data() + 8, &archive_id, 8);
     return aad;
 }

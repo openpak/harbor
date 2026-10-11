@@ -66,6 +66,8 @@ public:
     virtual HttpResponse Request(const std::string& method, const std::string& host,
                                  const std::string& path, const std::string& body,
                                  const Headers& headers = {}) = 0;
+    /// Account identifier bound into initial data, also sent as X-NSA-ID.
+    virtual std::uint64_t NetworkServiceAccountId() = 0;
     /// The dauth device token for olsc's client (the policy request's `dtoken`); empty when dauth
     /// refused.
     virtual std::string DeviceToken() = 0;

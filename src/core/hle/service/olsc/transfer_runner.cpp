@@ -60,6 +60,10 @@ public:
         return {response.status, response.body};
     }
 
+    std::uint64_t NetworkServiceAccountId() override {
+        return OpenPak::Session::NetworkServiceAccountId(uid);
+    }
+
     std::string DeviceToken() override {
         // ponytail: one dauth fetch per task; a task outliving the token's day is not a case.
         if (device_token.empty()) {

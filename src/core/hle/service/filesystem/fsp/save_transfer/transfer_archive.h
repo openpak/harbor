@@ -56,8 +56,8 @@ static_assert(offsetof(InitialDataContent, aad) == 0x1020);
 static_assert(offsetof(InitialDataContent, hash_salt) == 0x1040);
 static_assert(offsetof(InitialDataContent, is_integrity_seed_enabled) == 0x1260);
 
-/// The 32-byte AAD olsc sets and checks: {application id, archive id, 0, 0}.
-std::array<u8, 0x20> MakeAad(u64 application_id, u64 archive_id);
+/// The 32-byte AAD olsc sets and checks: {network service account id, archive id, 0, 0}.
+std::array<u8, 0x20> MakeAad(u64 nsa_id, u64 archive_id);
 
 /// What the exporter archives: the save image stream (the codec's storages concatenated) and
 /// the save's metadata.

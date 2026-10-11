@@ -596,6 +596,8 @@ public:
     bool delta_sent_seed = false;
     std::uint64_t next_id = 100;
 
+    std::uint64_t nsa_id = 0x1122334455667788ULL;
+    std::uint64_t NetworkServiceAccountId() override { return nsa_id; }
     std::string DeviceToken() override { return "dtok"; }
 
     tr::HttpResponse Request(const std::string& method, const std::string& host,
@@ -895,6 +897,17 @@ void TransferFlowChecks() {
           "an upload creates every component (meta included), PUTs them and finishes");
     Check(server.versions[0].key_seed == tr::Base64Url(harbor_a.own_seed),
           "finish_upload carries the exporter's key seed and MAC");
+    const auto& uploaded_meta = *std::find_if(server.versions[0].parts.begin(),
+        server.versions[0].parts.end(), [](const auto& part) { return part.index == 0; });
+    const auto native_meta = st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), uploaded_meta.blob);
+    std::uint64_t bound_account = 0, bound_archive = 0;
+    if (native_meta && native_meta->size() == sizeof(st::InitialDataContent)) {
+        std::memcpy(&bound_account, native_meta->data() + 0x1020, 8);
+        std::memcpy(&bound_archive, native_meta->data() + 0x1028, 8);
+    }
+    Check(bound_account == server.nsa_id && bound_archive == up.archive_id &&
+              bound_account != save.application_id,
+          "initial data binds X-NSA-ID and archive ID, as native OLSC checks");
     Check(up.commit_id == save.commit_id && up.series_id != 0,
           "an upload reports the archive's series and commit for SeriesInfo");
     // Download on a second console of the same account (shares the MAC key: same keys).
@@ -928,6 +941,26 @@ void TransferFlowChecks() {
     Check(down.error == tr::Error::None && harbor_b.imported == source.stream,
           "the second console downloads the same save image");
 
+    ++server.nsa_id;
+    Check(tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr).error ==
+              tr::Error::AadMismatch,
+          "native metadata for a different network account is rejected");
+    --server.nsa_id;
+
+    // Read an old Harbor backup and use it as a base, while emitting native account AAD.
+    auto& legacy_meta = *std::find_if(server.versions[0].parts.begin(),
+        server.versions[0].parts.end(), [](const auto& part) { return part.index == 0; });
+    auto legacy_plain = *native_meta;
+    std::memcpy(legacy_plain.data() + 0x1020, &save.application_id, 8);
+    st::Key128 legacy_iv{};
+    st::RandomBytes(legacy_iv);
+    legacy_meta.blob = st::EncryptStream(FakeFs::StreamKey(harbor_a.own_seed), legacy_iv,
+                                       st::StreamKeyGeneration, legacy_plain);
+    server.versions[0].mac = tr::Base64Url(st::Cmac(harbor_a.mac_key, legacy_plain));
+    Check(tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr).error ==
+              tr::Error::None,
+          "older Harbor metadata remains readable after the account binding correction");
+
     // A changed block: the next upload is a delta of the one chunk that holds it.
     auto changed = source;
     changed.stream[3 * 0x4000 + 5] ^= 0xff; // block 3: chunk 1 of 3 (2 + 2 + 3 blocks)
@@ -939,6 +972,15 @@ void TransferFlowChecks() {
               server.versions[1].previous == up.archive_id && server.puts == 2 &&
               !server.delta_sent_seed,
           "a delta upload sends the changed chunk and the meta, and the MAC without a seed");
+    const auto& delta_meta = *std::find_if(server.versions[1].parts.begin(),
+        server.versions[1].parts.end(), [](const auto& part) { return part.index == 0; });
+    const auto delta_plain = st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), delta_meta.blob);
+    bound_account = 0;
+    if (delta_plain) {
+        std::memcpy(&bound_account, delta_plain->data() + 0x1020, 8);
+    }
+    Check(bound_account == server.nsa_id,
+          "a delta of a legacy Harbor backup emits the native account binding");
     FakeFs harbor_f{st::ArchiveSource{}};
     harbor_f.shared_mac_key = &harbor_a.mac_key;
     const auto down2 = tr::Download(server, harbor_f, save.application_id, delta.archive_id, 3, nullptr);

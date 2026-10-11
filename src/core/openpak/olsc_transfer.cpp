@@ -163,9 +163,9 @@ std::optional<Outcome> CheckPolicy(Rest& rest, std::uint64_t application_id,
     return std::nullopt;
 }
 
-Aad MakeAad(std::uint64_t application_id, std::uint64_t archive_id) {
+Aad MakeAad(std::uint64_t nsa_id, std::uint64_t archive_id) {
     Aad aad{};
-    std::memcpy(aad.data(), &application_id, 8);
+    std::memcpy(aad.data(), &nsa_id, 8);
     std::memcpy(aad.data() + 8, &archive_id, 8);
     return aad;
 }
@@ -346,8 +346,10 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
             return Fail(Error::Fs, "the save could not be diff-exported", base->id);
         }
         const auto aad = exporter->ImportAad();
-        const auto expected = MakeAad(save.application_id, base->id);
-        if (!std::equal(aad.begin(), aad.begin() + 16, expected.begin())) {
+        const auto expected = MakeAad(rest.NetworkServiceAccountId(), base->id);
+        const auto legacy = MakeAad(save.application_id, base->id);
+        if (!std::equal(aad.begin(), aad.begin() + 16, expected.begin()) &&
+            !std::equal(aad.begin(), aad.begin() + 16, legacy.begin())) {
             return Fail(Error::AadMismatch, "base initial data AAD", base->id);
         }
         const auto started = rest.Request("POST", StorageHost, base_path + "/start_upload",
@@ -397,7 +399,7 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
                         archive->id);
         }
     }
-    exporter->SetAad(MakeAad(save.application_id, archive->id));
+    exporter->SetAad(MakeAad(rest.NetworkServiceAccountId(), archive->id));
 
     const auto ids = exporter->ChunkIds();
     if (progress) {
@@ -540,8 +542,10 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
         return Fail(Error::Fs, "the archive could not be opened for import", archive_id);
     }
     const auto aad = importer->ImportAad();
-    const auto expected = MakeAad(application_id, archive_id);
-    if (!std::equal(aad.begin(), aad.begin() + 16, expected.begin())) {
+    const auto expected = MakeAad(rest.NetworkServiceAccountId(), archive_id);
+    const auto legacy = MakeAad(application_id, archive_id);
+    if (!std::equal(aad.begin(), aad.begin() + 16, expected.begin()) &&
+        !std::equal(aad.begin(), aad.begin() + 16, legacy.begin())) {
         return Fail(Error::AadMismatch, "initial data AAD", archive_id);
     }
 
