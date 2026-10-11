@@ -42,7 +42,7 @@ class HarborStoppedActivity : ComponentActivity() {
     private lateinit var headingView: TextView
     private lateinit var message: TextView
     private lateinit var actions: LinearLayout
-    private var onBack: () -> Unit = { finishAndRemoveTask() }
+    private var onBack: () -> Unit = { HarborConsole.exitHarbor(this) }
 
     /** A driver chosen here loads only in a fresh process. */
     private var driverChanged = false
@@ -142,11 +142,10 @@ class HarborStoppedActivity : ComponentActivity() {
             list.add(getString(R.string.harbor_menu_driver) to { showDrivers(null) })
         }
         list.add(getString(R.string.harbor_menu_setup_again) to {
-            HarborNative.stopOpenPak()
             HarborConsole.restartIntoSetup(this)
         })
         show(getString(R.string.harbor_stopped), reason, list)
-        onBack = { finishAndRemoveTask() }
+        onBack = { HarborConsole.exitHarbor(this) }
     }
 
     /**
@@ -282,16 +281,14 @@ class HarborStoppedActivity : ComponentActivity() {
         }
         list.add(getString(R.string.harbor_driver_use_phone) to { confirmPhoneDriver(problem) })
         list.add(getString(R.string.harbor_menu_setup_again) to {
-            HarborNative.stopOpenPak()
             HarborConsole.restartIntoSetup(this)
         })
         list.add(getString(R.string.harbor_menu_exit) to {
-            HarborNative.stopOpenPak()
-            finishAndRemoveTask()
+            HarborConsole.exitHarbor(this)
         })
         val text = (status?.let { it + "\n\n" } ?: "") + problem + "\n\n" + getString(R.string.harbor_driver_failed_choose)
         show(getString(R.string.harbor_driver_load_failed), text, list)
-        onBack = { finishAndRemoveTask() }
+        onBack = { HarborConsole.exitHarbor(this) }
     }
 
     private fun confirmPhoneDriver(problem: String) {

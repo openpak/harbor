@@ -121,6 +121,11 @@ BootResult Run(const std::filesystem::path& user_dir) {
     Boot& boot = Get();
     std::lock_guard lock{boot.mutex};
     if (boot.ran) {
+        // A console that stopped (Stop) and boots again in this process beats again; running
+        // already, this does nothing.
+        if (boot.result.enabled) {
+            Session::StartHeartbeat({});
+        }
         return boot.result;
     }
     boot.ran = true;

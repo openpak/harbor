@@ -234,8 +234,7 @@ object HarborConsole {
             }
             POWER_OFF -> {
                 Log.info("[Harbor] the console turned off")
-                HarborNative.stopOpenPak()
-                activity.finishAndRemoveTask()
+                exitHarbor(activity)
             }
             else -> {
                 showStopped(
@@ -251,12 +250,16 @@ object HarborConsole {
         HarborSleep.reset()
         Log.info("[Harbor] the console stopped: $reason")
         HarborAudioFocus.release()
+        // The console is not running: it no longer says it is alive (a restart or "Start again"
+        // connects again).
+        thread(name = "HarborEndOpenPak") { HarborNative.stopOpenPak() }
         activity.startActivity(HarborStoppedActivity.stopped(activity, reason))
         @Suppress("DEPRECATION")
         activity.overridePendingTransition(0, 0)
         activity.finish()
     }
 
+    private const val OPENPAK_END_WAIT_MS = 6000L
     private const val POWER_OFF = 1
     private const val POWER_REBOOT = 2
 
@@ -340,6 +343,7 @@ object HarborConsole {
      */
     fun bootAfterSetup(from: Activity) {
         Log.info("[Harbor] the setup finished; starting the console in a new process")
+        endOpenPakSession()
         from.startActivity(
             Intent(from, HarborRestartActivity::class.java)
                 .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
@@ -348,9 +352,40 @@ object HarborConsole {
         )
     }
 
+    /**
+     * Ends this process's OpenPak session before a restart kills it: the heartbeat stops and the
+     * server is told the console is gone, so the next process signs in at once instead of being
+     * refused as a second live copy of this console for as long as the claim lasts. Bounded, so a
+     * server that does not answer never holds the restart.
+     */
+    fun endOpenPakSession() {
+        val ending = thread(name = "HarborEndOpenPak") {
+            try {
+                HarborNative.stopOpenPak()
+            } catch (e: Exception) {
+                Log.warning("[Harbor] ending the OpenPak session failed: ${e.message}")
+            }
+        }
+        ending.join(OPENPAK_END_WAIT_MS)
+    }
+
+    /**
+     * Harbor ends: the OpenPak session is closed, the task removed and the process killed. A process
+     * left behind when the last screen goes (cached, "TRIM EMPTY") keeps the emulator's memory and
+     * is what Android's low-memory killer reaches first; it is also a console that is no longer on
+     * screen, so nothing may stay behind.
+     */
+    fun exitHarbor(activity: Activity) {
+        Log.info("[Harbor] exiting")
+        endOpenPakSession()
+        activity.finishAndRemoveTask()
+        Process.killProcess(Process.myPid())
+    }
+
     /** Harbor in a fresh process, straight back to the console (a new graphics driver loads then). */
     fun restartProcess(from: Activity) {
         Log.info("[Harbor] restarting the process")
+        endOpenPakSession()
         from.startActivity(
             Intent(from, HarborRestartActivity::class.java)
                 .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
@@ -367,6 +402,7 @@ object HarborConsole {
      */
     fun restartIntoSetup(from: Activity) {
         Log.info("[Harbor] restarting into the setup")
+        endOpenPakSession()
         from.startActivity(
             Intent(from, HarborRestartActivity::class.java)
                 .putExtra(HarborRestartActivity.EXTRA_PID, Process.myPid())
