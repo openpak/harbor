@@ -9,6 +9,7 @@
 #include "audio_core/adsp/adsp.h"
 #include "audio_core/audio_core.h"
 #include "audio_core/renderer/system_manager.h"
+#include "audio_core/sink/sink_stream.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -28,7 +29,7 @@ void SystemManager::InitializeUnsafe() {
         audio_renderer.Start();
         thread = std::jthread([this](std::stop_token stop_token) {
             Common::SetCurrentThreadName("AudioRenderSystemManager");
-            Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
+            ::AudioCore::Sink::SetAudioThreadPriority(Common::ThreadPriority::High);
             while (active && !stop_token.stop_requested()) {
                 {
                     std::scoped_lock l{mutex1};

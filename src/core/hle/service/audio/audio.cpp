@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "audio_core/sink/sink_stream.h"
+#include "common/thread.h"
 #include "core/core.h"
 #include "core/hle/service/audio/audio.h"
 #include "core/hle/service/audio/audio_controller.h"
@@ -183,6 +185,8 @@ public:
 };
 
 void LoopProcess(Core::System& system) {
+    // Harbor: the audio services answer the guest's renderer updates and output buffer appends.
+    AudioCore::Sink::SetAudioThreadPriority(Common::ThreadPriority::Normal);
     auto server_manager = std::make_unique<ServerManager>(system);
 
     server_manager->RegisterNamedService("aud:a", std::make_shared<IAudioSystemManagerForApplet>(system), 30);

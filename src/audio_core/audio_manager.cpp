@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "audio_core/audio_manager.h"
+#include "audio_core/sink/sink_stream.h"
 #include "common/thread.h"
 #include "core/core.h"
 #include "core/hle/service/audio/errors.h"
@@ -14,6 +15,7 @@ namespace AudioCore {
 AudioManager::AudioManager() {
     thread = std::jthread([this](std::stop_token stop_token) {
         Common::SetCurrentThreadName("AudioManager");
+        Sink::SetAudioThreadPriority(Common::ThreadPriority::Normal);
         std::unique_lock l{events.GetAudioEventLock()};
         events.ClearEvents();
         while (!stop_token.stop_requested()) {

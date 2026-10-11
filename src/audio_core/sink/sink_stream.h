@@ -62,6 +62,17 @@ struct SinkBuffer {
 void SetConsoleOutputGain(f32 gain);
 f32 GetConsoleOutputGain();
 
+/// Harbor: priority for the threads that keep the output fed (renderer system manager, ADSP
+/// renderer, audio services, AudioManager, Opus decoder). They run at the audio class, the same
+/// as the guest CPU threads they serve, instead of below them: under load a lower-weight audio
+/// thread sharing a core with a guest CPU thread gets a few percent of it and the output runs dry.
+/// HARBOR_AUDIO_PRIORITY=upstream keeps the given (upstream Eden) priority, for A/B tests.
+void SetAudioThreadPriority(Common::ThreadPriority upstream_priority);
+
+/// Harbor: how many 5 ms buffers the audio renderer keeps queued ahead of the output (upstream 4).
+/// HARBOR_AUDIO_QUEUE=<2..16> overrides it, for A/B tests.
+u32 RenderQueueBuffers();
+
 class SinkStream {
 public:
     explicit SinkStream(Core::System& system_, StreamType type_) : system{system_}, type{type_} {}
@@ -270,6 +281,17 @@ private:
     /// Signalled when ring buffer entries are consumed
     std::condition_variable_any release_cv;
     std::mutex release_mutex;
+
+    /// Harbor: playback starvation, counted by the backend callback (which must not log) and
+    /// reported from the producer side. An event is a callback that ran out of queued samples
+    /// while the stream was playing; a stream left idle is counted once, not per callback.
+    std::atomic<u64> underrun_events{};
+    std::atomic<u64> underrun_frames{};
+    bool last_callback_had_data{};
+    u64 reported_underrun_events{};
+    u64 reported_underrun_frames{};
+    std::chrono::steady_clock::time_point next_underrun_report{};
+    void ReportUnderruns();
 };
 
 using SinkStreamPtr = std::unique_ptr<SinkStream>;
