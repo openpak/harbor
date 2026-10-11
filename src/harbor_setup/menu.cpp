@@ -43,6 +43,7 @@
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
 #include "harbor_setup/menu_view.h"
+#include "harbor_setup/title_settings.h"
 #include "harbor_setup/view.h"
 #include "hid_core/frontend/emulated_console.h"
 #include "hid_core/frontend/emulated_controller.h"
@@ -779,6 +780,8 @@ void MenuSetHost(MenuHost& host) {
     HARBOR_CRUMB("menu: MenuSetHost");
     menu_host = &host;
     StartPowerKey(host.System());
+    // A game's own Display & Performance values, applied while it runs in the HOME session.
+    TitleSettings::Install(host.System());
     // Online play locks the speed to 100%; the user who had chosen another speed is told.
     Core::OnlineSpeedLock::SetNoticeHandler([](const std::string& text) {
         if (menu_host) {

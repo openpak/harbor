@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -35,6 +36,11 @@ struct IdleHandlingContext;
 }
 
 namespace Service::AM {
+
+/// Harbor: told when an application starts or exits in the session (its program id), for the
+/// settings a game may change for itself (harbor_setup/title_settings.h). Called with the window
+/// system's work in progress, so the hooks must be quick and never call back into am.
+void SetApplicationHooks(std::function<void(u64)> started, std::function<void(u64)> exited);
 
 struct Applet;
 struct LockState;

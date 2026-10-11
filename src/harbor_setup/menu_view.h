@@ -16,6 +16,7 @@
 
 #include <borealis.hpp>
 
+#include "common/settings_common.h"
 #include "harbor_setup/driver_catalog.h"
 #include "harbor_setup/menu.h"
 #include "harbor_setup/menu_input.h"
@@ -139,6 +140,14 @@ private:
     int capture_step = -1;
 
     HostPage host_page;
+
+    // Display & Performance: whose values the rows change while a game runs (All games, or that
+    // game's own: title_settings.h), and whether a change waits for the console's next start.
+    bool scope_game = false;
+    bool restart_needed = false;
+    std::optional<u64> ScopeTitle() const;
+    std::string ScopedValue(Settings::BasicSetting& setting) const;
+    void SetScoped(Settings::BasicSetting& setting, const std::string& value);
 
     CrashView crash_view = CrashView::Consent;
     std::optional<Common::HarborCrash::Report> crash_report;

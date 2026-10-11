@@ -69,6 +69,11 @@ public:
     }
     bool ShowDeviceLine() override;
     void SetShowDeviceLine(bool show) override;
+    bool HasAutoResolution() override {
+        return true;
+    }
+    bool AutoResolution() override;
+    void SetAutoResolution(bool automatic) override;
     bool FrameGenSupported() override;
     void ChooseLosslessDll() override;
     void RemoveLosslessDll() override;

@@ -31,6 +31,7 @@
 #include "qt_common/config/uisettings.h"
 #include "qt_common/qt_common.h"
 #include "harbor_setup/menu_input.h"
+#include "yuzu/harbor_desktop.h"
 #include "yuzu/harbor_menu.h"
 #include "yuzu/harbor_test_drivers.h"
 #ifdef HAS_LSFG
@@ -274,6 +275,14 @@ void HarborMenu::HostNotice(const std::string& text) {
     std::scoped_lock lk{notice_mutex};
     notice = text;
     notice_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+}
+
+bool HarborMenu::AutoResolution() {
+    return HarborDesktop::AutoResolution();
+}
+
+void HarborMenu::SetAutoResolution(bool automatic) {
+    HarborDesktop::SetAutoResolution(automatic);
 }
 
 bool HarborMenu::FrameGenSupported() {

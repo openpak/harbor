@@ -44,6 +44,7 @@
 #include "yuzu/harbor_console_menu.h"
 #include "harbor_control.h"
 #include "harbor_desktop.h"
+#include "harbor_setup/title_settings.h"
 #ifdef HAS_LSFG
 #include "harbor_menu.h"
 #endif
@@ -667,6 +668,14 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                         HarborSetup::MenuOpen(MenuPage::Drivers);
                     } else if (name == "crash-reports") {
                         HarborSetup::MenuOpen(MenuPage::CrashReport);
+                    } else if (name.starts_with("title-start:")) {
+                        // Test: as if that application started in the HOME session (its own
+                        // Display & Performance values apply); title-exit as if it exited.
+                        HarborSetup::TitleSettings::SimulateForTest(std::stoull(name.substr(12), nullptr, 16));
+                    } else if (name == "title-exit") {
+                        HarborSetup::TitleSettings::SimulateForTest(std::nullopt);
+                    } else if (name == "display") {
+                        HarborSetup::MenuOpen(MenuPage::FrameGeneration);
                     } else if (name == "close") {
                         HarborSetup::MenuClose();
                     } else if (name == "back") {
