@@ -967,9 +967,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             binding.loadingTitle.text = ""
         }
         if (HarborConsole.active) {
-            // Harbor: the console starts behind its own boot page (Borealis), not Eden's card.
+            // Harbor: HOME loads behind a Harbor page (Borealis), not Eden's loading card.
             binding.loadingIndicator.visibility = View.GONE
-            harborShowLoading(getString(R.string.harbor_starting))
+            harborShowLoading(getString(R.string.harbor_loading_home))
         }
         binding.loadingTitle.isSelected = true
         binding.loadingText.isSelected = true
@@ -1011,7 +1011,8 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 )
                 ViewUtils.showView(binding.surfaceInputOverlay)
                 ViewUtils.hideView(binding.loadingIndicator)
-                harborHideLoading("emulation started")
+                // Harbor: the loading page stays until HOME has drawn (harborLoadingWatch): Eden
+                // says "started" about three seconds before the console's first picture.
 
                 emulationState.updateSurface()
 
@@ -1546,9 +1547,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
     private var harborLoadingSince = 0L
 
     /**
-     * Takes the boot page away once the console draws again: Eden's emulation-started signal is not
-     * sent for every start in a HOME session, so the console's own pictures decide (a few new ones
-     * since the page went up), with a time limit as the last resort.
+     * Takes the loading page away once the console draws: its own pictures decide (a few new ones
+     * since the page went up), not Eden's emulation-started signal, which comes seconds before the
+     * first picture and not for every start in a HOME session; a time limit is the last resort.
      */
     private val harborLoadingWatch = object : Runnable {
         override fun run() {
