@@ -37,7 +37,10 @@ All five changed production translation units also compile for Android ARM64 API
 `scratch/harbor-eden/island-restore-android-{legacy,mainline}-build.log`. This is a native
 compilation check. Subsequently the v0.3.2 legacy APK was built, signature-verified, published
 through GitHub, and installed as an in-place update on the user's ROG Phone 3 (API 31).
-The uploaded asset digest matches the installed APK; in-game ACNH recovery remains unverified.
+The uploaded asset digest matches the installed APK. On 2026-10-12 the owner reported a
+successful island restore on the ROG Phone 3 using Harbor v0.3.2. This confirms Android
+recovery by owner report; no independent trace or capture was collected. Native Switch
+island recovery and hardware cancellation remain unverified.
 
 ## Account binding — 2026-10-11
 

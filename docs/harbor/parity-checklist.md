@@ -7,8 +7,10 @@ device-save download, async progress, and immediate cancellation before import a
 locally. Desktop Harbor builds, Android API 29/33 restore-object compilation, and synthetic
 transfer self-checks pass; backend database tests
 verify same-account recovery, device filters, and foreign-archive rejection. The combined saves
-v0.4.5 image is released and deployed; its synthetic live HTTP probe passes. ACNH's in-game
-recovery on Harbor/Android/a real Switch remains unverified.
+v0.4.5 image is released and deployed; its synthetic live HTTP probe passes. The owner reported
+a successful ACNH island restore on the ROG Phone 3 with Harbor v0.3.2 on 2026-10-12.
+Native Switch recovery and hardware cancellation remain unverified; no independent Android
+trace or capture was collected.
 No acceptance box is checked from these tests. See [save-cloud-interop.md](save-cloud-interop.md).
 
 ## How to read this
