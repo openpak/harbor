@@ -547,8 +547,94 @@ void SaveArchiveChecks() {
     st::ArchiveReader reader;
     Check(reader.Open(*meta, stream_key, mac_key, mac) == st::ArchiveReader::Error::None,
           "the importer opens the meta chunk and the package's MAC matches");
+    Check(reader.Content().total_stream_size == static_cast<s64>(source.stream.size()),
+          "initial data carries uncompressed save-image length for native chunk ranges");
     Check(reader.Content().aad == st::MakeAad(0x0100A5A020D5E000, 42),
           "the AAD travels in the initial data");
+    // Fixed public fixture: two allocated blocks (one all zero) and six free blocks.
+    st::ArchiveSource native;
+    native.extra_data[0x20] = 1;
+    for (std::size_t i = 0; i < native.integrity_seed.size(); ++i)
+        native.integrity_seed[i] = i;
+    native.stream.resize(0x68000);
+    auto put32 = [&](std::size_t at, u32 value) {
+        std::memcpy(native.stream.data() + at, &value, 4);
+    };
+    auto put64 = [&](std::size_t at, u64 value) {
+        std::memcpy(native.stream.data() + at, &value, 8);
+    };
+    put32(0x40060, 0x45564153);
+    put32(0x40064, 0x60000);
+    put64(0x40068, 8);
+    put64(0x40070, 0x4000);
+    const std::size_t fat = 0x400a8;
+    put32(fat + 4, 3);
+    put32(fat + 8, 0x80000000);
+    put32(fat + 16, 0x80000000);
+    put32(fat + 24, 0x80000000);
+    put32(fat + 28, 0x80000000);
+    put32(fat + 32, 0x80000003);
+    put32(fat + 36, 8);
+    put32(fat + 64, 0x80000003);
+    put32(fat + 68, 8);
+    std::fill(native.stream.begin() + 0x48000, native.stream.begin() + 0x4c000, 0x21);
+    const auto native_hash = st::NativeChunkHashes(native.stream, native.extra_data,
+                                                   native.integrity_seed, 0, native.stream.size());
+    Check(native_hash &&
+              native_hash->full == std::array<u8, 32>{0x70, 0x2b, 0xaa, 0x36, 0x6f, 0xaa, 0xb0,
+                                                      0x3b, 0x09, 0x8d, 0x1b, 0x24, 0x0c, 0x76,
+                                                      0x0f, 0xc7, 0xae, 0xb7, 0xd1, 0x4f, 0xa2,
+                                                      0xaa, 0x33, 0xde, 0x29, 0xc7, 0x12, 0xd4,
+                                                      0xd6, 0xd7, 0xd3, 0xd3} &&
+              native_hash->halves ==
+                  std::array<u8, 8>{0x61, 0x24, 0x7d, 0x20, 0x2b, 0xfd, 0x73, 0x01},
+          "native hashes include salted allocated blocks and zero hashes for free blocks");
+    st::ArchiveWriter native_writer{native, stream_key, mac_key};
+    Check(native_writer.SetDivisionCount(1), "native fixture division count");
+    const auto native_meta = native_writer.Chunk(0);
+    st::ArchiveReader native_reader;
+    Check(
+        native_meta &&
+            native_reader.Open(*native_meta, stream_key, mac_key, native_writer.InitialDataMac()) ==
+                st::ArchiveReader::Error::None &&
+            native_reader.Push(0x1000, *native_writer.Chunk(0x1000)) ==
+                st::ArchiveReader::Error::None &&
+            native_reader.Complete() && native_reader.Stream() == native.stream,
+        "native hash metadata imports through authenticated chunks");
+    auto bad_content = native_writer.Content();
+    bad_content.short_hashes[0] ^= 1;
+    const auto bad_bytes =
+        std::span<const u8>{reinterpret_cast<const u8*>(&bad_content), sizeof(bad_content)};
+    st::Key128 bad_iv{};
+    st::RandomBytes(bad_iv);
+    const auto bad_meta = st::EncryptStream(stream_key, bad_iv, st::StreamKeyGeneration, bad_bytes);
+    st::ArchiveReader bad_hash_reader;
+    Check(bad_hash_reader.Open(bad_meta, stream_key, mac_key, st::Cmac(mac_key, bad_bytes)) ==
+                  st::ArchiveReader::Error::None &&
+              bad_hash_reader.Push(0x1000, *native_writer.Chunk(0x1000)) ==
+                  st::ArchiveReader::Error::Chunk &&
+              !bad_hash_reader.Complete(),
+          "incorrect native short hashes are rejected");
+    st::ArchiveWriter prefix_writer{native, stream_key, mac_key};
+    Check(prefix_writer.SetDivisionCount(4), "native prefix-only chunks");
+    auto prefix_content = prefix_writer.Content();
+    prefix_content.short_hashes[0] ^= 1;
+    const auto prefix_bytes =
+        std::span<const u8>{reinterpret_cast<const u8*>(&prefix_content), sizeof(prefix_content)};
+    const auto prefix_meta =
+        st::EncryptStream(stream_key, bad_iv, st::StreamKeyGeneration, prefix_bytes);
+    st::ArchiveReader prefix_reader;
+    bool prefix_rejected =
+        prefix_reader.Open(prefix_meta, stream_key, mac_key, st::Cmac(mac_key, prefix_bytes)) ==
+        st::ArchiveReader::Error::None;
+    for (u16 id = 0x1000; id < 0x1004; ++id) {
+        const auto rc = prefix_reader.Push(id, *prefix_writer.Chunk(id));
+        prefix_rejected = prefix_rejected && rc == (id == 0x1003 ? st::ArchiveReader::Error::Chunk
+                                                                 : st::ArchiveReader::Error::None);
+    }
+    Check(prefix_rejected && !prefix_reader.Complete(),
+          "native short hashes are checked for prefix chunks whose full hashes equal plaintext "
+          "hashes");
     st::ArchiveReader wrong;
     st::Key128 other_mac{};
     st::RandomBytes(other_mac);

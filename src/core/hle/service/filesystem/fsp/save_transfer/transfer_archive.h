@@ -40,7 +40,7 @@ struct InitialDataContent {
     std::array<Sha256Hash, MaxDivisionCount> chunk_hashes{};
     std::array<s64, MaxDivisionCount> chunk_sizes{};
     std::array<Key128, MaxDivisionCount> chunk_macs{};
-    s64 total_chunk_size{};
+    s64 total_stream_size{}; ///< uncompressed concatenated save-image length
     std::array<u8, 0x20> aad{};
     std::array<u8, 0x20> hash_salt{};  ///< the save's integrity seed
     std::array<u8, 0x200> short_hashes{};
@@ -52,12 +52,25 @@ static_assert(sizeof(InitialDataContent) == InitialDataSize);
 static_assert(offsetof(InitialDataContent, extra_data) == 0x8);
 static_assert(offsetof(InitialDataContent, chunk_sizes) == 0xa18);
 static_assert(offsetof(InitialDataContent, chunk_macs) == 0xc18);
+static_assert(offsetof(InitialDataContent, total_stream_size) == 0x1018);
 static_assert(offsetof(InitialDataContent, aad) == 0x1020);
 static_assert(offsetof(InitialDataContent, hash_salt) == 0x1040);
+static_assert(offsetof(InitialDataContent, short_hashes) == 0x1060);
 static_assert(offsetof(InitialDataContent, is_integrity_seed_enabled) == 0x1260);
 
 /// The 32-byte AAD olsc sets and checks: {network service account id, archive id, 0, 0}.
 std::array<u8, 0x20> MakeAad(u64 nsa_id, u64 archive_id);
+
+/// Hashes native OLSC checks for one save-image slice. Prefix storages contribute their
+/// bytes; raw data contributes salted IVFC leaf hashes, with zero hashes for free blocks.
+struct ChunkVerificationHashes {
+    Sha256Hash full{};
+    std::array<u8, 8> halves{};
+};
+std::optional<ChunkVerificationHashes> NativeChunkHashes(std::span<const u8> stream,
+                                                         const std::array<u8, 0x200>& extra_data,
+                                                         const std::array<u8, 0x20>& integrity_seed,
+                                                         std::size_t offset, std::size_t length);
 
 /// What the exporter archives: the save image stream (the codec's storages concatenated) and
 /// the save's metadata.
