@@ -35,7 +35,9 @@ the production filesystem import, or restoration on Android/a physical Switch.
 All five changed production translation units also compile for Android ARM64 API 29 and
 33 (existing legacy/mainline CMake trees), with logs in
 `scratch/harbor-eden/island-restore-android-{legacy,mainline}-build.log`. This is a native
-compilation check; no APK was packaged or installed on a phone.
+compilation check. Subsequently the v0.3.2 legacy APK was built, signature-verified, published
+through GitHub, and installed as an in-place update on the user's ROG Phone 3 (API 31).
+The uploaded asset digest matches the installed APK; in-game ACNH recovery remains unverified.
 
 ## Account binding — 2026-10-11
 
