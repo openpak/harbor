@@ -6,8 +6,9 @@ ACNH recovery update (2026-10-12): application OLSC 25/26, owner-granted island 
 device-save download, async progress, and immediate cancellation before import are implemented
 locally. Desktop Harbor builds, Android API 29/33 restore-object compilation, and synthetic
 transfer self-checks pass; backend database tests
-verify same-account recovery, device filters, and foreign-archive rejection. The server update
-is not deployed, and ACNH's in-game recovery on Harbor/Android/a real Switch remains unverified.
+verify same-account recovery, device filters, and foreign-archive rejection. The combined saves
+v0.4.5 image is released and deployed; its synthetic live HTTP probe passes. ACNH's in-game
+recovery on Harbor/Android/a real Switch remains unverified.
 No acceptance box is checked from these tests. See [save-cloud-interop.md](save-cloud-interop.md).
 
 ## How to read this

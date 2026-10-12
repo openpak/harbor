@@ -21,8 +21,9 @@ cancellation uses a separate queue operation.
 The matching local `saves` change implements `/permissions` for the authenticated account's
 newest complete island per title and scopes `device_id=me` backup-cache requests to the
 requesting device. Recovery can find an island uploaded from another PC, Android device,
-or Switch signed into the same account. The service update must be deployed before either
-Harbor or native Switch can discover those recovery grants.
+or Switch signed into the same account. Saves v0.4.5 is now released and deployed as the
+single image containing both the recovery and compressed-byte quota fixes. Its live synthetic
+probe passed listing, component downloads and account isolation; no player island was changed.
 
 Validation: desktop Harbor build and core-free `harbor-openpak-check selftest` pass, including
 native record layouts, missing/malformed grants, account isolation, version refusal, restored
