@@ -45,6 +45,7 @@ struct ArchiveInfo {
     std::uint64_t finished_at = 0; ///< finished_at_as_unixtime
     std::uint8_t platform_key_generation = 0;
     std::uint8_t acd_index = 0;
+    std::string desc; ///< device backup custom data
 };
 
 inline constexpr std::uint8_t StatusFixed = 0;
@@ -64,6 +65,18 @@ std::optional<std::vector<ArchiveInfo>> ParseArchiveList(std::string_view body);
 /// +0x28 finished at, +0x30 acd index (u8); the rest zero.
 using DataInfo = std::array<std::uint8_t, 0x38>;
 DataInfo PackDataInfo(const ArchiveInfo& archive);
+
+/// olsc:u's island record: archive id, finished time, then a NUL-terminated custom string.
+using BackupInfo = std::array<std::uint8_t, 0x410>;
+BackupInfo PackBackupInfo(const ArchiveInfo& archive);
+
+struct BackupPermission {
+    std::uint64_t id{}, archive_id{}, nsa_id{}, application_id{}, created_at{};
+};
+std::optional<std::vector<BackupPermission>> ParseBackupPermissions(std::string_view body);
+std::vector<ArchiveInfo> DownloadableBackups(const std::vector<ArchiveInfo>& archives,
+                                             const std::vector<BackupPermission>& permissions,
+                                             std::uint64_t application_id, std::uint64_t nsa_id);
 
 /// The archive GetDataInfo answers for a title: its newest fixed one, or none.
 std::optional<ArchiveInfo> LatestFor(const std::vector<ArchiveInfo>& archives,
@@ -88,17 +101,18 @@ public:
 
     /// Fetch `uid`'s list unless one was fetched in the last `max_age_s` seconds or a fetch is
     /// under way. Needs a configured console server and a linked user; otherwise does nothing.
-    void Refresh(const std::string& uid, int max_age_s = 30);
+    void Refresh(const std::string& uid, int max_age_s = 30, std::uint8_t datatype = 0);
 
     /// Fetch `uid`'s list now (blocking: an async task's work, never an IPC thread). True when
     /// the server answered with a list, which then replaces the cached one.
-    bool RefreshNow(const std::string& uid);
+    bool RefreshNow(const std::string& uid, std::uint8_t datatype = 0);
 
     /// The cached list for `uid`, or nullopt when none has been fetched.
-    std::optional<std::vector<ArchiveInfo>> Get(const std::string& uid) const;
+    std::optional<std::vector<ArchiveInfo>> Get(const std::string& uid,
+                                                std::uint8_t datatype = 0) const;
 
     /// Sets a list as if fetched (the self-check, and a fetch's own result).
-    void Put(const std::string& uid, std::vector<ArchiveInfo> archives);
+    void Put(const std::string& uid, std::vector<ArchiveInfo> archives, std::uint8_t datatype = 0);
 
     void Clear();
 
@@ -123,7 +137,8 @@ std::string SerializeArchives(const std::vector<ArchiveInfo>& archives);
 std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view text);
 
 /// GET save_data_archives for `uid` (blocking; run it off the guest's IPC thread).
-std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid);
+std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid,
+                                                      std::uint8_t datatype = 0);
 
 /// The last archive a title's save was synced with (olsc's SeriesInfo database): the archive's
 /// series id and commit id, written after every upload and download (olsc-autonomy.md §4.2).
@@ -150,6 +165,18 @@ class DaemonSettings {
 public:
     explicit DaemonSettings(std::filesystem::path file);
 
+    /// olsc:u's per-user device-backup setting database (16 applications).
+    struct BackupSetting {
+        bool enabled{};
+        std::string desc;
+        std::uint64_t touched{};
+    };
+    std::optional<BackupSetting> Backup(const std::string& uid, std::uint64_t app) const;
+    void SetBackup(const std::string& uid, std::uint64_t app, bool enabled);
+    bool SetBackupCustomData(const std::string& uid, std::uint64_t app, std::string desc);
+    void RemoveBackup(const std::string& uid, std::uint64_t app);
+    std::vector<std::uint64_t> EnabledBackups(const std::string& uid) const;
+
     bool GlobalAutoUpload(const std::string& uid) const;
     void SetGlobalAutoUpload(const std::string& uid, bool enabled);
     bool GlobalAutoDownload(const std::string& uid) const;
@@ -164,10 +191,11 @@ public:
     /// §1): set when a task fails, removed when the next one for the title succeeds.
     struct LastError {
         std::uint8_t task_type = 0;
-        std::int64_t time = 0;   ///< POSIX time of the failure
+        std::int64_t time = 0;    ///< POSIX time of the failure
         std::uint32_t result = 0; ///< the task's Result
     };
-    std::optional<LastError> LastErrorOf(const std::string& uid, std::uint64_t application_id) const;
+    std::optional<LastError> LastErrorOf(const std::string& uid,
+                                         std::uint64_t application_id) const;
     void SetLastError(const std::string& uid, std::uint64_t application_id, LastError error);
     void RemoveLastError(const std::string& uid, std::uint64_t application_id);
 
@@ -178,6 +206,7 @@ private:
         std::map<std::uint64_t, bool> auto_transfer;
         std::map<std::uint64_t, SeriesInfo> series;
         std::map<std::uint64_t, LastError> errors;
+        std::map<std::uint64_t, BackupSetting> backups;
     };
 
     void Load();

@@ -15,9 +15,11 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <vector>
+#include "core/openpak/olsc.h"
 
 namespace OpenPak::Olsc::Transfer {
 
@@ -28,7 +30,7 @@ using Aad = std::array<std::uint8_t, 0x20>;
 /// olsc results, 2179-<description> (olsc-transfer.md §5).
 enum class Error : std::uint32_t {
     None = 0,
-    Cancelled = 0,
+    Cancelled = 2801,
     PartitionCountDiffers = 301,
     SeriesBaseMissing = 2123,
     LocalSaveNotFound = 2000,
@@ -40,12 +42,15 @@ enum class Error : std::uint32_t {
     ComponentAlreadyFixed = 2312,
     ArchiveMissingAfterFinish = 2400,
     ArchiveIncomplete = 3201,
+    BackupListOverflow = 3200,
+    PermissionIncomplete = 3320,
+    ApplicationTooOld = 2802,
     AadMismatch = 3202,
     MetaWithoutUrl = 3221,
     MetaWrongSize = 3222,
-    Server = 4000,  ///< "code" 0000 / 0019-1000 (other codes map 4001-4299)
-    Http = 9000,    ///< no "code": 2155-<status>; reported here as Http
-    Fs = 9100,      ///< the fs side refused (its own result is logged)
+    Server = 4000, ///< "code" 0000 / 0019-1000 (other codes map 4001-4299)
+    Http = 9000,   ///< no "code": 2155-<status>; reported here as Http
+    Fs = 9100,     ///< the fs side refused (its own result is logged)
 };
 
 struct HttpResponse {
@@ -109,6 +114,8 @@ struct LocalSave {
     std::uint64_t commit_id = 0;
     std::uint8_t acd_index = 0;
     std::uint32_t launch_required_version = 0; ///< the app's launch version >> 16
+    std::uint8_t datatype = 0; ///< 0 account save; 3 application-driven island backup
+    std::string desc;          ///< device-backup custom data
 };
 
 /// fs's transfer manager for one task (fsp 82): one challenge per task.
@@ -129,20 +136,29 @@ public:
 struct Progress {
     std::atomic<std::uint64_t> total{0};
     std::atomic<std::uint64_t> done{0};
+    std::atomic<bool> cancelled{false};
+    std::stop_token cancellation;
 
     Progress() = default;
-    Progress(const Progress& other) : total{other.total.load()}, done{other.done.load()} {}
+    Progress(const Progress& other)
+        : total{other.total.load()}, done{other.done.load()}, cancelled{other.cancelled.load()},
+          cancellation{other.cancellation} {}
     Progress& operator=(const Progress& other) {
         total = other.total.load();
         done = other.done.load();
+        cancelled = other.cancelled.load();
+        cancellation = other.cancellation;
         return *this;
+    }
+    bool IsCancelled() const {
+        return cancelled.load() || cancellation.stop_requested();
     }
 };
 
 struct Outcome {
     Error error = Error::None;
     std::uint64_t archive_id = 0;
-    std::string detail; ///< for the log (no ids of the user)
+    std::string detail;          ///< for the log (no ids of the user)
     std::uint64_t series_id = 0; ///< the archive's series, on success
     std::uint64_t commit_id = 0; ///< the archive's commit id (encoded_digest), on success
 };
@@ -155,7 +171,13 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
 /// A download of `archive_id` (olsc-transfer.md §3.1). `launch_version` is the installed
 /// application's launch version >> 16 (the policy request's version).
 Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t archive_id,
-                 std::uint32_t launch_version, Progress* progress);
+                 std::uint32_t launch_version, Progress* progress, std::uint8_t datatype = 0);
+
+struct BackupList {
+    Error error = Error::None;
+    std::vector<ArchiveInfo> archives;
+};
+BackupList ListDeviceBackups(Rest& rest, std::uint64_t application_id, std::size_t capacity);
 
 // Encoders the console uses (base64url without padding; MD5 for component digests).
 std::string Base64Url(std::span<const std::uint8_t> data);
@@ -167,5 +189,9 @@ std::string StartUploadBody(const LocalSave& save, std::uint64_t series_id);
 
 inline constexpr const char* StorageHost = "storage.hac.lp1.scsi.srv.nintendo.net";
 inline constexpr const char* PolicyHost = "policy.hac.lp1.scsi.srv.nintendo.net";
+
+constexpr bool IsDeviceBackupTitle(std::uint64_t application_id) {
+    return application_id == 0x01006f8002326000ULL || application_id == 0x0100e6c01163c000ULL;
+}
 
 } // namespace OpenPak::Olsc::Transfer

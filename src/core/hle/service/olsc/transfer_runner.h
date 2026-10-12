@@ -52,10 +52,10 @@ struct TransferTask {
     u64 id{};
     Common::UUID user{};
     u64 application_id{};
-    u8 type{};   ///< 0 upload user save, 1 download user save (2/3 device: not built)
-    u8 flag{};   ///< detail +0x21
+    u8 type{};          ///< 0/1 user upload/download; 2/3 device upload/download
+    u8 flag{};          ///< detail +0x21
     u8 rank{RankBasic}; ///< detail +0x51, TransferTaskInfo +0x0a
-    u8 state{};  ///< TransferTaskInfo +0x09: 0 queued, 2 failed, 3 done (kept until newness 0)
+    u8 state{}; ///< TransferTaskInfo +0x09: 0 queued, 2 failed, 3 done (kept until newness 0)
     bool running{};
     u64 archive_id{};
     OpenPak::Olsc::Transfer::Progress progress{};
@@ -76,7 +76,7 @@ struct LocalSaveState {
     s64 timestamp{};
 };
 std::optional<LocalSaveState> ReadLocalSave(Core::System& system, const Common::UUID& user,
-                                            u64 application_id);
+                                            u64 application_id, bool device = false);
 
 class TransferQueue {
 public:
@@ -98,6 +98,13 @@ public:
 
     u64 RegisterUpload(const Common::UUID& user, u64 application_id, bool flag,
                        u8 rank = RankBasic);
+    Result RegisterDeviceUpload(u64& out_id, const Common::UUID& user, u64 application_id,
+                                bool manual, u8 rank = RankBasic,
+                                std::stop_token cancellation = {});
+    OpenPak::Olsc::Transfer::BackupList DeviceBackups(const Common::UUID& user, u64 application_id,
+                                                      std::size_t capacity);
+    Result RegisterDeviceDownload(u64& out_id, const Common::UUID& user, u64 application_id,
+                                  u64 archive_id, std::stop_token cancellation = {});
     /// The archive must be in the user's cached list (else nullopt: 2179-1200).
     std::optional<u64> RegisterDownload(const Common::UUID& user, u64 archive_id,
                                         u8 rank = RankBasic);
@@ -126,6 +133,8 @@ public:
     std::vector<TransferTask> Tasks() const;
     /// DeleteTransferTask: a queued or finished task goes; a running one stays.
     void Delete(u64 task_id);
+    /// Cancel a queued or running application transfer without waiting for IPC polling.
+    void Cancel(u64 task_id);
     /// RaiseTransferTaskPriority: a queued task moves to the front.
     void Raise(u64 task_id);
     std::optional<TransferTask> Current() const;

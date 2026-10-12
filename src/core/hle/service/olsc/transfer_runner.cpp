@@ -11,8 +11,9 @@
 #include <fmt/format.h>
 #include <openssl/sha.h>
 
-#include "common/logging.h"
 #include "common/fs/path_util.h"
+#include "common/harbor_crash.h"
+#include "common/logging.h"
 #include "common/redact.h"
 #include "core/core.h"
 #include "core/file_sys/fs_save_data_types.h"
@@ -26,7 +27,6 @@
 #include "core/openpak/async_worker.h"
 #include "core/openpak/olsc.h"
 #include "core/openpak/session.h"
-#include "common/harbor_crash.h"
 
 namespace Service::OLSC {
 
@@ -193,8 +193,8 @@ public:
     }
     std::unique_ptr<tr::Exporter> OpenDiffExporter(std::span<const u8> meta) override {
         std::shared_ptr<st::Exporter> exporter;
-        const Result result = manager.OpenDiffExporter(&exporter, meta,
-                                                       FileSys::SaveDataSpaceId::User, save_data_id);
+        const Result result =
+            manager.OpenDiffExporter(&exporter, meta, FileSys::SaveDataSpaceId::User, save_data_id);
         if (result.IsError()) {
             LOG_WARNING(Service_OLSC, "save data cloud: fs could not diff-export the save ({:#x})",
                         result.raw);
@@ -222,14 +222,28 @@ private:
     u64 save_data_id;
 };
 
+FileSys::SaveDataAttribute LocalAttribute(u64 application_id, const Common::UUID& user,
+                                          bool device) {
+    FileSys::UserId user_id{};
+    if (!device)
+        std::memcpy(user_id.data(), user.uuid.data(), sizeof(user_id));
+    return FileSys::SaveDataAttribute::Make(
+        application_id, device ? FileSys::SaveDataType::Device : FileSys::SaveDataType::Account,
+        user_id, FileSys::InvalidSystemSaveDataId, 0, FileSys::SaveDataRank::Primary);
+}
+
 /// The user's save of the title in the user space, as olsc finds it (fsp 61 + reader 0).
-std::optional<FileSystem::ISaveDataInfoReader::SaveDataInfo> FindLocalSave(
-    Core::System& system, const Common::UUID& user, u64 application_id) {
+std::optional<FileSystem::ISaveDataInfoReader::SaveDataInfo> FindLocalSave(Core::System& system,
+                                                                           const Common::UUID& user,
+                                                                           u64 application_id,
+                                                                           bool device = false) {
     const auto controller = system.GetFileSystemController().OpenSaveDataController();
-    for (const auto& info :
-         FileSystem::ISaveDataInfoReader::FindAllSaves(*controller, FileSys::SaveDataSpaceId::User)) {
-        if (info.type == FileSys::SaveDataType::Account && info.title_id == application_id &&
-            std::memcmp(info.user_id.data(), user.uuid.data(), 16) == 0) {
+    for (const auto& info : FileSystem::ISaveDataInfoReader::FindAllSaves(
+             *controller, FileSys::SaveDataSpaceId::User)) {
+        if (info.title_id == application_id && info.rank == FileSys::SaveDataRank::Primary &&
+            ((device && info.type == FileSys::SaveDataType::Device) ||
+             (!device && info.type == FileSys::SaveDataType::Account &&
+              std::memcmp(info.user_id.data(), user.uuid.data(), 16) == 0))) {
             return info;
         }
     }
@@ -261,13 +275,9 @@ bool MatchesFilter(const TransferTask& task, u8 filter) {
 }
 
 std::optional<LocalSaveState> ReadLocalSave(Core::System& system, const Common::UUID& user,
-                                            u64 application_id) {
+                                            u64 application_id, bool device) {
     const auto controller = system.GetFileSystemController().OpenSaveDataController();
-    FileSys::UserId user_id{};
-    std::memcpy(user_id.data(), user.uuid.data(), sizeof(user_id));
-    const auto attribute = FileSys::SaveDataAttribute::Make(
-        application_id, FileSys::SaveDataType::Account, user_id, FileSys::InvalidSystemSaveDataId,
-        0, FileSys::SaveDataRank::Primary);
+    const auto attribute = LocalAttribute(application_id, user, device);
     if (!controller->SaveDataExists(FileSys::SaveDataSpaceId::User, attribute)) {
         return std::nullopt;
     }
@@ -312,8 +322,8 @@ constexpr std::chrono::seconds PostponedInterval{46800};
 std::vector<u64> AccountSaveTitles(Core::System& system, const Common::UUID& user) {
     std::vector<u64> titles;
     const auto controller = system.GetFileSystemController().OpenSaveDataController();
-    for (const auto& info :
-         FileSystem::ISaveDataInfoReader::FindAllSaves(*controller, FileSys::SaveDataSpaceId::User)) {
+    for (const auto& info : FileSystem::ISaveDataInfoReader::FindAllSaves(
+             *controller, FileSys::SaveDataSpaceId::User)) {
         if (info.type == FileSys::SaveDataType::Account &&
             std::memcmp(info.user_id.data(), user.uuid.data(), 16) == 0) {
             titles.push_back(info.title_id);
@@ -432,9 +442,9 @@ u8 TransferQueue::Newness(const Common::UUID& user, u64 application_id) {
     const auto cloud =
         archives ? OpenPak::Olsc::LatestFor(*archives, application_id) : std::nullopt;
     const auto local = ReadLocalSave(system, user, application_id);
-    const u8 newness = OpenPak::Olsc::Newness(Settings()->Series(uid, application_id),
-                                              local ? std::optional{local->commit_id} : std::nullopt,
-                                              cloud);
+    const u8 newness =
+        OpenPak::Olsc::Newness(Settings()->Series(uid, application_id),
+                               local ? std::optional{local->commit_id} : std::nullopt, cloud);
     if (newness == 0) {
         std::lock_guard lock{mutex};
         std::erase_if(tasks, [&](const TransferTask& t) {
@@ -482,8 +492,8 @@ Result TransferQueue::TryAutoUpload(const Common::UUID& user, u64 application_id
     {
         std::lock_guard lock{mutex};
         for (auto it = tasks.begin(); it != tasks.end();) {
-            const bool same = it->user == user && it->application_id == application_id &&
-                              it->type == 0;
+            const bool same =
+                it->user == user && it->application_id == application_id && it->type == 0;
             if (same && (it->running || (it->state == 0 && it->rank <= rank))) {
                 return OlscResult(1603);
             }
@@ -524,8 +534,8 @@ Result TransferQueue::TryAutoDownload(const Common::UUID& user, u64 application_
     {
         std::lock_guard lock{mutex};
         for (auto it = tasks.begin(); it != tasks.end();) {
-            const bool same = it->user == user && it->application_id == application_id &&
-                              it->type == 1;
+            const bool same =
+                it->user == user && it->application_id == application_id && it->type == 1;
             if (same && (it->running || (it->state == 0 && it->rank <= rank))) {
                 return OlscResult(1603);
             }
@@ -543,6 +553,112 @@ Result TransferQueue::TryAutoDownload(const Common::UUID& user, u64 application_
         break;
     }
     return RegisterDownload(user, cloud->id, rank) ? ResultSuccess : OlscResult(1200);
+}
+
+Result TransferQueue::RegisterDeviceUpload(u64& out_id, const Common::UUID& user, u64 app,
+                                           bool manual, u8 rank, std::stop_token cancellation) {
+    if (!tr::IsDeviceBackupTitle(app))
+        return OlscResult(2001);
+    const auto uid = user.RawString();
+    if (!OpenPak::Session::Enabled() || !OpenPak::Session::Linked(uid))
+        return OlscResult(10);
+    const auto daemon = Settings();
+    const auto setting = daemon->Backup(uid, app);
+    if (!manual && (!setting || !setting->enabled))
+        return OlscResult(1604);
+    const auto local = ReadLocalSave(system, user, app, true);
+    if (!local)
+        return OlscResult(2000);
+    if (!OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid, 3))
+        return OlscResult(9000);
+    const auto archives = OpenPak::Olsc::ArchiveCache::Instance().Get(uid, 3);
+    const auto cloud = archives ? OpenPak::Olsc::LatestFor(*archives, app) : std::nullopt;
+    if (OpenPak::Olsc::Newness(daemon->Series(uid + "#device", app), local->commit_id, cloud) == 0)
+        return OlscResult(1610);
+    std::lock_guard lock{mutex};
+    if (cancellation.stop_requested())
+        return OlscResult(2801);
+    const auto existing = std::find_if(tasks.begin(), tasks.end(), [&](const TransferTask& task) {
+        return task.type == 2 && task.user == user && task.application_id == app &&
+               (task.running || task.state == 0);
+    });
+    if (existing != tasks.end()) {
+        if (existing->running)
+            return OlscResult(1603);
+        // A sweep can queue a postponed upload while the game is running. Closing
+        // the game must promote that same task instead of leaving it postponed.
+        existing->rank = std::min(existing->rank, rank);
+        if (manual) {
+            existing->flag = 1;
+            existing->progress.cancellation = cancellation;
+        }
+        out_id = existing->id;
+        const auto promoted = *existing;
+        tasks.erase(existing);
+        tasks.push_front(promoted);
+        wake.notify_all();
+        return ResultSuccess;
+    }
+    TransferTask task;
+    task.id = next_id++;
+    task.user = user;
+    task.application_id = app;
+    task.type = 2;
+    task.flag = manual ? 1 : 0;
+    task.rank = rank;
+    task.progress.cancellation = cancellation;
+    out_id = task.id;
+    tasks.push_front(task);
+    LOG_INFO(Service_OLSC, "island backup: upload of {:016X} queued (task {})", app, task.id);
+    wake.notify_all();
+    return ResultSuccess;
+}
+
+tr::BackupList TransferQueue::DeviceBackups(const Common::UUID& user, u64 app,
+                                            std::size_t capacity) {
+    if (!OpenPak::Session::Enabled() || !OpenPak::Session::Linked(user.RawString()))
+        return {tr::Error::Http, {}};
+    SessionRest rest{user.RawString()};
+    return tr::ListDeviceBackups(rest, app, capacity);
+}
+
+Result TransferQueue::RegisterDeviceDownload(u64& out_id, const Common::UUID& user, u64 app,
+                                             u64 archive_id, std::stop_token cancellation) {
+    if (!OpenPak::Session::Enabled() || !OpenPak::Session::Linked(user.RawString()))
+        return OlscResult(10);
+    auto backups = DeviceBackups(user, app, 16);
+    if (backups.error != tr::Error::None)
+        return OlscResult(static_cast<u32>(backups.error));
+    const auto archive = std::find_if(backups.archives.begin(), backups.archives.end(),
+                                      [&](const auto& a) { return a.id == archive_id; });
+    if (archive == backups.archives.end())
+        return OlscResult(2100);
+    if (LaunchVersion(system, app) < archive->launch_required_version)
+        return OlscResult(2802);
+    std::lock_guard lock{mutex};
+    if (cancellation.stop_requested())
+        return OlscResult(2801);
+    if (std::any_of(tasks.begin(), tasks.end(), [&](const auto& t) {
+            return t.user == user && t.application_id == app && t.type >= 2 && t.running;
+        }))
+        return OlscResult(1603);
+    std::erase_if(tasks, [&](const auto& t) {
+        return t.user == user && t.application_id == app && t.type >= 2 && t.state == 0;
+    });
+    TransferTask task;
+    task.id = next_id++;
+    task.user = user;
+    task.application_id = app;
+    task.archive_id = archive_id;
+    task.type = 3;
+    task.flag = 1;
+    task.rank = RankBasic;
+    task.progress.cancellation = cancellation;
+    out_id = task.id;
+    tasks.push_front(task);
+    LOG_INFO(Service_OLSC, "island restore: download of {:016X} queued (task {})", app, task.id);
+    wake.notify_all();
+    return ResultSuccess;
 }
 
 void TransferQueue::HoldExecution(bool hold) {
@@ -579,7 +695,17 @@ std::vector<TransferTask> TransferQueue::Tasks() const {
 
 void TransferQueue::Delete(u64 task_id) {
     std::lock_guard lock{mutex};
-    std::erase_if(tasks, [task_id](const TransferTask& t) { return t.id == task_id && !t.running; });
+    std::erase_if(tasks,
+                  [task_id](const TransferTask& t) { return t.id == task_id && !t.running; });
+}
+
+void TransferQueue::Cancel(u64 task_id) {
+    std::lock_guard lock{mutex};
+    if (std::any_of(tasks.begin(), tasks.end(),
+                    [task_id](const auto& t) { return t.id == task_id && t.running; }))
+        live_progress.cancelled = true;
+    std::erase_if(tasks,
+                  [task_id](const TransferTask& t) { return t.id == task_id && !t.running; });
 }
 
 void TransferQueue::Raise(u64 task_id) {
@@ -608,8 +734,7 @@ std::optional<std::array<u64, 3>> TransferQueue::ProgressOf(u64 task_id, u8 filt
         const auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - live_started)
                 .count();
-        const u64 bits_per_second =
-            elapsed > 0 ? done * 8 * 1000 / static_cast<u64>(elapsed) : 0;
+        const u64 bits_per_second = elapsed > 0 ? done * 8 * 1000 / static_cast<u64>(elapsed) : 0;
         return std::array<u64, 3>{live_progress.total.load(), done, bits_per_second};
     }
     return std::nullopt;
@@ -653,7 +778,8 @@ std::deque<TransferTask>::iterator TransferQueue::NextLocked(Clock::time_point n
         return tasks.end();
     }
     const auto runnable = [this](const TransferTask& t) {
-        return t.state == 0 && !t.running && !running_applications.contains(t.application_id);
+        return t.state == 0 && !t.running &&
+               (!running_applications.contains(t.application_id) || (t.type >= 2 && t.flag));
     };
     const auto basic = std::find_if(tasks.begin(), tasks.end(), [&](const TransferTask& t) {
         return runnable(t) && t.rank < RankPostponed;
@@ -697,8 +823,9 @@ TransferQueue::Clock::time_point TransferQueue::NextWakeLocked() const {
     for (const auto& [uid, due] : next_sweep) {
         wake_at = std::min(wake_at, due);
     }
-    if (std::any_of(tasks.begin(), tasks.end(),
-                    [](const TransferTask& t) { return t.state == 0 && t.rank >= RankPostponed; })) {
+    if (std::any_of(tasks.begin(), tasks.end(), [](const TransferTask& t) {
+            return t.state == 0 && t.rank >= RankPostponed;
+        })) {
         wake_at = std::min(wake_at, postponed_gate);
     }
     return wake_at;
@@ -748,6 +875,12 @@ void TransferQueue::Autonomy() {
     // An application's exit: an upload attempt for every user with that save, basic rank.
     for (const u64 title : exited) {
         for (const auto& user : users) {
+            if (user.IsValid()) {
+                u64 device_task{};
+                if (Settings()->Backup(user.RawString(), title))
+                    log_refusal("island backup", title,
+                                RegisterDeviceUpload(device_task, user, title, false));
+            }
             if (!user.IsValid() || !ReadLocalSave(system, user, title)) {
                 continue;
             }
@@ -763,6 +896,11 @@ void TransferQueue::Autonomy() {
     // The periodic sweep (0x1c8300): uploads, then downloads where the cloud has the title.
     for (const auto& user : due) {
         const std::string uid = user.RawString();
+        for (const auto app : Settings()->EnabledBackups(uid)) {
+            u64 device_task{};
+            log_refusal("island backup", app,
+                        RegisterDeviceUpload(device_task, user, app, false, RankPostponed));
+        }
         if (!OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid)) {
             continue;
         }
@@ -806,8 +944,8 @@ void TransferQueue::Run(std::stop_token stop) {
                 });
                 // Woken for exits or the agent's own time: the agent first. Woken because a task
                 // became runnable: that task first.
-                autonomy_due = !exited_applications.empty() ||
-                               NextLocked(Clock::now()) == tasks.end();
+                autonomy_due =
+                    !exited_applications.empty() || NextLocked(Clock::now()) == tasks.end();
                 continue;
             }
             waiting_logged.clear();
@@ -816,7 +954,7 @@ void TransferQueue::Run(std::stop_token stop) {
             }
             next->running = true;
             task = *next;
-            live_progress = {};
+            live_progress = task.progress;
             live_started = Clock::now();
             Raise(start_events);
         }
@@ -843,22 +981,24 @@ void TransferQueue::Execute(TransferTask& task) {
     const std::string uid = task.user.RawString();
     SessionRest rest{uid};
     tr::Outcome outcome;
-    if (task.type == 0) {
-        const auto info = FindLocalSave(system, task.user, task.application_id);
-        const auto local = ReadLocalSave(system, task.user, task.application_id);
+    if (task.type == 0 || task.type == 2) {
+        const bool device = task.type == 2;
+        const auto info = FindLocalSave(system, task.user, task.application_id, device);
+        const auto local = ReadLocalSave(system, task.user, task.application_id, device);
         if (!info || !local) {
             outcome = {tr::Error::LocalSaveNotFound, 0, "no local save"};
         } else {
             const auto controller = system.GetFileSystemController().OpenSaveDataController();
-            FileSys::UserId user_id{};
-            std::memcpy(user_id.data(), task.user.uuid.data(), sizeof(user_id));
-            const auto attribute = FileSys::SaveDataAttribute::Make(
-                task.application_id, FileSys::SaveDataType::Account, user_id,
-                FileSys::InvalidSystemSaveDataId, 0, FileSys::SaveDataRank::Primary);
+            const auto attribute = LocalAttribute(task.application_id, task.user, device);
             FileSys::SaveDataExtraData extra{};
             controller->ReadSaveDataExtraData(&extra, FileSys::SaveDataSpaceId::User, attribute);
             tr::LocalSave save;
             save.application_id = task.application_id;
+            save.datatype = device ? 3 : 0;
+            if (device) {
+                const auto setting = Settings()->Backup(uid, task.application_id);
+                save.desc = setting ? setting->desc : "";
+            }
             save.data_size = static_cast<s64>(info->save_image_size);
             LOG_DEBUG(Service_OLSC, "save data cloud: {:016X} data size {:#x}", task.application_id,
                       save.data_size);
@@ -871,25 +1011,43 @@ void TransferQueue::Execute(TransferTask& task) {
             outcome = tr::Upload(rest, fs, save, 0, &live_progress);
         }
     } else {
-        const auto info = FindLocalSave(system, task.user, task.application_id);
+        const bool device = task.type == 3;
+        const auto info = FindLocalSave(system, task.user, task.application_id, device);
         ManagerFs fs{system, task.user, info ? u64{info->save_id_unknown} : 0};
         outcome = tr::Download(rest, fs, task.application_id, task.archive_id,
-                               LaunchVersion(system, task.application_id), &live_progress);
+                               LaunchVersion(system, task.application_id), &live_progress,
+                               device ? 3 : 0);
+        if (device && outcome.error == tr::Error::None) {
+            const auto controller = system.GetFileSystemController().OpenSaveDataController();
+            const auto attribute = LocalAttribute(task.application_id, task.user, true);
+            FileSys::SaveDataExtraData extra{};
+            auto result = controller->ReadSaveDataExtraData(&extra, FileSys::SaveDataSpaceId::User,
+                                                            attribute);
+            if (result.IsSuccess()) {
+                extra.flags |= 0x10; // Native olsc's Restore flag, read by ACNH after import.
+                result = controller->WriteSaveDataExtraData(FileSys::SaveDataSpaceId::User,
+                                                            attribute, extra);
+            }
+            if (result.IsError())
+                outcome = {tr::Error::Fs, task.archive_id, "could not mark the restored island"};
+        }
     }
     task.progress = live_progress;
     // The task's result as olsc keeps it: 2179-<description>; an HTTP failure without a server
     // code is 2155-<status> on a console (olsc-transfer.md §5). Fs failures carry fs's own
     // result on a console; Harbor reports them as 2179-9100 (logged with fs's result above).
-    task.last_result = outcome.error == tr::Error::None
-                           ? 0
-                           : static_cast<u32>(Result{ErrorModule::OLSC,
-                                                     static_cast<u32>(outcome.error)}.raw);
-    // The ErrorHistoryDatabase (0x1b0530): a failure is the title's last error, a success clears it.
+    task.last_result =
+        outcome.error == tr::Error::None
+            ? 0
+            : static_cast<u32>(Result{ErrorModule::OLSC, static_cast<u32>(outcome.error)}.raw);
+    // The ErrorHistoryDatabase (0x1b0530): a failure is the title's last error, a success clears
+    // it.
     if (outcome.error == tr::Error::None) {
         Settings()->RemoveLastError(uid, task.application_id);
     } else {
-        Settings()->SetLastError(uid, task.application_id,
-                                 {task.type, static_cast<s64>(std::time(nullptr)), task.last_result});
+        Settings()->SetLastError(
+            uid, task.application_id,
+            {task.type, static_cast<s64>(std::time(nullptr)), task.last_result});
     }
     if (outcome.error == tr::Error::None) {
         LOG_INFO(Service_OLSC, "save data cloud: task {} done", task.id);
@@ -902,10 +1060,12 @@ void TransferQueue::Execute(TransferTask& task) {
     // from the transfer itself, so a list that fails to refresh cannot leave it unwritten. Then
     // the archive list follows.
     if (outcome.error == tr::Error::None) {
-        Settings()->SetSeries(uid, task.application_id, {outcome.series_id, outcome.commit_id});
+        Settings()->SetSeries(task.type >= 2 ? uid + "#device" : uid, task.application_id,
+                              {outcome.series_id, outcome.commit_id});
     }
-    OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid);
-    Repair(task.user);
+    OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(uid, task.type >= 2 ? 3 : 0);
+    if (task.type < 2)
+        Repair(task.user);
 }
 
 } // namespace Service::OLSC

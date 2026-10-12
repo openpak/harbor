@@ -14,10 +14,12 @@
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
+#include "core/openpak/async_worker.h"
 
 namespace Kernel {
 class KEvent;
 class KReadableEvent;
+class KTransferMemory;
 } // namespace Kernel
 
 namespace OpenPak {
@@ -35,6 +37,9 @@ class IAsyncResult final : public ServiceFramework<IAsyncResult> {
 public:
     IAsyncResult(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
                  std::function<Result()> work);
+    IAsyncResult(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                 OpenPak::AsyncWorker::Work work, std::function<std::array<u8, 0x30>()> progress,
+                 Kernel::KTransferMemory* list_memory = nullptr);
     ~IAsyncResult() override;
 
 private:
@@ -42,11 +47,16 @@ private:
     Result Cancel();
     Result HasDone(Out<bool> out_done);
     Result GetSystemEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetProgress(Out<std::array<u8, 0x30>> out_progress);
+    Result GetListSize(Out<u32> out_size);
+    Result GetListData(Out<u32> out_count, s32 offset, OutBuffer<BufferAttr_HipcMapAlias> out_data);
 
     KernelHelpers::ServiceContext service_context;
     Kernel::KEvent* event{};
     std::shared_ptr<OpenPak::AsyncWorker> worker;
     std::shared_ptr<OpenPak::AsyncTask> task;
+    std::function<std::array<u8, 0x30>()> progress;
+    Kernel::KTransferMemory* list_memory{};
 };
 
 class IRemoteStorageController final : public ServiceFramework<IRemoteStorageController> {

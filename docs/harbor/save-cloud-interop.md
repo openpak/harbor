@@ -1,6 +1,44 @@
 # Save Data Cloud account binding
 
-2026-10-11. Native Switch testing identified a Harbor archive metadata error.
+## ACNH island recovery — 2026-10-12
+
+The application service now implements `olsc:u` 25 (downloadable backup list) and 26
+(download a selected island). Listing validates the transfer-memory handle and page-aligned
+size, requests the owner's recovery grants and datatype-3 archives, and exposes native
+0x410 records through `IAsyncListData` 100/101. Downloads verify the selected title and game
+version, queue a device-save transfer, expose 0x30-byte progress through
+`IAsyncTransferRequest` 100, and mark successful imports with the Restore flag (0x10).
+These commands use the same shared core on desktop and Android.
+
+Application transfers hold autonomy registration, cancel the current transfer, replace queued
+device work, and release the execution hold once registered. Cancellation uses the async
+request's stop token directly in the transfer thread, including during a network response
+and immediately before importer finalization. It does not wait for the request's 200 ms
+progress poll. Cancellation before finalization leaves the destination save untouched.
+The ordinary task-list Delete command still leaves a running transfer in place; application
+cancellation uses a separate queue operation.
+
+The matching local `saves` change implements `/permissions` for the authenticated account's
+newest complete island per title and scopes `device_id=me` backup-cache requests to the
+requesting device. Recovery can find an island uploaded from another PC, Android device,
+or Switch signed into the same account. The service update must be deployed before either
+Harbor or native Switch can discover those recovery grants.
+
+Validation: desktop Harbor build and core-free `harbor-openpak-check selftest` pass, including
+native record layouts, missing/malformed grants, account isolation, version refusal, restored
+stream equality, and cancellation during metadata/chunk download and immediately before
+import. Evidence: `scratch/harbor-eden/island-restore-test/selftest.log` and
+`scratch/harbor-eden/island-restore-desktop-build.log`. Synthetic transfers exercise the
+archive codec with a fake filesystem adapter; they do not prove ACNH's in-game recovery UI,
+the production filesystem import, or restoration on Android/a physical Switch.
+All five changed production translation units also compile for Android ARM64 API 29 and
+33 (existing legacy/mainline CMake trees), with logs in
+`scratch/harbor-eden/island-restore-android-{legacy,mainline}-build.log`. This is a native
+compilation check; no APK was packaged or installed on a phone.
+
+## Account binding — 2026-10-11
+
+Native Switch testing identified a Harbor archive metadata error.
 
 Initial data's 32-byte AAD at plaintext offset 0x1020 holds the network service account ID,
 archive ID, and two zero u64 values. The first value is the account sent in X-NSA-ID. Harbor

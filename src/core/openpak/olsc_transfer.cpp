@@ -101,9 +101,10 @@ std::optional<Archive> ParseArchive(const std::string& body) {
         series != archive->end() && series->is_number_unsigned()) {
         out.series_id = series->get<std::uint64_t>();
     }
-    if (const auto digest = archive->find("encoded_digest"); digest != archive->end() &&
-                                                            digest->is_string()) {
-        if (const auto bytes = FromBase64Url(digest->get<std::string>()); bytes && bytes->size() >= 8) {
+    if (const auto digest = archive->find("encoded_digest");
+        digest != archive->end() && digest->is_string()) {
+        if (const auto bytes = FromBase64Url(digest->get<std::string>());
+            bytes && bytes->size() >= 8) {
             std::memcpy(&out.commit_id, bytes->data(), 8);
         }
     }
@@ -147,11 +148,11 @@ std::optional<Outcome> CheckPolicy(Rest& rest, std::uint64_t application_id,
     if (token.empty()) {
         return Fail(Error::Http, "policy: no device token");
     }
-    const auto reply = rest.Request(
-        "GET", PolicyHost,
-        fmt::format("/api/console/v2/application_policy/{:016x}/{:05}?dtoken={}", application_id,
-                    launch_version, token),
-        {});
+    const auto reply =
+        rest.Request("GET", PolicyHost,
+                     fmt::format("/api/console/v2/application_policy/{:016x}/{:05}?dtoken={}",
+                                 application_id, launch_version, token),
+                     {});
     std::string detail;
     if (ErrorOf(reply, &detail) != Error::None) {
         return Fail(Error::PolicyForbidden, "policy: " + detail);
@@ -182,9 +183,9 @@ std::optional<Outcome> LoadKeySeedPackage(Rest& rest, Fs& fs, const std::string&
         return Fail(Error::Http, "generate_key_seed_package: " + detail, archive_id);
     }
     const auto json = nlohmann::json::parse(generated.body, nullptr, false);
-    const auto package =
-        json.is_object() ? FromBase64Url(json.value("encoded_key_seed_package", std::string{}))
-                         : std::nullopt;
+    const auto package = json.is_object()
+                             ? FromBase64Url(json.value("encoded_key_seed_package", std::string{}))
+                             : std::nullopt;
     if (!package || package->size() != 0x200 || !fs.SetKeySeedPackage(*package)) {
         return Fail(Error::Fs, "key seed package refused", archive_id);
     }
@@ -242,11 +243,16 @@ std::string Base64Url(std::span<const std::uint8_t> data) {
 
 std::optional<Bytes> FromBase64Url(std::string_view text) {
     const auto value = [](char c) -> int {
-        if (c >= 'A' && c <= 'Z') return c - 'A';
-        if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-        if (c >= '0' && c <= '9') return c - '0' + 52;
-        if (c == '-' || c == '+') return 62;
-        if (c == '_' || c == '/') return 63;
+        if (c >= 'A' && c <= 'Z')
+            return c - 'A';
+        if (c >= 'a' && c <= 'z')
+            return c - 'a' + 26;
+        if (c >= '0' && c <= '9')
+            return c - '0' + 52;
+        if (c == '-' || c == '+')
+            return 62;
+        if (c == '_' || c == '/')
+            return 63;
         return -1;
     };
     while (!text.empty() && text.back() == '=') {
@@ -282,26 +288,33 @@ std::string StartUploadBody(const LocalSave& save, std::uint64_t series_id) {
     std::array<std::uint8_t, 32> digest{};
     std::memcpy(digest.data(), &save.commit_id, 8);
     return fmt::format(
-        R"({{"application_id":"{:016x}","datatype":0,"data_size":{},"saved_at_as_unixtime":{},)"
+        R"({{"application_id":"{:016x}","datatype":{},"data_size":{},"saved_at_as_unixtime":{},)"
         R"("launch_required_version":{},"series_id":{},"encoded_digest":"{}",)"
-        R"("has_thumbnail":false,"desc":null,"auto_backup":false,"acd_index":{}}})",
-        save.application_id, save.data_size, save.saved_at, save.launch_required_version,
-        series_id, Base64Url(digest), save.acd_index);
+        R"("has_thumbnail":false,"desc":{},"auto_backup":false,"acd_index":{}}})",
+        save.application_id, save.datatype, save.data_size, save.saved_at,
+        save.launch_required_version, series_id, Base64Url(digest),
+        save.datatype == 3 ? nlohmann::json(save.desc).dump() : "null", save.acd_index);
 }
 
 Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_id,
                Progress* progress) {
-    if (auto failed = CheckPolicy(rest, save.application_id, save.launch_required_version)) {
-        return *failed;
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "upload cancelled");
+    if (save.datatype == 3) {
+        if (!IsDeviceBackupTitle(save.application_id))
+            return Fail(Error::PolicyForbidden, "device-backup title policy");
+    } else {
+        if (auto failed = CheckPolicy(rest, save.application_id, save.launch_required_version))
+            return *failed;
     }
 
     // The cloud's records for the title: one still uploading blocks a new upload, a fixed one
     // is the base of a delta upload.
-    const auto list =
-        rest.Request("GET", StorageHost,
-                     fmt::format("{}/save_data_archives?datatype=0&application_id={:016x}", Api,
-                                 save.application_id),
-                     {});
+    const auto list = rest.Request(
+        "GET", StorageHost,
+        fmt::format("{}/save_data_archives?datatype={}&application_id={:016x}{}", Api,
+                    save.datatype, save.application_id, save.datatype == 3 ? "&device_id=me" : ""),
+        {});
     std::string detail;
     if (ErrorOf(list, &detail) != Error::None) {
         return Fail(Error::Http, "archive list: " + detail);
@@ -415,12 +428,13 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
     const auto sda = Sda(archive->id);
     unsigned counter = 0;
     for (const auto id : ids) {
+        if (progress && progress->IsCancelled())
+            return Fail(Error::Cancelled, "upload cancelled", archive->id);
         // X-Ignorable: counter=<chunk index> (0x1eed30); "2000" is tolerated.
         auto extend_headers = sda;
         extend_headers.emplace_back("X-Ignorable", fmt::format("counter={}", counter++));
-        const auto extended = rest.Request("POST", StorageHost,
-                                           archive_path + "/extend_upload_timeout", {},
-                                           extend_headers);
+        const auto extended = rest.Request(
+            "POST", StorageHost, archive_path + "/extend_upload_timeout", {}, extend_headers);
         if (ErrorOf(extended, &detail) != Error::None && CodeOf(extended) != "2000") {
             return Fail(Error::Http, "extend_upload_timeout: " + detail, archive->id);
         }
@@ -428,9 +442,8 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         // The component of this index (0x20f7f0): a delta's start_upload listed the base's;
         // absent ones are created (`meta` iff chunk 0).
         std::optional<Component> component;
-        if (const auto listed =
-                std::find_if(archive->components.begin(), archive->components.end(),
-                             [id](const Component& c) { return c.index == id; });
+        if (const auto listed = std::find_if(archive->components.begin(), archive->components.end(),
+                                             [id](const Component& c) { return c.index == id; });
             listed != archive->components.end()) {
             component = *listed;
         } else {
@@ -446,8 +459,7 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         if (!component) {
             return Fail(Error::ArchiveIncomplete, "component create reply", archive->id);
         }
-        const std::string component_path =
-            fmt::format("{}/component_files/{}", Api, component->id);
+        const std::string component_path = fmt::format("{}/component_files/{}", Api, component->id);
         if (component->status == "fixed") {
             return Fail(Error::ComponentAlreadyFixed, "component already fixed", archive->id);
         }
@@ -472,11 +484,11 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         if (put.status < 200 || put.status >= 300) {
             return Fail(Error::Http, fmt::format("blob PUT: HTTP {}", put.status), archive->id);
         }
-        const auto finished = rest.Request(
-            "POST", StorageHost, component_path + "/finish_upload",
-            fmt::format(R"({{"archive_size": {},"encoded_archive_digest": "{}"}})", bytes->size(),
-                        Base64Url(Md5(*bytes))),
-            sda);
+        const auto finished =
+            rest.Request("POST", StorageHost, component_path + "/finish_upload",
+                         fmt::format(R"({{"archive_size": {},"encoded_archive_digest": "{}"}})",
+                                     bytes->size(), Base64Url(Md5(*bytes))),
+                         sda);
         if (ErrorOf(finished, &detail) != Error::None) {
             return Fail(Error::Http, "component finish_upload: " + detail, archive->id);
         }
@@ -495,6 +507,8 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
         base ? fmt::format(R"({{"encoded_mac": "{}"}})", Base64Url(*mac))
              : fmt::format(R"({{"encoded_key_seed": "{}","encoded_mac": "{}"}})",
                            Base64Url(exporter->KeySeed()), Base64Url(*mac));
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "upload cancelled before finish", archive->id);
     const auto finished =
         rest.Request("POST", StorageHost, archive_path + "/finish_upload", finish_body, sda);
     if (ErrorOf(finished, &detail) != Error::None) {
@@ -511,8 +525,39 @@ Outcome Upload(Rest& rest, Fs& fs, const LocalSave& save, std::uint64_t series_i
     return {Error::None, archive->id, {}, base ? base->series_id : series_id, save.commit_id};
 }
 
+BackupList ListDeviceBackups(Rest& rest, std::uint64_t application_id, std::size_t capacity) {
+    if (!IsDeviceBackupTitle(application_id))
+        return {Error::PolicyForbidden, {}};
+    const auto permission_reply =
+        rest.Request("GET", StorageHost, std::string{Api} + "/permissions", {});
+    std::string detail;
+    if (const auto error = ErrorOf(permission_reply, &detail); error != Error::None)
+        return {error, {}};
+    const auto permissions = ParseBackupPermissions(permission_reply.body);
+    if (!permissions)
+        return {Error::PermissionIncomplete, {}};
+    const auto reply = rest.Request(
+        "GET", StorageHost,
+        fmt::format("{}/save_data_archives?datatype=3&application_id={:016x}", Api, application_id),
+        {});
+    if (const auto error = ErrorOf(reply, &detail); error != Error::None)
+        return {error, {}};
+    const auto archives = ParseArchiveList(reply.body);
+    if (!archives)
+        return {Error::ArchiveIncomplete, {}};
+    auto downloadable = DownloadableBackups(*archives, *permissions, application_id,
+                                            rest.NetworkServiceAccountId());
+    if (downloadable.size() > capacity)
+        return {Error::BackupListOverflow, {}};
+    return {Error::None, std::move(downloadable)};
+}
+
 Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t archive_id,
-                 std::uint32_t launch_version, Progress* progress) {
+                 std::uint32_t launch_version, Progress* progress, std::uint8_t datatype) {
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "download cancelled", archive_id);
+    if (datatype == 3 && !IsDeviceBackupTitle(application_id))
+        return Fail(Error::PolicyForbidden, "device-backup title policy");
     const std::string archive_path = fmt::format("{}/save_data_archives/{}", Api, archive_id);
     const auto sda = Sda(archive_id);
     const auto got = rest.Request("GET", StorageHost, archive_path, {}, sda);
@@ -527,8 +572,24 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
     if (!archive) {
         return Fail(Error::ArchiveIncomplete, "archive reply", archive_id);
     }
-    if (auto failed = CheckPolicy(rest, application_id, launch_version)) {
-        return *failed;
+    if (datatype == 3) {
+        const auto json = nlohmann::json::parse(got.body, nullptr, false);
+        const auto records =
+            json.is_object() && json.contains("save_data_archive")
+                ? ParseArchiveList(nlohmann::json{
+                      {"save_data_archives", nlohmann::json::array({json["save_data_archive"]})}}
+                                       .dump())
+                : std::nullopt;
+        if (!records || records->size() != 1 || records->front().application_id != application_id ||
+            records->front().datatype != 3 || records->front().status != StatusFixed)
+            return Fail(Error::ArchiveIncomplete,
+                        "island archive does not match the requested title", archive_id);
+        if (launch_version < records->front().launch_required_version)
+            return Fail(Error::ApplicationTooOld, "update the game before restoring the island",
+                        archive_id);
+    } else {
+        if (auto failed = CheckPolicy(rest, application_id, launch_version))
+            return *failed;
     }
     if (auto failed = LoadKeySeedPackage(rest, fs, archive_path, archive_id)) {
         return *failed;
@@ -537,6 +598,8 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
     if (auto failed = ReadMeta(rest, *archive, &meta)) {
         return *failed;
     }
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "download cancelled before opening import", archive_id);
     auto importer = fs.OpenImporter(meta);
     if (!importer) {
         return Fail(Error::Fs, "the archive could not be opened for import", archive_id);
@@ -568,6 +631,8 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
         progress->total = total;
     }
     for (const auto id : ids) {
+        if (progress && progress->IsCancelled())
+            return Fail(Error::Cancelled, "download cancelled", archive_id);
         const auto component =
             std::find_if(downloading->components.begin(), downloading->components.end(),
                          [id](const Component& c) { return c.index == id; });
@@ -575,6 +640,8 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
             return Fail(Error::ChunkWithoutComponent, fmt::format("chunk {:#x}", id), archive_id);
         }
         const auto blob = rest.Blob("GET", component->get_url, {});
+        if (progress && progress->IsCancelled())
+            return Fail(Error::Cancelled, "download cancelled during chunk request", archive_id);
         if (blob.status < 200 || blob.status >= 300) {
             return Fail(Error::Http, fmt::format("blob GET: HTTP {}", blob.status), archive_id);
         }
@@ -587,11 +654,15 @@ Outcome Download(Rest& rest, Fs& fs, std::uint64_t application_id, std::uint64_t
             progress->done += bytes.size();
         }
     }
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "download cancelled before finish", archive_id);
     const auto finished =
         rest.Request("POST", StorageHost, archive_path + "/finish_download", {}, sda);
     if (ErrorOf(finished, &detail) != Error::None) {
         return Fail(Error::Http, "finish_download: " + detail, archive_id);
     }
+    if (progress && progress->IsCancelled())
+        return Fail(Error::Cancelled, "download cancelled before import", archive_id);
     if (!importer->Finalize()) {
         return Fail(Error::Fs, "the save could not be written", archive_id);
     }

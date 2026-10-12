@@ -33,10 +33,10 @@
 
 #include "common/logging.h"
 #include "common/redact.h"
-#include "core/openpak/boot_connection.h"
-#include "core/openpak/network_profile.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_archive.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
+#include "core/openpak/boot_connection.h"
+#include "core/openpak/network_profile.h"
 #include "core/openpak/olsc.h"
 #include "core/openpak/olsc_transfer.h"
 #include "core/openpak/platform.h"
@@ -101,8 +101,7 @@ std::string Envelope(const std::string& payload, const std::string& sig, const s
 
 std::string Payload(int version, const std::string& switch_families) {
     return R"({"type":"openpak-ceiling","version":)" + std::to_string(version) +
-           R"(,"issued":"2026-10-07T00:00:00Z","platforms":{"switch":[)" + switch_families +
-           "]}}";
+           R"(,"issued":"2026-10-07T00:00:00Z","platforms":{"switch":[)" + switch_families + "]}}";
 }
 
 bool Verifies(const std::string& envelope, const std::vector<np::PinnedKey>& keys) {
@@ -273,10 +272,9 @@ void OlscChecks(const std::filesystem::path& dir) {
     const auto wrap = [](const std::string& records) {
         return R"({"save_data_archives":[)" + records + "]}";
     };
-    const std::string body =
-        wrap(record(7, "fixed", 1000, "1010", R"(,"acd_index":3,"platform_key_generation":1)") +
-             "," + record(8, "fixed", 2000, "null", "") + "," +
-             record(9, "uploading", 3000, "null", ""));
+    const std::string body = wrap(
+        record(7, "fixed", 1000, "1010", R"(,"acd_index":3,"platform_key_generation":1)") + "," +
+        record(8, "fixed", 2000, "null", "") + "," + record(9, "uploading", 3000, "null", ""));
     const auto list = olsc::ParseArchiveList(body);
     Check(list && list->size() == 3, "a complete archive list is read");
     Check(list && (*list)[0].nsa_id == 0xaa && (*list)[0].application_id == 0x0100A00000BB0000 &&
@@ -350,6 +348,19 @@ void OlscChecks(const std::filesystem::path& dir) {
         Check(settings.GlobalAutoUpload(uid) && !settings.GlobalAutoDownload(uid) &&
                   settings.ApplicationAutoTransfer(uid, 0x0100000000000001),
               "an unknown user has the settings defaults (backup on, download off)");
+        Check(!settings.Backup(uid, 1) && !settings.SetBackupCustomData(uid, 1, "island"),
+              "device backup custom data requires an existing setting record");
+        settings.SetBackup(uid, 1, true);
+        settings.SetBackupCustomData(uid, 1, "island \"quoted\"");
+        settings.SetBackup(uid, 1, false);
+        Check(settings.Backup(uid, 1)->desc == "island \"quoted\"" &&
+                  !settings.Backup(uid, 1)->enabled && !settings.Backup("other", 1) &&
+                  !settings.SetBackupCustomData(uid, 1, std::string(0x400, 'x')),
+              "device settings preserve custom data, isolate users and enforce the buffer limit");
+        for (std::uint64_t app = 1; app <= 17; ++app)
+            settings.SetBackup("other", app, true);
+        Check(!settings.Backup("other", 1) && settings.EnabledBackups("other").size() == 16,
+              "device settings evict the oldest record at sixteen applications");
         settings.SetGlobalAutoUpload(uid, false);
         settings.SetApplicationAutoTransfer(uid, 0x0100A00000BB0000, true);
         settings.SetSeries(uid, 0x0100A00000BB0000, {7, 9});
@@ -359,6 +370,9 @@ void OlscChecks(const std::filesystem::path& dir) {
     }
     olsc::DaemonSettings reread{file};
     const auto series = reread.Series(uid, 0x0100A00000BB0000);
+    Check(reread.Backup(uid, 1) && !reread.Backup(uid, 1)->enabled &&
+              reread.Backup(uid, 1)->desc == "island \"quoted\"",
+          "device backup enabled state and custom data survive a restart");
     Check(!reread.GlobalAutoUpload(uid) && !reread.GlobalAutoDownload(uid) &&
               reread.ApplicationAutoTransfer(uid, 0x0100A00000BB0000) &&
               !reread.ApplicationAutoTransfer(uid, 0x0100000000000001) && series &&
@@ -390,6 +404,16 @@ void OlscChecks(const std::filesystem::path& dir) {
         auto& cache = olsc::ArchiveCache::Instance();
         cache.SetStore(store);
         cache.Put(uid, *list);
+        auto island = (*list)[0];
+        island.id = 123456;
+        island.application_id = 0x01006f8002326000;
+        island.datatype = 3;
+        island.desc = "island backup";
+        cache.Put(uid, {island}, 3);
+        Check(cache.Get(uid)->size() == list->size() && cache.Get(uid, 3)->size() == 1 &&
+                  cache.Get(uid, 3)->front().id == island.id &&
+                  cache.Get(uid)->front().id == list->front().id,
+              "device and account archives have separate caches for the same user");
         cache.Clear();
         Check(!cache.Get(uid), "a cleared cache has no list");
         cache.SetStore(store);
@@ -398,6 +422,10 @@ void OlscChecks(const std::filesystem::path& dir) {
                   (*kept)[0].nsa_id == 0xaa && (*kept)[0].acd_index == 3 &&
                   (*kept)[2].status == olsc::StatusUploading,
               "the archive list survives a restart, as the sysmodule's cache does");
+        const auto kept_island = cache.Get(uid, 3);
+        Check(kept_island && kept_island->size() == 1 && kept_island->front().id == island.id &&
+                  kept_island->front().datatype == 3 && kept_island->front().desc == island.desc,
+              "device archives retain their type and custom data across a restart");
         cache.SetStore(dir / "olsc-archives-other.json");
         Check(!cache.Get(uid), "another data directory starts without the list");
         cache.Clear();
@@ -415,12 +443,10 @@ void SaveTransferChecks(const std::filesystem::path& dir) {
         return out;
     };
     // Random inputs, expected value from openssl enc -aes-128-ecb -d chained as spl does.
-    Check(st::DeriveKey(hex("b752f982ab4f9189815a04e3d3d11039"),
-                        hex("702d17df75e47669fd76fcf6a3a8ebfd"),
-                        hex("098ee32b29a899ec731ebdc51b0ab22e"),
-                        hex("f95b61685f1b14b7ccfeb0f34bd7c8a6"),
-                        hex("a5dd2526e7d4b63caadf35a00ec4a24d")) ==
-              hex("1211b7f6923cea2257ba681808b341e3"),
+    Check(st::DeriveKey(
+              hex("b752f982ab4f9189815a04e3d3d11039"), hex("702d17df75e47669fd76fcf6a3a8ebfd"),
+              hex("098ee32b29a899ec731ebdc51b0ab22e"), hex("f95b61685f1b14b7ccfeb0f34bd7c8a6"),
+              hex("a5dd2526e7d4b63caadf35a00ec4a24d")) == hex("1211b7f6923cea2257ba681808b341e3"),
           "key derivation chains GenerateAesKek and GenerateAesKey as spl does");
     Check(st::MasterKeyIndex(5) == 4 && st::MasterKeyIndex(1) == 0 && st::MasterKeyIndex(0) == 0,
           "key generation N uses master key N-1");
@@ -438,8 +464,8 @@ void SaveTransferChecks(const std::filesystem::path& dir) {
     st::RandomBytes(payload);
     st::Key128 tag{};
     const auto stream = st::EncryptStream(key, iv, st::StreamKeyGeneration, payload, &tag);
-    Check(stream.size() == 0x2000 && std::memcmp(stream.data(), "AGS0", 4) == 0 &&
-              stream[6] == 5 && stream[7] == 0 && std::memcmp(stream.data() + 0x10, iv.data(), 16) == 0,
+    Check(stream.size() == 0x2000 && std::memcmp(stream.data(), "AGS0", 4) == 0 && stream[6] == 5 &&
+              stream[7] == 0 && std::memcmp(stream.data() + 0x10, iv.data(), 16) == 0,
           "an initial data stream is 0x2000 bytes: AGS0, key generation 5, IV, tag");
     const auto back = st::DecryptStream(key, stream);
     Check(back && *back == payload, "a stream decrypts to its payload");
@@ -642,7 +668,8 @@ void SaveArchiveChecks() {
           "another MAC is refused");
     auto bad = *writer.Chunk(0x1000);
     bad[0x30] ^= 1;
-    Check(reader.Push(0x1000, bad) == st::ArchiveReader::Error::Chunk, "a changed chunk is refused");
+    Check(reader.Push(0x1000, bad) == st::ArchiveReader::Error::Chunk,
+          "a changed chunk is refused");
     bool all = true;
     for (const u16 id : {u16{0x1002}, u16{0x1000}, u16{0x1001}}) {
         all = all && reader.Push(id, *writer.Chunk(id)) == st::ArchiveReader::Error::None;
@@ -673,6 +700,7 @@ public:
         std::string key_seed, mac;
         std::uint64_t series = 7;
         std::uint64_t previous = 0;
+        nlohmann::json metadata = nlohmann::json::object();
     };
     std::vector<Version> versions;
     std::vector<std::string> calls;
@@ -681,10 +709,21 @@ public:
     int puts = 0;
     bool delta_sent_seed = false;
     std::uint64_t next_id = 100;
+    bool recovery_granted = true;
+    bool deny_account_policy = false;
+    std::optional<std::string> permission_reply;
+    tr::Progress* cancel_on_finish_download{};
+    std::stop_source* stop_on_finish_download{};
+    std::stop_source* stop_on_blob{};
+    std::uint32_t stop_on_blob_index{};
 
     std::uint64_t nsa_id = 0x1122334455667788ULL;
-    std::uint64_t NetworkServiceAccountId() override { return nsa_id; }
-    std::string DeviceToken() override { return "dtok"; }
+    std::uint64_t NetworkServiceAccountId() override {
+        return nsa_id;
+    }
+    std::string DeviceToken() override {
+        return "dtok";
+    }
 
     tr::HttpResponse Request(const std::string& method, const std::string& host,
                              const std::string& path, const std::string& body,
@@ -693,17 +732,35 @@ public:
         call_headers.push_back(headers);
         const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
         if (host == tr::PolicyHost) {
+            if (deny_account_policy)
+                return {403, R"({"code":"0000"})"};
             return {200, R"({"policy_type":"ALL_OK"})"};
+        }
+        if (path.ends_with("/permissions")) {
+            if (permission_reply)
+                return {200, *permission_reply};
+            auto permissions = nlohmann::json::array();
+            for (const auto& v : versions) {
+                if (recovery_granted && v.status == "fixed" && v.metadata.value("datatype", 0) == 3)
+                    permissions.push_back(
+                        {{"id", v.id},
+                         {"save_data_archive_id", v.id},
+                         {"nsa_id", fmt::format("{:016x}", nsa_id)},
+                         {"application_id", v.metadata.value("application_id", std::string{})},
+                         {"created_at_as_unixtime", 1700000000}});
+            }
+            return {200, nlohmann::json{{"permissions", permissions}}.dump()};
         }
         if (path.find("/save_data_archives?") != std::string::npos) {
             nlohmann::json list = nlohmann::json::array();
             for (const auto& v : versions) {
-                list.push_back({{"id", v.id}, {"status", v.status}});
+                list.push_back(nlohmann::json::parse(Archive(v, false))["save_data_archive"]);
             }
             return {200, nlohmann::json{{"save_data_archives", list}}.dump()};
         }
         if (path.ends_with("/save_data_archives/start_upload")) {
             versions.push_back({next_id++, "uploading", partitions, {}, {}, {}});
+            versions.back().metadata = json;
             return {200, Archive(versions.back(), false)};
         }
         const auto v = FindVersion(path);
@@ -711,6 +768,7 @@ public:
         if (path.ends_with("/start_upload") && v) {
             // A delta (saves §6.1): the base's components mirrored, handed over.
             Version next{next_id++, "uploading", v->partitions, {}, {}, {}, v->series, v->id};
+            next.metadata = json;
             for (const auto& part : v->parts) {
                 next.parts.push_back({next_id++, part.index, "hand_over", part.blob});
             }
@@ -760,16 +818,22 @@ public:
         }
         if (path.ends_with("/generate_key_seed_package") && v) {
             // The fake fs reads this "package" back: challenge ∥ seed ∥ MAC, not the real format.
-            const auto challenge = tr::FromBase64Url(json.value("encoded_challenge", std::string{}));
+            const auto challenge =
+                tr::FromBase64Url(json.value("encoded_challenge", std::string{}));
             tr::Bytes package(0x200);
             const auto seed = tr::FromBase64Url(v->key_seed);
             const auto mac = tr::FromBase64Url(v->mac);
             std::memcpy(package.data(), challenge->data(), 16);
             std::memcpy(package.data() + 16, seed->data(), 16);
             std::memcpy(package.data() + 32, mac->data(), 16);
-            return {200, nlohmann::json{{"encoded_key_seed_package", tr::Base64Url(package)}}.dump()};
+            return {200,
+                    nlohmann::json{{"encoded_key_seed_package", tr::Base64Url(package)}}.dump()};
         }
         if ((path.ends_with("/start_download") || path.ends_with("/finish_download")) && v) {
+            if (path.ends_with("/finish_download") && cancel_on_finish_download)
+                cancel_on_finish_download->cancelled = true;
+            if (path.ends_with("/finish_download") && stop_on_finish_download)
+                stop_on_finish_download->request_stop();
             return {200, Archive(*v, true)};
         }
         if (method == "GET" && v) {
@@ -789,6 +853,8 @@ public:
                         p.blob.assign(body.begin(), body.end());
                         return {200, {}};
                     }
+                    if (stop_on_blob && p.index == stop_on_blob_index)
+                        stop_on_blob->request_stop();
                     return {200, std::string(p.blob.begin(), p.blob.end())};
                 }
             }
@@ -832,26 +898,41 @@ private:
                          {"status", p.status},
                          {"archive_size", p.blob.size()}};
         if (url == "put") {
-            c["put_url"] = fmt::format("https://scsi-upload.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+            c["put_url"] =
+                fmt::format("https://scsi-upload.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
         } else {
-            c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+            c["get_url"] =
+                fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
         }
         return nlohmann::json{{"component_file", c}}.dump();
     }
-    static std::string Archive(const Version& v, bool with_urls) {
+    std::string Archive(const Version& v, bool with_urls) {
         nlohmann::json parts = nlohmann::json::array();
         for (const auto& p : v.parts) {
-            nlohmann::json c{{"id", p.id}, {"index", p.index}, {"status", p.status},
+            nlohmann::json c{{"id", p.id},
+                             {"index", p.index},
+                             {"status", p.status},
                              {"archive_size", p.blob.size()}};
             if (with_urls) {
-                c["get_url"] = fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
+                c["get_url"] =
+                    fmt::format("https://scsi-download.lp1.scsi.srv.nintendo.net/blob/{}", p.id);
             }
             parts.push_back(c);
         }
-        return nlohmann::json{{"save_data_archive",
-                               {{"id", v.id}, {"status", v.status}, {"series_id", v.series},
-                                {"num_of_partitions", v.partitions}, {"component_files", parts}}}}
-            .dump();
+        auto archive = v.metadata;
+        archive["id"] = v.id;
+        archive["status"] = v.status;
+        archive["series_id"] = v.series;
+        archive["num_of_partitions"] = v.partitions;
+        archive["component_files"] = parts;
+        archive["nsa_id"] = fmt::format("{:016x}", nsa_id);
+        archive["device_id"] = "old-device";
+        archive["device_serial"] = "";
+        archive["previous_save_data_archive_id"] =
+            v.previous ? nlohmann::json(v.previous) : nlohmann::json(nullptr);
+        archive["finished_at_as_unixtime"] =
+            v.status == "fixed" ? nlohmann::json(1700000001) : nlohmann::json(nullptr);
+        return nlohmann::json{{"save_data_archive", archive}}.dump();
     }
 };
 
@@ -860,22 +941,42 @@ public:
     FakeExporter(const st::ArchiveSource& source, const st::Key128& k, const st::Key128& m,
                  const tr::Key& seed_)
         : writer{source, k, m}, seed{seed_} {}
-    bool SetDivisionCount(int count) override { return writer.SetDivisionCount(count); }
-    std::vector<std::uint16_t> ChunkIds() override { return writer.ChunkIds(); }
-    std::optional<tr::Bytes> Chunk(std::uint16_t id) override { return writer.Chunk(id); }
-    void SetAad(const tr::Aad& aad) override { writer.SetAad(aad); }
-    tr::Aad ImportAad() override { return writer.Aad(); }
-    tr::Key KeySeed() override { return seed; }
-    std::optional<tr::Key> InitialDataMac() override { return writer.InitialDataMac(); }
-    bool Finalize() override { return true; }
+    bool SetDivisionCount(int count) override {
+        return writer.SetDivisionCount(count);
+    }
+    std::vector<std::uint16_t> ChunkIds() override {
+        return writer.ChunkIds();
+    }
+    std::optional<tr::Bytes> Chunk(std::uint16_t id) override {
+        return writer.Chunk(id);
+    }
+    void SetAad(const tr::Aad& aad) override {
+        writer.SetAad(aad);
+    }
+    tr::Aad ImportAad() override {
+        return writer.Aad();
+    }
+    tr::Key KeySeed() override {
+        return seed;
+    }
+    std::optional<tr::Key> InitialDataMac() override {
+        return writer.InitialDataMac();
+    }
+    bool Finalize() override {
+        return true;
+    }
     st::ArchiveWriter writer;
     tr::Key seed;
 };
 
 class FakeImporter final : public tr::Importer {
 public:
-    tr::Aad ImportAad() override { return reader.Content().aad; }
-    std::vector<std::uint16_t> ChunkIds() override { return reader.ChunkIds(); }
+    tr::Aad ImportAad() override {
+        return reader.Content().aad;
+    }
+    std::vector<std::uint16_t> ChunkIds() override {
+        return reader.ChunkIds();
+    }
     bool Push(std::uint16_t id, std::span<const std::uint8_t> bytes) override {
         return reader.Push(id, bytes) == st::ArchiveReader::Error::None;
     }
@@ -902,7 +1003,9 @@ public:
     static st::Key128 StreamKey(const tr::Key& seed) {
         return st::Cmac(seed, std::array<std::uint8_t, 4>{'k', 'e', 'y', '3'});
     }
-    tr::Key Challenge() override { return challenge; }
+    tr::Key Challenge() override {
+        return challenge;
+    }
     bool SetKeySeedPackage(std::span<const std::uint8_t> package) override {
         if (std::memcmp(package.data(), challenge.data(), 16) != 0) {
             return false;
@@ -964,15 +1067,145 @@ void TransferFlowChecks() {
     save.acd_index = 2;
     save.launch_required_version = 3;
     const auto body = tr::StartUploadBody(save, 9);
-    Check(body.starts_with(R"({"application_id":"0100a5a020d5e000","datatype":0,"data_size":524288,)") &&
+    Check(body.starts_with(
+              R"({"application_id":"0100a5a020d5e000","datatype":0,"data_size":524288,)") &&
               body.find(R"("encoded_digest":"iHdmVUQzIhEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",)") !=
                   std::string::npos &&
-              body.ends_with(R"("has_thumbnail":false,"desc":null,"auto_backup":false,"acd_index":2})"),
+              body.ends_with(
+                  R"("has_thumbnail":false,"desc":null,"auto_backup":false,"acd_index":2})"),
           "start_upload's body has the console's keys, order and digest");
 
     st::ArchiveSource source;
     source.stream.resize(7 * 0x4000);
     st::RandomBytes(source.stream);
+    auto device = save;
+    device.application_id = 0x01006f8002326000ULL;
+    device.datatype = 3;
+    device.desc = "island \"quoted\"";
+    const auto device_body = nlohmann::json::parse(tr::StartUploadBody(device, 9));
+    Check(device_body["datatype"] == 3 && device_body["desc"] == device.desc,
+          "island uploads use datatype 3 and escape their custom data");
+    FakeServer device_server;
+    auto device_source = source;
+    device_source.extra_data[0x20] = 3;
+    FakeFs device_fs{device_source};
+    tr::Progress device_progress;
+    const auto device_up = tr::Upload(device_server, device_fs, device, 0, &device_progress);
+    Check(device_up.error == tr::Error::None && device_progress.done == device_progress.total &&
+              !device_server.calls.empty() &&
+              device_server.calls.front().find(
+                  "datatype=3&application_id=01006f8002326000&device_id=me") != std::string::npos,
+          "island upload uses its device-scoped list and completes all components");
+    const auto device_list = tr::ListDeviceBackups(device_server, device.application_id, 1);
+    Check(device_list.error == tr::Error::None && device_list.archives.size() == 1 &&
+              device_list.archives.front().id == device_up.archive_id &&
+              device_list.archives.front().desc == device.desc,
+          "island recovery joins fixed archives with the owner's server grants");
+    const auto packed_island = OpenPak::Olsc::PackBackupInfo(device_list.archives.front());
+    std::uint64_t packed_id{}, packed_time{};
+    std::memcpy(&packed_id, packed_island.data(), 8);
+    std::memcpy(&packed_time, packed_island.data() + 8, 8);
+    Check(packed_id == device_up.archive_id && packed_time == 1700000001 &&
+              std::string(reinterpret_cast<const char*>(packed_island.data() + 0x10)) ==
+                  device.desc &&
+              packed_island.back() == 0,
+          "downloadable island records use the native 0x410 layout");
+    Check(tr::ListDeviceBackups(device_server, device.application_id, 0).error ==
+              tr::Error::BackupListOverflow,
+          "a small transfer-memory capacity refuses excess island records");
+    device_server.recovery_granted = false;
+    Check(tr::ListDeviceBackups(device_server, device.application_id, 1).archives.empty(),
+          "an island without a recovery grant is not offered");
+    device_server.recovery_granted = true;
+    device_server.permission_reply = R"({"permissions":[{"id":1,"save_data_archive_id":100}]})";
+    Check(tr::ListDeviceBackups(device_server, device.application_id, 1).error ==
+              tr::Error::PermissionIncomplete,
+          "incomplete native recovery grants return 2179-3320");
+    device_server.permission_reply.reset();
+    Check(
+        !OpenPak::Olsc::ParseBackupPermissions(
+            R"({"permissions":[{"id":"18446744073709551616","save_data_archive_id":1,"nsa_id":"1122334455667788","application_id":"01006f8002326000","created_at_as_unixtime":1}]})"),
+        "overflowing permission ids are rejected without throwing");
+    auto granted = *OpenPak::Olsc::ParseBackupPermissions(fmt::format(
+        R"({{"permissions":[{{"id":1,"save_data_archive_id":{},"nsa_id":"1122334455667788","application_id":"01006f8002326000","created_at_as_unixtime":1}}]}})",
+        device_up.archive_id));
+    ++granted.front().nsa_id;
+    Check(OpenPak::Olsc::DownloadableBackups(device_list.archives, granted, device.application_id,
+                                             device_server.nsa_id)
+              .empty(),
+          "another account's recovery grant cannot authorize an island");
+
+    FakeFs device_destination{st::ArchiveSource{}};
+    device_destination.shared_mac_key = &device_fs.mac_key;
+    device_server.deny_account_policy = true;
+    tr::Progress device_download_progress;
+    Check(tr::Download(device_server, device_destination, device.application_id,
+                       device_up.archive_id, 3, &device_download_progress, 3)
+                      .error == tr::Error::None &&
+              device_destination.imported == device_source.stream,
+          "a second device restores the same island through the device policy");
+    Check(tr::Download(device_server, device_destination, device.application_id,
+                       device_up.archive_id, 2, nullptr, 3)
+                  .error == tr::Error::ApplicationTooOld,
+          "an older game version cannot import an island backup");
+    FakeFs cancelled_destination{st::ArchiveSource{}};
+    cancelled_destination.shared_mac_key = &device_fs.mac_key;
+    tr::Progress cancelled_progress;
+    device_server.cancel_on_finish_download = &cancelled_progress;
+    Check(tr::Download(device_server, cancelled_destination, device.application_id,
+                       device_up.archive_id, 3, &cancelled_progress, 3)
+                      .error == tr::Error::Cancelled &&
+              cancelled_destination.imported.empty(),
+          "a cancelled island restore stops before writing the destination save");
+    device_server.cancel_on_finish_download = nullptr;
+    std::stop_source request_cancellation;
+    tr::Progress request_progress;
+    request_progress.cancellation = request_cancellation.get_token();
+    device_server.stop_on_finish_download = &request_cancellation;
+    Check(tr::Download(device_server, cancelled_destination, device.application_id,
+                       device_up.archive_id, 3, &request_progress, 3)
+                      .error == tr::Error::Cancelled &&
+              cancelled_destination.imported.empty(),
+          "IPC cancellation reaches island import immediately through the request's stop token");
+    device_server.stop_on_finish_download = nullptr;
+    std::stop_source blob_cancellation;
+    tr::Progress blob_progress;
+    blob_progress.cancellation = blob_cancellation.get_token();
+    device_server.stop_on_blob = &blob_cancellation;
+    Check(tr::Download(device_server, cancelled_destination, device.application_id,
+                       device_up.archive_id, 3, &blob_progress, 3)
+                      .error == tr::Error::Cancelled &&
+              cancelled_destination.imported.empty(),
+          "cancellation during metadata download leaves the island untouched");
+    device_server.stop_on_blob = nullptr;
+    std::stop_source chunk_cancellation;
+    tr::Progress chunk_progress;
+    chunk_progress.cancellation = chunk_cancellation.get_token();
+    device_server.stop_on_blob = &chunk_cancellation;
+    device_server.stop_on_blob_index = 4096;
+    Check(tr::Download(device_server, cancelled_destination, device.application_id,
+                       device_up.archive_id, 3, &chunk_progress, 3)
+                      .error == tr::Error::Cancelled &&
+              cancelled_destination.imported.empty(),
+          "cancellation during an island chunk download stops before importing it");
+    device_server.stop_on_blob = nullptr;
+    FakeServer pre_cancelled_server;
+    Check(tr::Download(pre_cancelled_server, cancelled_destination, device.application_id,
+                       device_up.archive_id, 3, &blob_progress, 3)
+                      .error == tr::Error::Cancelled &&
+              pre_cancelled_server.calls.empty(),
+          "a restore cancelled before execution makes no network request");
+    Check(tr::Download(device_server, cancelled_destination, 0x0100e6c01163c000ULL,
+                       device_up.archive_id, 3, nullptr, 3)
+                      .error == tr::Error::ArchiveIncomplete &&
+              cancelled_destination.imported.empty(),
+          "an archive for another application cannot replace the requested island");
+    device.application_id = 0x0100000000000001ULL;
+    FakeServer forbidden_device_server;
+    Check(tr::Upload(forbidden_device_server, device_fs, device, 0, &device_progress).error ==
+                  tr::Error::PolicyForbidden &&
+              forbidden_device_server.calls.empty(),
+          "device policy refuses other titles before making network requests");
     FakeServer server;
     FakeFs harbor_a{source};
     tr::Progress progress;
@@ -983,9 +1216,11 @@ void TransferFlowChecks() {
           "an upload creates every component (meta included), PUTs them and finishes");
     Check(server.versions[0].key_seed == tr::Base64Url(harbor_a.own_seed),
           "finish_upload carries the exporter's key seed and MAC");
-    const auto& uploaded_meta = *std::find_if(server.versions[0].parts.begin(),
-        server.versions[0].parts.end(), [](const auto& part) { return part.index == 0; });
-    const auto native_meta = st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), uploaded_meta.blob);
+    const auto& uploaded_meta =
+        *std::find_if(server.versions[0].parts.begin(), server.versions[0].parts.end(),
+                      [](const auto& part) { return part.index == 0; });
+    const auto native_meta =
+        st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), uploaded_meta.blob);
     std::uint64_t bound_account = 0, bound_archive = 0;
     if (native_meta && native_meta->size() == sizeof(st::InitialDataContent)) {
         std::memcpy(&bound_account, native_meta->data() + 0x1020, 8);
@@ -1009,21 +1244,23 @@ void TransferFlowChecks() {
         const bool has_sda = std::any_of(h.begin(), h.end(), [&](const auto& kv) {
             return kv.first == "X-SDA-ID" && kv.second == std::to_string(up.archive_id);
         });
-        const bool per_archive = server.calls[i].find("/save_data_archives/1") != std::string::npos ||
-                                 server.calls[i].find("/component_files/") != std::string::npos;
+        const bool per_archive =
+            server.calls[i].find("/save_data_archives/1") != std::string::npos ||
+            server.calls[i].find("/component_files/") != std::string::npos;
         sda_on_archive_calls = sda_on_archive_calls && has_sda == per_archive;
         if (server.calls[i].ends_with("/extend_upload_timeout")) {
-            ignorable_counts = ignorable_counts &&
-                               std::any_of(h.begin(), h.end(), [&](const auto& kv) {
-                                   return kv.first == "X-Ignorable" &&
-                                          kv.second == fmt::format("counter={}", extend);
-                               });
+            ignorable_counts =
+                ignorable_counts && std::any_of(h.begin(), h.end(), [&](const auto& kv) {
+                    return kv.first == "X-Ignorable" &&
+                           kv.second == fmt::format("counter={}", extend);
+                });
             ++extend;
         }
     }
     Check(sda_on_archive_calls && ignorable_counts && extend == 4,
           "X-SDA-ID on every request about the archive, X-Ignorable counts the chunks");
-    const auto down = tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr);
+    const auto down =
+        tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr);
     Check(down.error == tr::Error::None && harbor_b.imported == source.stream,
           "the second console downloads the same save image");
 
@@ -1034,14 +1271,15 @@ void TransferFlowChecks() {
     --server.nsa_id;
 
     // Read an old Harbor backup and use it as a base, while emitting native account AAD.
-    auto& legacy_meta = *std::find_if(server.versions[0].parts.begin(),
-        server.versions[0].parts.end(), [](const auto& part) { return part.index == 0; });
+    auto& legacy_meta =
+        *std::find_if(server.versions[0].parts.begin(), server.versions[0].parts.end(),
+                      [](const auto& part) { return part.index == 0; });
     auto legacy_plain = *native_meta;
     std::memcpy(legacy_plain.data() + 0x1020, &save.application_id, 8);
     st::Key128 legacy_iv{};
     st::RandomBytes(legacy_iv);
     legacy_meta.blob = st::EncryptStream(FakeFs::StreamKey(harbor_a.own_seed), legacy_iv,
-                                       st::StreamKeyGeneration, legacy_plain);
+                                         st::StreamKeyGeneration, legacy_plain);
     server.versions[0].mac = tr::Base64Url(st::Cmac(harbor_a.mac_key, legacy_plain));
     Check(tr::Download(server, harbor_b, save.application_id, up.archive_id, 3, nullptr).error ==
               tr::Error::None,
@@ -1058,9 +1296,11 @@ void TransferFlowChecks() {
               server.versions[1].previous == up.archive_id && server.puts == 2 &&
               !server.delta_sent_seed,
           "a delta upload sends the changed chunk and the meta, and the MAC without a seed");
-    const auto& delta_meta = *std::find_if(server.versions[1].parts.begin(),
-        server.versions[1].parts.end(), [](const auto& part) { return part.index == 0; });
-    const auto delta_plain = st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), delta_meta.blob);
+    const auto& delta_meta =
+        *std::find_if(server.versions[1].parts.begin(), server.versions[1].parts.end(),
+                      [](const auto& part) { return part.index == 0; });
+    const auto delta_plain =
+        st::DecryptStream(FakeFs::StreamKey(harbor_a.own_seed), delta_meta.blob);
     bound_account = 0;
     if (delta_plain) {
         std::memcpy(&bound_account, delta_plain->data() + 0x1020, 8);
@@ -1069,7 +1309,8 @@ void TransferFlowChecks() {
           "a delta of a legacy Harbor backup emits the native account binding");
     FakeFs harbor_f{st::ArchiveSource{}};
     harbor_f.shared_mac_key = &harbor_a.mac_key;
-    const auto down2 = tr::Download(server, harbor_f, save.application_id, delta.archive_id, 3, nullptr);
+    const auto down2 =
+        tr::Download(server, harbor_f, save.application_id, delta.archive_id, 3, nullptr);
     Check(down2.error == tr::Error::None && harbor_f.imported == changed.stream,
           "the delta archive downloads as the changed save image");
 
@@ -1138,7 +1379,8 @@ void SecretChecks() {
 void AauthChecks() {
     namespace se = OpenPak::Session;
     Check(se::AauthRefusalDescription("0111") == 3001u, "0111 is 2124-3001, a software update");
-    Check(se::AauthRefusalDescription("0105") == 4605u && se::AauthRefusalDescription("0121") == 4621u,
+    Check(se::AauthRefusalDescription("0105") == 4605u &&
+              se::AauthRefusalDescription("0121") == 4621u,
           "the 01xx restrictions are 2124-45xx + code");
     Check(!se::AauthRefusalDescription("0104") && !se::AauthRefusalDescription(""),
           "an unmapped code refuses nothing");
@@ -1190,12 +1432,12 @@ int SelfTest(bool online) {
 int Boot() {
     const auto user = std::filesystem::current_path() / "user";
     const OpenPak::BootResult result = OpenPak::BootConnection::Run(user);
-    std::printf("boot: %s (%s), website %s, console server %s, profile %s v%lld, ceiling %s v%lld%s%s\n",
-                result.enabled ? "on" : "off", result.online ? "online" : "offline",
-                result.website.c_str(), result.console_server.c_str(),
-                result.profile_source.c_str(), result.profile_version,
-                result.ceiling_source.c_str(), result.ceiling_version,
-                result.error.empty() ? "" : ", error: ", result.error.c_str());
+    std::printf(
+        "boot: %s (%s), website %s, console server %s, profile %s v%lld, ceiling %s v%lld%s%s\n",
+        result.enabled ? "on" : "off", result.online ? "online" : "offline", result.website.c_str(),
+        result.console_server.c_str(), result.profile_source.c_str(), result.profile_version,
+        result.ceiling_source.c_str(), result.ceiling_version,
+        result.error.empty() ? "" : ", error: ", result.error.c_str());
     const auto kind = OpenPak::Network::ResolveGuestName("dauth-lp1.ndas.srv.nintendo.net");
     std::printf("boot: dauth-lp1.ndas.srv.nintendo.net -> %s %s\n",
                 kind.kind == np::GuestNameKind::Redirect  ? "redirect"
@@ -1206,8 +1448,9 @@ int Boot() {
                 OpenPak::Network::CaPem().size(), OpenPak::Network::CaDer().size());
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(user / "openpak", ec)) {
-        std::printf("file: %s (%ju bytes)\n", entry.path().filename().string().c_str(),
-                    static_cast<std::uintmax_t>(entry.is_regular_file(ec) ? entry.file_size(ec) : 0));
+        std::printf(
+            "file: %s (%ju bytes)\n", entry.path().filename().string().c_str(),
+            static_cast<std::uintmax_t>(entry.is_regular_file(ec) ? entry.file_size(ec) : 0));
     }
     OpenPak::BootConnection::Stop();
     return result.enabled ? 0 : 2;

@@ -2,6 +2,14 @@
 
 2026-10-06, Eden statuses audited 2026-10-08 (see "Eden status, 2026-10-08"). The Eden Harbor replaces the Ryujinx Harbor only when every item below passes and tobagin validates it (plan §7, phase 5).
 
+ACNH recovery update (2026-10-12): application OLSC 25/26, owner-granted island listing,
+device-save download, async progress, and immediate cancellation before import are implemented
+locally. Desktop Harbor builds, Android API 29/33 restore-object compilation, and synthetic
+transfer self-checks pass; backend database tests
+verify same-account recovery, device filters, and foreign-archive rejection. The server update
+is not deployed, and ACNH's in-game recovery on Harbor/Android/a real Switch remains unverified.
+No acceptance box is checked from these tests. See [save-cloud-interop.md](save-cloud-interop.md).
+
 ## How to read this
 
 - One checkbox per testable behaviour: what a tester does and sees. Tick it only with evidence (log line, capture, test run) recorded outside the repository.

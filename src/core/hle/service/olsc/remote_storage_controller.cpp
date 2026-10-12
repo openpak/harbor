@@ -8,14 +8,14 @@
 #include <array>
 #include <cstring>
 
-
-#include "core/file_sys/fs_save_data_types.h"
-#include "core/hle/service/filesystem/filesystem.h"
-#include "core/hle/service/filesystem/save_data_controller.h"
-#include "core/hle/service/cmif_serialization.h"
 #include "common/redact.h"
+#include "core/file_sys/fs_save_data_types.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_transfer_memory.h"
+#include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/filesystem/filesystem.h"
+#include "core/hle/service/filesystem/save_data_controller.h"
 #include "core/hle/service/olsc/remote_storage_controller.h"
 #include "core/hle/service/olsc/transfer_runner.h"
 #include "core/openpak/async_worker.h"
@@ -29,44 +29,88 @@ namespace {
 // (GetDataInfo 0x1ff010; GetDataInfoV1 0x1fefe0 always answers it on 23.x).
 constexpr Result ResultDataInfoNotFound{ErrorModule::OLSC, 1200};
 
-// What GetResult answers after Cancel. The sysmodule's own value was not read; this is the
-// generic "cancelled" of the olsc module as the guest sees it (logged when it happens).
-constexpr Result ResultCancelled{ErrorModule::OLSC, 1};
-
 } // namespace
 
 IAsyncResult::IAsyncResult(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
                            std::function<Result()> work)
-    : ServiceFramework{system_, "olsc:IAsyncResult"}, service_context{system_, "OLSC"},
-      worker{std::move(worker_)} {
-    // clang-format off
+    : IAsyncResult{system_,
+                   std::move(worker_),
+                   [work = std::move(work)](std::stop_token, std::vector<u8>&) { return work(); },
+                   {}} {}
+
+IAsyncResult::IAsyncResult(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                           OpenPak::AsyncWorker::Work work,
+                           std::function<std::array<u8, 0x30>()> progress_,
+                           Kernel::KTransferMemory* list_memory_)
+    : ServiceFramework{system_, list_memory_ ? "IAsyncListData"
+                                : progress_  ? "IAsyncTransferRequest"
+                                             : "IAsyncResult"},
+      service_context{system_, "OLSC"}, worker{std::move(worker_)}, progress{std::move(progress_)},
+      list_memory{list_memory_} {
     static const FunctionInfo functions[] = {
         {0, D<&IAsyncResult::GetResult>, "GetResult"},
         {1, D<&IAsyncResult::Cancel>, "Cancel"},
         {2, D<&IAsyncResult::HasDone>, "HasDone"},
         {3, D<&IAsyncResult::GetSystemEvent>, "GetSystemEvent"},
     };
-    // clang-format on
     RegisterHandlers(functions);
-
+    if (list_memory) {
+        list_memory->Open(system.Kernel());
+        static const FunctionInfo list_functions[] = {
+            {100, D<&IAsyncResult::GetListSize>, "GetSize"},
+            {101, D<&IAsyncResult::GetListData>, "GetData"},
+        };
+        RegisterHandlers(list_functions);
+    }
+    if (progress) {
+        static const FunctionInfo transfer_functions[] = {
+            {100, D<&IAsyncResult::GetProgress>, "GetProgress"},
+        };
+        RegisterHandlers(transfer_functions);
+    }
     event = service_context.CreateEvent("OLSC::IAsyncResult");
-    task = worker->Run(event, ResultCancelled,
-                       [work = std::move(work)](std::stop_token, std::vector<u8>&) {
-                           return work();
-                       });
+    task = worker->Run(event, Result{ErrorModule::OLSC, 0}, std::move(work));
+}
+
+Result IAsyncResult::GetProgress(Out<std::array<u8, 0x30>> out_progress) {
+    *out_progress = progress();
+    R_SUCCEED();
 }
 
 IAsyncResult::~IAsyncResult() {
     task->Detach();
     service_context.CloseEvent(event);
+    if (list_memory)
+        list_memory->Close(system.Kernel());
+}
+
+Result IAsyncResult::GetListSize(Out<u32> out_size) {
+    R_UNLESS(task->IsDone() && task->GetResult().IsSuccess(), (Result{ErrorModule::OLSC, 101}));
+    *out_size = static_cast<u32>(task->Value().size() / sizeof(OpenPak::Olsc::BackupInfo));
+    R_SUCCEED();
+}
+
+Result IAsyncResult::GetListData(Out<u32> out_count, s32 offset,
+                                 OutBuffer<BufferAttr_HipcMapAlias> out_data) {
+    R_UNLESS(task->IsDone() && task->GetResult().IsSuccess(), (Result{ErrorModule::OLSC, 101}));
+    R_UNLESS(offset >= 0, (Result{ErrorModule::OLSC, 100}));
+    const auto value = task->Value();
+    const std::size_t count = value.size() / sizeof(OpenPak::Olsc::BackupInfo);
+    const std::size_t start = std::min(static_cast<std::size_t>(offset), count);
+    const std::size_t copied =
+        std::min(count - start, out_data.size() / sizeof(OpenPak::Olsc::BackupInfo));
+    if (copied)
+        std::memcpy(out_data.data(), value.data() + start * sizeof(OpenPak::Olsc::BackupInfo),
+                    copied * sizeof(OpenPak::Olsc::BackupInfo));
+    *out_count = static_cast<u32>(copied);
+    R_SUCCEED();
 }
 
 Result IAsyncResult::GetResult() {
     if (!task->IsDone()) {
-        // Not established what the sysmodule answers before completion; qlaunch waits first.
-        LOG_UNKNOWN_CONTRACT(Service_OLSC,
-                             "olsc IAsyncResult 0 asked before done, answered 2179-1");
-        R_RETURN(ResultCancelled);
+        // Native IAsyncResult returns 2179-0101 while its task is pending.
+        LOG_DEBUG(Service_OLSC, "async result is not ready");
+        R_RETURN((Result{ErrorModule::OLSC, 101}));
     }
     R_RETURN(task->GetResult());
 }
@@ -91,8 +135,8 @@ IRemoteStorageController::IRemoteStorageController(Core::System& system_, Common
                                                    std::shared_ptr<OpenPak::AsyncWorker> worker_,
                                                    std::shared_ptr<TransferQueue> queue_)
     : ServiceFramework{system_, "IRemoteStorageController"},
-      uid{user_id_.IsInvalid() ? std::string{} : user_id_.RawString()},
-      worker{std::move(worker_)}, queue{std::move(queue_)}, user{user_id_} {
+      uid{user_id_.IsInvalid() ? std::string{} : user_id_.RawString()}, worker{std::move(worker_)},
+      queue{std::move(queue_)}, user{user_id_} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, D<&IRemoteStorageController::RegisterUploadTaskForApplication>, "RegisterUploadTask"},
@@ -148,7 +192,7 @@ Result IRemoteStorageController::GetSecondarySave(Out<bool> out_has_secondary_sa
 }
 
 Result IRemoteStorageController::GetDataNewnessByApplicationId(Out<u8> out_newness,
-                                                              u64 application_id) {
+                                                               u64 application_id) {
     // 0x1d32e0 against the title's SeriesInfo (olsc-autonomy.md §4.1): 0 in sync, 1 cloud newer,
     // 2 local newer, 3 conflict.
     *out_newness = queue->Newness(user, application_id);
@@ -186,18 +230,18 @@ Result IRemoteStorageController::CreateSaveDataArchiveCacheUpdationTask(
     Out<SharedPointer<IAsyncResult>> out_task) {
     // 0x224760: no input, an IAsyncResult out. "Update List" on the Save Data Cloud page.
     LOG_INFO(Service_OLSC, "called");
-    *out_task = std::make_shared<IAsyncResult>(system, worker, [who = uid, user = user,
-                                                                queue = queue]() -> Result {
-        if (OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
-            queue->Repair(user); // after every cache update (0x1dfca0)
-        } else {
-            // A console without its server fails here with a network error; which one is not
-            // established, so the list stays as it was and the task succeeds.
-            LOG_UNKNOWN_CONTRACT(Service_OLSC,
-                                 "olsc cache update: no list fetched, answered success");
-        }
-        return ResultSuccess;
-    });
+    *out_task = std::make_shared<IAsyncResult>(
+        system, worker, [who = uid, user = user, queue = queue]() -> Result {
+            if (OpenPak::Olsc::ArchiveCache::Instance().RefreshNow(who)) {
+                queue->Repair(user); // after every cache update (0x1dfca0)
+            } else {
+                // A console without its server fails here with a network error; which one is not
+                // established, so the list stays as it was and the task succeeds.
+                LOG_UNKNOWN_CONTRACT(Service_OLSC,
+                                     "olsc cache update: no list fetched, answered success");
+            }
+            return ResultSuccess;
+        });
     R_SUCCEED();
 }
 

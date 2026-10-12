@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <thread>
@@ -14,8 +15,8 @@
 #include <nlohmann/json.hpp>
 
 #include "common/logging.h"
-#include "core/openpak/platform.h"
 #include "core/openpak/olsc_transfer.h"
+#include "core/openpak/platform.h"
 #include "core/openpak/session.h"
 
 namespace OpenPak::Olsc {
@@ -50,7 +51,9 @@ std::optional<std::uint64_t> Number(const nlohmann::json& object, const char* ke
             !std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; })) {
             return std::nullopt;
         }
-        return std::stoull(text);
+        std::uint64_t value{};
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+        return parsed.ec == std::errc{} ? std::optional{value} : std::nullopt;
     }
     return std::nullopt;
 }
@@ -67,7 +70,9 @@ std::optional<std::uint64_t> Hex(const nlohmann::json& object, const char* key) 
         !std::all_of(text.begin(), text.end(), [](char c) { return std::isxdigit(c) != 0; })) {
         return std::nullopt;
     }
-    return std::stoull(text, nullptr, 16);
+    std::uint64_t value{};
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+    return parsed.ec == std::errc{} ? std::optional{value} : std::nullopt;
 }
 
 /// encoded_digest as the record check takes it: base64url without padding of exactly 32 bytes
@@ -86,6 +91,52 @@ void Put(DataInfo& out, std::size_t offset, T value) {
 } // namespace
 
 static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item);
+
+BackupInfo PackBackupInfo(const ArchiveInfo& archive) {
+    BackupInfo out{};
+    std::memcpy(out.data(), &archive.id, 8);
+    std::memcpy(out.data() + 8, &archive.finished_at, 8);
+    std::memcpy(out.data() + 0x10, archive.desc.data(),
+                std::min(archive.desc.size(), std::size_t{0x3ff}));
+    return out;
+}
+
+std::optional<std::vector<BackupPermission>> ParseBackupPermissions(std::string_view body) {
+    const auto json = nlohmann::json::parse(body, nullptr, false);
+    if (!json.is_object() || !json.contains("permissions") || !json["permissions"].is_array())
+        return std::nullopt;
+    std::vector<BackupPermission> out;
+    for (const auto& item : json["permissions"]) {
+        if (!item.is_object())
+            return std::nullopt;
+        const auto id = Number(item, "id"), archive = Number(item, "save_data_archive_id");
+        const auto nsa = Hex(item, "nsa_id"), app = Hex(item, "application_id");
+        const auto created = Number(item, "created_at_as_unixtime");
+        if (!id || !archive || !nsa || !app || !created || !*id || !*archive || !*nsa || !*app)
+            return std::nullopt;
+        out.push_back({*id, *archive, *nsa, *app, *created});
+    }
+    return out;
+}
+
+std::vector<ArchiveInfo> DownloadableBackups(const std::vector<ArchiveInfo>& archives,
+                                             const std::vector<BackupPermission>& permissions,
+                                             std::uint64_t application_id, std::uint64_t nsa_id) {
+    std::vector<ArchiveInfo> out;
+    for (const auto& archive : archives) {
+        if (archive.datatype != 3 || archive.status != StatusFixed ||
+            archive.application_id != application_id || archive.nsa_id != nsa_id)
+            continue;
+        const bool granted =
+            std::any_of(permissions.begin(), permissions.end(), [&](const auto& p) {
+                return p.archive_id == archive.id && p.application_id == application_id &&
+                       p.nsa_id == nsa_id;
+            });
+        if (granted)
+            out.push_back(archive);
+    }
+    return out;
+}
 
 std::optional<std::vector<ArchiveInfo>> ParseArchiveList(std::string_view body) {
     const auto json = nlohmann::json::parse(body, nullptr, false);
@@ -118,11 +169,19 @@ static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item) {
     }
     // Keys the record check (0x1dd580) requires; a JSON null counts only for the three the null
     // handler (0x1dd760) accepts.
-    static constexpr std::array required{
-        "id",          "nsa_id",           "application_id",          "device_id",
-        "datatype",    "data_size",        "status",                  "device_serial",
-        "num_of_partitions", "launch_required_version", "series_id", "encoded_digest",
-        "saved_at_as_unixtime"};
+    static constexpr std::array required{"id",
+                                         "nsa_id",
+                                         "application_id",
+                                         "device_id",
+                                         "datatype",
+                                         "data_size",
+                                         "status",
+                                         "device_serial",
+                                         "num_of_partitions",
+                                         "launch_required_version",
+                                         "series_id",
+                                         "encoded_digest",
+                                         "saved_at_as_unixtime"};
     static constexpr std::array nullable{"desc", "previous_save_data_archive_id",
                                          "finished_at_as_unixtime"};
     for (const char* key : required) {
@@ -172,6 +231,8 @@ static std::optional<ArchiveInfo> ParseArchive(const nlohmann::json& item) {
     archive.platform_key_generation =
         static_cast<std::uint8_t>(Number(item, "platform_key_generation").value_or(0));
     archive.acd_index = static_cast<std::uint8_t>(Number(item, "acd_index").value_or(0));
+    if (const auto desc = item.find("desc"); desc != item.end() && desc->is_string())
+        archive.desc = desc->get<std::string>();
     return archive;
 }
 
@@ -227,22 +288,23 @@ ArchiveCache& ArchiveCache::Instance() {
     return cache;
 }
 
-void ArchiveCache::Refresh(const std::string& uid, int max_age_s) {
+void ArchiveCache::Refresh(const std::string& uid, int max_age_s, std::uint8_t datatype) {
+    const auto key = datatype == 0 ? uid : uid + "#" + std::to_string(datatype);
     if (uid.empty() || !Session::Enabled() || !Session::HasDeviceAccount(uid)) {
         return;
     }
     {
         std::lock_guard lock{mutex};
-        Entry& entry = entries[uid];
+        Entry& entry = entries[key];
         if (entry.in_flight || (entry.fetched && Now() - entry.fetched_at < max_age_s)) {
             return;
         }
         entry.in_flight = true;
     }
-    std::thread([this, uid] {
-        auto archives = FetchArchives(uid);
+    std::thread([this, uid, key, datatype] {
+        auto archives = FetchArchives(uid, datatype);
         std::lock_guard lock{mutex};
-        Entry& entry = entries[uid];
+        Entry& entry = entries[key];
         entry.in_flight = false;
         if (archives) {
             entry.archives = std::move(*archives);
@@ -253,30 +315,34 @@ void ArchiveCache::Refresh(const std::string& uid, int max_age_s) {
     }).detach();
 }
 
-bool ArchiveCache::RefreshNow(const std::string& uid) {
+bool ArchiveCache::RefreshNow(const std::string& uid, std::uint8_t datatype) {
     if (uid.empty() || !Session::Enabled() || !Session::HasDeviceAccount(uid)) {
         return false;
     }
-    auto archives = FetchArchives(uid);
+    auto archives = FetchArchives(uid, datatype);
     if (!archives) {
         return false;
     }
-    Put(uid, std::move(*archives));
+    Put(uid, std::move(*archives), datatype);
     return true;
 }
 
-std::optional<std::vector<ArchiveInfo>> ArchiveCache::Get(const std::string& uid) const {
+std::optional<std::vector<ArchiveInfo>> ArchiveCache::Get(const std::string& uid,
+                                                          std::uint8_t datatype) const {
+    const auto key = datatype == 0 ? uid : uid + "#" + std::to_string(datatype);
     std::lock_guard lock{mutex};
-    const auto it = entries.find(uid);
+    const auto it = entries.find(key);
     if (it == entries.end() || !it->second.fetched) {
         return std::nullopt;
     }
     return it->second.archives;
 }
 
-void ArchiveCache::Put(const std::string& uid, std::vector<ArchiveInfo> archives) {
+void ArchiveCache::Put(const std::string& uid, std::vector<ArchiveInfo> archives,
+                       std::uint8_t datatype) {
+    const auto key = datatype == 0 ? uid : uid + "#" + std::to_string(datatype);
     std::lock_guard lock{mutex};
-    Entry& entry = entries[uid];
+    Entry& entry = entries[key];
     entry.archives = std::move(archives);
     entry.fetched = true;
     entry.fetched_at = Now();
@@ -361,7 +427,8 @@ std::string SerializeArchives(const std::vector<ArchiveInfo>& archives) {
                         {"saved_at", a.saved_at},
                         {"finished_at", a.finished_at},
                         {"platform_key_generation", a.platform_key_generation},
-                        {"acd_index", a.acd_index}});
+                        {"acd_index", a.acd_index},
+                        {"desc", a.desc}});
     }
     return list.dump();
 }
@@ -396,6 +463,8 @@ std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view tex
         a.finished_at = u64("finished_at");
         a.platform_key_generation = static_cast<std::uint8_t>(u64("platform_key_generation"));
         a.acd_index = static_cast<std::uint8_t>(u64("acd_index"));
+        if (const auto desc = item.find("desc"); desc != item.end() && desc->is_string())
+            a.desc = desc->get<std::string>();
         if (a.id == 0 || a.application_id == 0 ||
             (a.status != StatusFixed && a.status != StatusUploading)) {
             continue;
@@ -405,9 +474,13 @@ std::optional<std::vector<ArchiveInfo>> DeserializeArchives(std::string_view tex
     return archives;
 }
 
-std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid) {
+std::optional<std::vector<ArchiveInfo>> FetchArchives(const std::string& uid,
+                                                      std::uint8_t datatype) {
     const Session::Response response =
-        Session::SendAsUser(uid, "GET", StorageHost, ArchivesPath, {}, {});
+        Session::SendAsUser(uid, "GET", StorageHost,
+                            std::string{ArchivesPath} + "?datatype=" + std::to_string(datatype) +
+                                (datatype == 3 ? "&device_id=me" : ""),
+                            {}, {});
     if (response.status != 200) {
         LOG_INFO(Service_OLSC, "save data cloud: archive list not fetched (HTTP {})",
                  response.status);
@@ -447,6 +520,66 @@ bool DaemonSettings::GlobalAutoUpload(const std::string& uid) const {
     const auto it = users.find(uid);
     return it != users.end() ? it->second.auto_upload.value_or(DefaultAutoUpload)
                              : DefaultAutoUpload;
+}
+
+std::optional<DaemonSettings::BackupSetting> DaemonSettings::Backup(const std::string& uid,
+                                                                    std::uint64_t app) const {
+    std::lock_guard lock{mutex};
+    const auto user = users.find(uid);
+    if (user == users.end())
+        return std::nullopt;
+    const auto entry = user->second.backups.find(app);
+    return entry == user->second.backups.end() ? std::nullopt : std::optional{entry->second};
+}
+
+void DaemonSettings::SetBackup(const std::string& uid, std::uint64_t app, bool enabled) {
+    std::lock_guard lock{mutex};
+    auto& entries = users[uid].backups;
+    std::uint64_t touched = 0;
+    for (const auto& [id, value] : entries)
+        touched = std::max(touched, value.touched);
+    if (!entries.contains(app) && entries.size() >= 16) {
+        const auto oldest =
+            std::min_element(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                return a.second.touched < b.second.touched;
+            });
+        entries.erase(oldest);
+    }
+    auto& entry = entries[app];
+    entry.enabled = enabled;
+    entry.touched = touched + 1;
+    Save();
+}
+
+bool DaemonSettings::SetBackupCustomData(const std::string& uid, std::uint64_t app,
+                                         std::string desc) {
+    std::lock_guard lock{mutex};
+    auto& entries = users[uid].backups;
+    const auto entry = entries.find(app);
+    if (entry == entries.end() || desc.size() >= 0x400)
+        return false;
+    entry->second.desc = std::move(desc);
+    Save();
+    return true;
+}
+
+void DaemonSettings::RemoveBackup(const std::string& uid, std::uint64_t app) {
+    std::lock_guard lock{mutex};
+    const auto user = users.find(uid);
+    if (user != users.end() && user->second.backups.erase(app))
+        Save();
+}
+
+std::vector<std::uint64_t> DaemonSettings::EnabledBackups(const std::string& uid) const {
+    std::lock_guard lock{mutex};
+    std::vector<std::uint64_t> out;
+    const auto user = users.find(uid);
+    if (user != users.end()) {
+        for (const auto& [app, record] : user->second.backups)
+            if (record.enabled)
+                out.push_back(app);
+    }
+    return out;
 }
 
 void DaemonSettings::SetGlobalAutoUpload(const std::string& uid, bool enabled) {
@@ -552,6 +685,20 @@ void DaemonSettings::Load() {
             continue;
         }
         User user;
+        if (const auto apps = value.find("backups"); apps != value.end() && apps->is_object()) {
+            for (const auto& [app, entry] : apps->items()) {
+                if (user.backups.size() >= 16)
+                    break;
+                if (!entry.is_object() || app.empty() || app.size() > 16 ||
+                    !std::all_of(app.begin(), app.end(), [](char c) { return std::isxdigit(c); }))
+                    continue;
+                const auto desc = entry.value("desc", std::string{});
+                if (desc.size() >= 0x400)
+                    continue;
+                user.backups[std::stoull(app, nullptr, 16)] = {
+                    entry.value("enabled", false), desc, entry.value("touched", std::uint64_t{0})};
+            }
+        }
         if (const auto v = value.find("auto_upload"); v != value.end() && v->is_boolean()) {
             user.auto_upload = v->get<bool>();
         }
@@ -581,7 +728,8 @@ void DaemonSettings::Load() {
                 }
             }
         }
-        if (const auto apps = value.find("auto_transfer"); apps != value.end() && apps->is_object()) {
+        if (const auto apps = value.find("auto_transfer");
+            apps != value.end() && apps->is_object()) {
             for (const auto& [app, enabled] : apps->items()) {
                 if (enabled.is_boolean() && !app.empty() && app.size() <= 16 &&
                     std::all_of(app.begin(), app.end(),
@@ -612,6 +760,12 @@ void DaemonSettings::Save() const {
                 {"task_type", error.task_type}, {"time", error.time}, {"result", error.result}};
         }
         nlohmann::json entry = {{"auto_transfer", apps}, {"series", series}, {"errors", errors}};
+        nlohmann::json backups = nlohmann::json::object();
+        for (const auto& [app, record] : user.backups) {
+            backups[fmt::format("{:016x}", app)] = {
+                {"enabled", record.enabled}, {"desc", record.desc}, {"touched", record.touched}};
+        }
+        entry["backups"] = std::move(backups);
         if (user.auto_upload) {
             entry["auto_upload"] = *user.auto_upload;
         }
