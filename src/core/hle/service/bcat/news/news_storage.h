@@ -45,6 +45,11 @@ public:
     u64 UsedBytes() const;
     void Clear();
 
+    // Remove every row of `topic` and its article files; the number removed.
+    int RemoveTopic(std::string_view topic);
+    // Remove every row whose topic is not in `keep`; the number removed.
+    int RemoveTopicsNotIn(const std::vector<std::string>& keep);
+
 private:
     std::filesystem::path RecordsPath() const;
     void Load();

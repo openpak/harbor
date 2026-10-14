@@ -45,6 +45,8 @@ public:
     // Signal newly arrived from any thread: the signal itself happens on the worker's signalling
     // thread, the one host thread allowed to touch this session's kernel objects.
     void SignalNewlyArrived();
+    // The same for the overwrite event, which now signals when a channel's articles are removed.
+    void SignalOverwrite();
 
     // The session-owned worker for what blocks on the network: download contexts run on it and
     // the fill posts its signal through it.
@@ -54,9 +56,13 @@ public:
     // while there is no fetcher.
     void StartFill();
 
+    // Subscription status of a topic: 0 forget/unknown, 1 unsubscribed, 2 subscribed, 3 auto. The
+    // statuses are the user's choice and are kept in <news dir>/subscriptions.txt; only a followed
+    // topic (2 or 3) is filled or kept in the store.
     u32 GetSubscription(const std::string& topic);
     void SetSubscription(const std::string& topic, u32 status);
     void ClearSubscriptions();
+    bool IsFollowed(const std::string& topic);
 
 private:
     void Fill(std::stop_token stop);
@@ -66,6 +72,8 @@ private:
     std::map<std::string, u32> subscriptions;
     std::atomic<bool> filling{false};
     std::jthread fill_thread;
+    std::filesystem::path subscriptions_path;
+    void SaveSubscriptions();
 };
 
 // Ask the running news service to fill its store again. For the OpenPak side to call once its

@@ -58,6 +58,7 @@ private:
 
     Result ClearSubscriptionStatusAll();
 
+    Result RequestImmediateReception(InBuffer<BufferAttr_HipcPointer> topic);
     Result Unknown50100();
 
     std::shared_ptr<NewsShared> shared;

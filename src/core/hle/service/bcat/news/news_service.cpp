@@ -45,7 +45,7 @@ INewsService::INewsService(Core::System& system_, std::shared_ptr<NewsShared> sh
         {30200, D<&INewsService::IsSystemUpdateRequired>, "IsSystemUpdateRequired"},
         {30201, D<&INewsService::IsSystemVersionSufficient>, "Unknown30201"}, //8.0.0+
         {30210, nullptr, "Unknown30210"}, //10.0.0+
-        {30300, nullptr, "RequestImmediateReception"},
+        {30300, D<&INewsService::RequestImmediateReception>, "RequestImmediateReception"},
         {30400, nullptr, "DecodeArchiveFile"}, //3.0.0-18.1.0
         {30500, D<&INewsService::Download>, "Download"}, //8.0.0+
         {30900, nullptr, "Unknown30900"}, //1.0.0
@@ -89,6 +89,7 @@ Result INewsService::SetPassphrase(u64 application_id,
 Result INewsService::GetSubscriptionStatus(Out<u32> out_status,
                                            InBuffer<BufferAttr_HipcPointer> topic) {
     *out_status = shared->GetSubscription(TopicOf(topic));
+    LOG_DEBUG(Service_BCAT, "News subscription status of '{}': {}", TopicOf(topic), *out_status);
     R_SUCCEED();
 }
 
@@ -173,6 +174,16 @@ Result INewsService::ClearStorage() {
 Result INewsService::ClearSubscriptionStatusAll() {
     shared->ClearSubscriptions();
     LOG_INFO(Service_BCAT, "News subscriptions cleared");
+    R_SUCCEED();
+}
+
+Result INewsService::RequestImmediateReception(InBuffer<BufferAttr_HipcPointer> topic) {
+    // Asks the module to receive a channel now: here, fill from OpenPak, and only for a followed one.
+    const auto name = TopicOf(topic);
+    LOG_INFO(Service_BCAT, "News immediate reception requested for '{}'", name);
+    if (shared->IsFollowed(name)) {
+        shared->StartFill();
+    }
     R_SUCCEED();
 }
 

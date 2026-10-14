@@ -41,6 +41,7 @@ IDownloadContext::IDownloadContext(Core::System& system_, std::shared_ptr<NewsSh
       transfer_memory{transfer_memory_}, state{std::make_shared<State>()} {
     static const FunctionInfo functions[] = {
         {0, D<&IDownloadContext::GetCompletionEvent>, "GetCompletionEvent"},
+        {1, D<&IDownloadContext::Unknown1>, "Unknown1"},
         {2, D<&IDownloadContext::GetResult>, "GetResult"},
         {3, D<&IDownloadContext::GetSize>, "GetSize"},
     };
@@ -129,6 +130,14 @@ void IDownloadContext::ReleaseMemory() {
 
 Result IDownloadContext::GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent> out_event) {
     *out_event = &completed->GetReadableEvent();
+    R_SUCCEED();
+}
+
+Result IDownloadContext::Unknown1() {
+    // Unknown contract: HOME's News scene sends command 1 to a download context (seen when leaving
+    // a channel page or unfollowing: unanswered, qlaunch dies with fatal 2010-0212). Its meaning is
+    // not read yet; success with no output lets the scene go on.
+    LOG_WARNING(Service_BCAT, "unknown contract: IDownloadContext 1; returning success with no output");
     R_SUCCEED();
 }
 

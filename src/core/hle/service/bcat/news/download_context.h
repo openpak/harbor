@@ -42,6 +42,7 @@ private:
     struct State;
 
     Result GetCompletionEvent(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result Unknown1();
     Result GetResult();
     Result GetSize(Out<u64> out_size);
     /// Let go of the caller's transfer memory once the work is done.

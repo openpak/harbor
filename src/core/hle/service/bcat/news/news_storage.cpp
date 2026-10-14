@@ -204,6 +204,44 @@ u64 NewsStorage::UsedBytes() const {
     return total;
 }
 
+int NewsStorage::RemoveTopic(std::string_view topic) {
+    std::scoped_lock lock{mutex};
+    int removed = 0;
+    for (auto it = rows.begin(); it != rows.end();) {
+        if (it->topic_id == topic) {
+            std::error_code ec;
+            std::filesystem::remove(directory / it->FileName(), ec);
+            it = rows.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    if (removed > 0) {
+        Save();
+    }
+    return removed;
+}
+
+int NewsStorage::RemoveTopicsNotIn(const std::vector<std::string>& keep) {
+    std::scoped_lock lock{mutex};
+    int removed = 0;
+    for (auto it = rows.begin(); it != rows.end();) {
+        if (std::find(keep.begin(), keep.end(), it->topic_id) == keep.end()) {
+            std::error_code ec;
+            std::filesystem::remove(directory / it->FileName(), ec);
+            it = rows.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    if (removed > 0) {
+        Save();
+    }
+    return removed;
+}
+
 void NewsStorage::Clear() {
     std::scoped_lock lock{mutex};
 

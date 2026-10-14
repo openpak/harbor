@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -102,10 +103,47 @@ std::string LocalRoute(std::string_view url) {
 }
 
 NewsShared::NewsShared(Core::System& system_, std::filesystem::path directory)
-    : system{system_}, store{std::move(directory)}, worker{std::make_unique<OpenPak::AsyncWorker>(system_, "news:OpenPak")},
-      service_context{system_, "News"} {
+    : system{system_}, store{directory}, worker{std::make_unique<OpenPak::AsyncWorker>(system_, "news:OpenPak")},
+      service_context{system_, "News"}, subscriptions_path{directory / "subscriptions.txt"} {
     newly_arrived = service_context.CreateEvent("News::NewlyArrived");
     overwrite = service_context.CreateEvent("News::Overwrite");
+
+    // The user's own choices. A first run has no file: the two channels every OpenPak install
+    // follows are seeded once, and after that only the user changes the list (an unfollow sticks,
+    // and a channel the server adds later is not followed on the user's behalf).
+    bool existed = false;
+    {
+        std::ifstream in{subscriptions_path};
+        existed = in.good();
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto space = line.find(' ');
+            if (space == std::string::npos) {
+                continue;
+            }
+            try {
+                subscriptions[line.substr(space + 1)] = static_cast<u32>(std::stoul(line.substr(0, space)));
+            } catch (const std::exception&) {
+            }
+        }
+    }
+    if (!existed) {
+        subscriptions["openpak_news"] = 2;
+        subscriptions["openpak_games"] = 2;
+        SaveSubscriptions();
+    }
+    // Articles of channels nobody follows leave the store (the Nintendo ones an earlier server index
+    // put there, channels unfollowed while another build ran).
+    std::vector<std::string> followed;
+    for (const auto& [topic, status] : subscriptions) {
+        if (status >= 2) {
+            followed.push_back(topic);
+        }
+    }
+    const int dropped = store.RemoveTopicsNotIn(followed);
+    if (dropped > 0) {
+        LOG_INFO(Service_BCAT, "[OpenPak] News: removed {} article(s) of channels not followed", dropped);
+    }
 
     std::scoped_lock lock{active_mutex};
     active = this;
@@ -135,6 +173,28 @@ void NewsShared::SignalNewlyArrived() {
     worker->Post([this] { newly_arrived->Signal(system.Kernel()); });
 }
 
+void NewsShared::SignalOverwrite() {
+    worker->Post([this] { overwrite->Signal(system.Kernel()); });
+}
+
+void NewsShared::SaveSubscriptions() {
+    // Callers hold subscription_mutex, or are the constructor.
+    std::error_code ec;
+    std::filesystem::create_directories(subscriptions_path.parent_path(), ec);
+    const auto temporary = std::filesystem::path{subscriptions_path}.concat(".new");
+    {
+        std::ofstream out{temporary, std::ios::trunc};
+        for (const auto& [topic, status] : subscriptions) {
+            out << status << ' ' << topic << '\n';
+        }
+    }
+    std::filesystem::rename(temporary, subscriptions_path, ec);
+}
+
+bool NewsShared::IsFollowed(const std::string& topic) {
+    return GetSubscription(topic) >= 2;
+}
+
 u32 NewsShared::GetSubscription(const std::string& topic) {
     std::scoped_lock lock{subscription_mutex};
     const auto it = subscriptions.find(topic);
@@ -142,13 +202,29 @@ u32 NewsShared::GetSubscription(const std::string& topic) {
 }
 
 void NewsShared::SetSubscription(const std::string& topic, u32 status) {
-    std::scoped_lock lock{subscription_mutex};
-    subscriptions[topic] = status;
+    {
+        std::scoped_lock lock{subscription_mutex};
+        subscriptions[topic] = status;
+        SaveSubscriptions();
+    }
+    LOG_INFO(Service_BCAT, "[OpenPak] News: subscription of '{}' set to {}", topic, status);
+    // Unfollowing removes the channel's articles, as the console's News module does, and tells the
+    // applet through the overwrite event.
+    if (status < 2 && store.RemoveTopic(topic) > 0) {
+        SignalOverwrite();
+    }
 }
 
 void NewsShared::ClearSubscriptions() {
-    std::scoped_lock lock{subscription_mutex};
-    subscriptions.clear();
+    {
+        std::scoped_lock lock{subscription_mutex};
+        subscriptions.clear();
+        SaveSubscriptions();
+    }
+    LOG_INFO(Service_BCAT, "[OpenPak] News: every subscription cleared");
+    if (store.RemoveTopicsNotIn({}) > 0) {
+        SignalOverwrite();
+    }
 }
 
 void NewsShared::StartFill() {
@@ -204,6 +280,10 @@ void NewsShared::Fill(std::stop_token stop) {
             if (!line.empty() && line != "\r") {
                 LOG_WARNING(Service_BCAT, "[OpenPak] News index line skipped");
             }
+            continue;
+        }
+        // The user's preferences: nothing is fetched for a channel they do not follow.
+        if (!IsFollowed(topic)) {
             continue;
         }
 
