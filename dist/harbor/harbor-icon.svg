@@ -1,20 +1,97 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Harbor: a lighthouse between two controllers">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Harbor: a handheld console with a lighthouse shining across its screen">
 <!-- SPDX-FileCopyrightText: 2026 tobagin -->
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
   <!-- Original Harbor artwork. Regenerate Android assets with scripts/harbor/generate-android-icons.py. -->
-  <defs><linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#213b61"/><stop offset="1" stop-color="#09172c"/></linearGradient></defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <path d="M158,142 H196 V354 H158 A52,52 0 0 1 106,302 V194 A52,52 0 0 1 158,142 Z" fill="#42decb"/>
-  <path d="M316,142 H354 A52,52 0 0 1 406,194 V302 A52,52 0 0 1 354,354 H316 Z" fill="#ff7b78"/>
-  <path d="M137,208 a17,17 0 1 0 34,0 a17,17 0 1 0 -34,0 Z" fill="#16304b"/>
-  <path d="M341,286 a17,17 0 1 0 34,0 a17,17 0 1 0 -34,0 Z" fill="#16304b"/>
-  <path d="M148,260 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M148,290 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M133,275 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M163,275 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z" fill="#16304b"/>
-  <path d="M352,188 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M352,218 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M337,203 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z M367,203 a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 Z" fill="#16304b"/>
-  <path d="M228,153 L256,119 L284,153 Z" fill="#f4f7ff"/>
-  <path d="M235,164 H277 V198 H235 Z" fill="#ffda88"/>
-  <path d="M249,164 H263 V198 H249 Z" fill="#fff4cf"/>
-  <path d="M228,206 H284 A6,6 0 0 1 284,218 H228 A6,6 0 0 1 228,206 Z" fill="#f4f7ff"/>
-  <path d="M239,229 H273 L294,355 H218 Z" fill="#f4f7ff"/>
-  <path d="M235,253 H277 L280,271 H232 Z M227,304 H285 L288,322 H224 Z" fill="#193251"/>
-  <path d="M130,377 Q161,354 192,377 T254,377 T316,377 T378,377 L378,393 Q347,416 316,393 T254,393 T192,393 T130,393 Z" fill="#59decf"/>
+  <defs>
+    <linearGradient id="body" x1="0" y1="156" x2="0" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6ecf7"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="188" x2="0" y2="346" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0d1b40"/>
+      <stop offset="0.6" stop-color="#22457c"/>
+      <stop offset="1" stop-color="#4f93c2"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="256" y1="223" x2="468" y2="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe9ad" stop-opacity="0.95"/>
+      <stop offset="0.55" stop-color="#ffd36e" stop-opacity="0.65"/>
+      <stop offset="1" stop-color="#ffc44d" stop-opacity="0.35"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="256" cy="223" r="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe29a" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ffd36e" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="console"><path d="M122,156 H390 A78,78 0 0 1 468,234 V314 A78,78 0 0 1 390,392 H122 A78,78 0 0 1 44,314 V234 A78,78 0 0 1 122,156 Z M352,142 H408 A12,12 0 0 1 420,154 V160 A12,12 0 0 1 408,172 H352 A12,12 0 0 1 340,160 V154 A12,12 0 0 1 352,142 Z"/></clipPath>
+    <clipPath id="screen"><rect x="156" y="188" width="200" height="158" rx="14"/></clipPath>
+  </defs>
+
+  <g transform="translate(256 256) scale(1.15) translate(-256 -275)">
+    <!-- shoulder buttons -->
+    <rect x="92" y="142" width="80" height="30" rx="12" fill="#b9c6dc"/>
+    <rect x="340" y="142" width="80" height="30" rx="12" fill="#b9c6dc"/>
+
+    <!-- body: soft shadow, lower lip, face -->
+    <rect x="48" y="166" width="416" height="236" rx="78" fill="#030a18" opacity="0.18"/>
+    <rect x="44" y="156" width="424" height="236" rx="78" fill="#aebcd4"/>
+    <rect x="44" y="156" width="424" height="226" rx="78" fill="url(#body)"/>
+
+    <!-- screen -->
+    <rect x="144" y="176" width="224" height="182" rx="24" fill="#13233d"/>
+    <rect x="156" y="188" width="200" height="158" rx="14" fill="url(#sky)"/>
+
+    <!-- beam: from the lantern across the screen and body, stopping at the console and shoulder-button outline -->
+    <g clip-path="url(#console)">
+      <path d="M256,223 L560,36 L560,136 Z" fill="url(#beam)"/>
+    </g>
+
+    <g clip-path="url(#screen)">
+      <circle cx="188" cy="214" r="9" fill="#fff4cf"/>
+      <circle cx="222" cy="206" r="1.6" fill="#f4f7ff" opacity="0.7"/>
+      <circle cx="176" cy="250" r="1.4" fill="#f4f7ff" opacity="0.5"/>
+      <circle cx="214" cy="238" r="1.2" fill="#f4f7ff" opacity="0.5"/>
+      <circle cx="256" cy="223" r="40" fill="url(#glow)"/>
+
+      <!-- island -->
+      <path d="M290,326 C294,317 302,314 310,318 C314,320 317,323 318,326 Z" fill="#22344f"/>
+      <path d="M204,328 C211,316 222,308 236,305 L246,303 H268 C281,303 293,310 301,320 C303,323 305,326 306,328 Z" fill="#2b3f5e"/>
+      <path d="M236,305 L246,303 H268 C277,303 285,306 292,311 C276,309 256,310 236,305 Z" fill="#4a6489"/>
+      <path d="M214,320 C220,314 226,311 232,310 C228,314 224,318 222,322 Z" fill="#4a6489" opacity="0.7"/>
+
+      <!-- lighthouse -->
+      <path d="M246,242 H266 L276,306 H236 Z" fill="#f4f7ff"/>
+      <path d="M242.6,264 H269.4 L271.6,278 H240.4 Z" fill="#ff6f61"/>
+      <path d="M262,242 H266 L276,306 H268 Z" fill="#c9d4e8" opacity="0.6"/>
+      <path d="M252,306 V295 A4,4 0 0 1 260,295 V306 Z" fill="#13233d"/>
+      <rect x="238" y="234" width="36" height="8" rx="4" fill="#f4f7ff"/>
+      <rect x="246" y="213" width="20" height="21" rx="3" fill="#ffd36e"/>
+      <rect x="254" y="213" width="4" height="21" fill="#fff4cf"/>
+      <path d="M241,215 L256,197 L271,215 Z" fill="#f4f7ff"/>
+
+      <!-- back water -->
+      <path d="M150,321 Q165,313 180,321 T210,321 T240,321 T270,321 T300,321 T330,321 T360,321 V346 H150 Z" fill="#2a9db3"/>
+
+      <!-- front water -->
+      <path d="M150,330 Q165,322 180,330 T210,330 T240,330 T270,330 T300,330 T330,330 T360,330 V346 H150 Z" fill="#59decf"/>
+      <!-- glass sheen -->
+      <path d="M156,188 H240 L180,346 H156 Z" fill="#ffffff" opacity="0.05"/>
+    </g>
+
+    <!-- d-pad -->
+    <rect x="85" y="232" width="20" height="60" rx="5" fill="#1b2b45"/>
+    <rect x="65" y="252" width="60" height="20" rx="5" fill="#1b2b45"/>
+    <circle cx="95" cy="262" r="4" fill="#2c4064"/>
+
+    <!-- face buttons -->
+    <circle cx="417" cy="241" r="11" fill="#ffb84d"/>
+    <circle cx="438" cy="262" r="11" fill="#ff6f61"/>
+    <circle cx="417" cy="283" r="11" fill="#1b2b45"/>
+    <circle cx="396" cy="262" r="11" fill="#1b2b45"/>
+
+    <!-- start / select -->
+    <rect x="76" y="320" width="22" height="8" rx="4" fill="#9fb0cc"/>
+    <rect x="414" y="320" width="22" height="8" rx="4" fill="#9fb0cc"/>
+
+    <!-- power light -->
+    <circle cx="126" cy="196" r="4" fill="#3fd6c6"/>
+  </g>
 </svg>
