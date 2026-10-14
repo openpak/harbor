@@ -189,6 +189,11 @@ public:
         return true;
     }
 
+    bool RemoveDriver(const std::string& id, std::string*) override {
+        std::error_code ec;
+        return id != CurrentDriver() && fs::remove(dir / fs::path(id).filename(), ec);
+    }
+
     std::optional<std::string> HttpGet(const std::string& url, std::uint64_t max_bytes,
                                        const std::atomic_bool& cancel, std::string* error) override {
         std::string body;

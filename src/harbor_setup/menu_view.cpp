@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <set>
 
 #include "common/logging.h"
 #include "common/scm_rev.h"
@@ -1714,6 +1715,28 @@ void MenuActivity::DriverPane(brls::Box* pane) {
     }
     if (host.DriverHost()) {
         pane->addView(Row("driver:download", "Download a driver…", "", [this] { OpenDownloads(); }, true, true));
+        // Every installed driver but the chosen one can go; downloading it again brings it back.
+        bool heading = false;
+        for (const auto& driver : host.DriverHost()->InstalledDrivers()) {
+            if (driver.id == current) {
+                continue;
+            }
+            if (!heading) {
+                pane->addView(Heading("Remove a driver"));
+                heading = true;
+            }
+            pane->addView(Row("driver:remove:" + driver.id, "Remove " + driver.name, driver.detail, [this, driver] {
+                std::string error;
+                if (host.DriverHost()->RemoveDriver(driver.id, &error)) {
+                    LOG_INFO(Frontend, "harbor: driver {} removed", driver.id);
+                    DriverStatus(driver.name + " was removed.", Tone::Ok);
+                } else {
+                    DriverStatus(error, Tone::Bad);
+                }
+                focus_key = "driver:download";
+                Render();
+            }));
+        }
     }
     if (screen == Screen::Host && host.IsAndroid()) {
         // The system's file picker (Android's own), then the same checks as the setup's.
@@ -1795,8 +1818,16 @@ void MenuActivity::DownloadsPane(brls::Box* pane) {
         return;
     }
     pane->addView(Heading("Available on GitHub"));
+    // A package already in the store is not offered again (an installed id is its file name).
+    std::set<std::string> installed_files;
+    for (const auto& driver : host.DriverHost()->InstalledDrivers()) {
+        installed_files.insert(driver.id);
+    }
     for (std::size_t i = 0; i < driver_releases.size(); i++) {
         const auto& release = driver_releases[i];
+        if (installed_files.contains(release.file_name)) {
+            continue;
+        }
         auto* row = new brls::Box(brls::Axis::ROW);
         row->setMinHeight(64);
         row->setPadding(10, 20, 10, 20);

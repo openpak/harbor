@@ -90,7 +90,10 @@ object HarborSetupBridge {
     @JvmStatic
     fun download(url: String, maxBytes: Long, handle: Long): Array<String> {
         val directory = File(YuzuApplication.appContext.cacheDir, "harbor-download").apply { mkdirs() }
-        val file = File(directory, "driver.zip")
+        // Named after the release asset: the store keeps one package per file name.
+        val asset = Uri.decode(url.substringBefore('?').substringAfterLast('/'))
+        val file = File(directory, File(asset).name.takeIf { it.endsWith(".zip", ignoreCase = true) } ?: "driver.zip")
+        directory.listFiles()?.forEach { it.delete() }
         return try {
             val connection = connect(url)
             val code = connection.responseCode
@@ -309,6 +312,18 @@ object HarborSetupBridge {
         Log.info("[Harbor] graphics driver: ${if (id.isEmpty()) "the phone's" else id}" +
             if (installed) "" else " (could not be unpacked)")
         return installed
+    }
+
+    /** Deletes an installed driver from Eden's store; the chosen one stays. */
+    @JvmStatic
+    fun removeDriver(id: String): Boolean {
+        val file = File(GpuDriverHelper.driverStoragePath, File(id).name)
+        if (file.path == StringSetting.DRIVER_PATH.getString() || !file.isFile) {
+            return false
+        }
+        val removed = file.delete()
+        Log.info("[Harbor] driver ${file.name} ${if (removed) "removed" else "could not be removed"}")
+        return removed
     }
 
     /** "Start Harbor" was pressed and the record saved: the console starts once the wizard returns. */

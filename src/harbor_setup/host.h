@@ -96,6 +96,10 @@ public:
     virtual bool SelectDriver(const std::string& id, std::string* error) {
         return true;
     }
+    /// Deletes an installed driver package. The chosen driver is never removed.
+    virtual bool RemoveDriver(const std::string& id, std::string* error) {
+        return false;
+    }
     /// An HTTPS GET of at most `max_bytes`. Empty optional on failure, with `error` set.
     virtual std::optional<std::string> HttpGet(const std::string& url, std::uint64_t max_bytes,
                                                const std::atomic_bool& cancel, std::string* error) {

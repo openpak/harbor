@@ -73,6 +73,7 @@ jmethodID inspect_driver = nullptr;
 jmethodID commit_driver = nullptr;
 jmethodID discard_driver = nullptr;
 jmethodID select_driver = nullptr;
+jmethodID remove_driver = nullptr;
 jmethodID finish_setup = nullptr;
 jclass sleep_class = nullptr;
 jmethodID sleep_changed = nullptr;
@@ -303,6 +304,19 @@ public:
         return true;
     }
 
+    bool RemoveDriver(const std::string& id, std::string* error) override {
+        JNIEnv* env = Common::Android::GetEnvForThread();
+        const bool ok = env->CallStaticBooleanMethod(bridge_class, remove_driver,
+                                                     Common::Android::ToJString(env, id)) == JNI_TRUE;
+        if (ClearException(env) || !ok) {
+            if (error) {
+                *error = "The driver could not be removed.";
+            }
+            return false;
+        }
+        return true;
+    }
+
     std::optional<std::string> HttpGet(const std::string& url, std::uint64_t max_bytes,
                                        const std::atomic_bool& cancel, std::string* error) override {
         JNIEnv* env = Common::Android::GetEnvForThread();
@@ -465,6 +479,7 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
         env->GetStaticMethodID(bridge_class, "commitDriver", "(Ljava/lang/String;)[Ljava/lang/String;");
     discard_driver = env->GetStaticMethodID(bridge_class, "discardDriver", "(Ljava/lang/String;)V");
     select_driver = env->GetStaticMethodID(bridge_class, "selectDriver", "(Ljava/lang/String;)Z");
+    remove_driver = env->GetStaticMethodID(bridge_class, "removeDriver", "(Ljava/lang/String;)Z");
     finish_setup = env->GetStaticMethodID(bridge_class, "finishSetup", "(Z)V");
     jclass sleep_local = env->FindClass("org/yuzu/yuzu_emu/harbor/HarborSleep");
     sleep_class = static_cast<jclass>(env->NewGlobalRef(sleep_local));
