@@ -62,7 +62,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "org.openpak.harbor.eden"
+        applicationId = "org.openpak.harbor"
         minSdk = 24
         targetSdk = 36
         versionName = getGitVersion()
