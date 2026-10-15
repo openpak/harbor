@@ -72,6 +72,14 @@ public:
     std::vector<Picked> folders;
     bool driver_store = false;
     std::string selected_driver = "unset";
+    std::optional<bool> crash_answer;
+
+    std::optional<bool> CrashReportConsent() override {
+        return crash_answer;
+    }
+    void SetCrashReportConsent(bool keep) override {
+        crash_answer = keep;
+    }
 
     bool IsAndroid() const override {
         return false;
@@ -172,6 +180,8 @@ void TestResume() {
           "resume: driver page hidden, account page not passed -> OpenPak account");
     record.openpak_account = "later";
     Check(Wizard::FirstIncomplete(keys, record, false) == Step::Ready, "resume: account passed -> Ready");
+    Check(Wizard::FirstIncomplete(keys, record, false, true) == Step::Crash,
+          "resume: crash reports not asked yet -> Crash reports");
 }
 
 void TestDeviceCheck() {
@@ -348,13 +358,18 @@ void TestFlow(const std::filesystem::path& dir) {
     Check(wizard.AccountValue(AccountField::Country) == "GB", "flow: the country is upper case");
     Check(wizard.CanSkip() && wizard.SkipLabel() == "Later", "flow: the account page says Later");
     wizard.Skip();
-    Check(wizard.step() == Step::Ready && LoadRecord(path).openpak_account == std::optional<std::string>{"later"},
-          "flow: Later records later and goes on");
+    Check(wizard.step() == Step::Crash && LoadRecord(path).openpak_account == std::optional<std::string>{"later"},
+          "flow: Later records later and goes on to the crash-report question");
+    Check(!wizard.CrashKeep() && !host.crash_answer.has_value(), "flow: nothing is kept until chosen");
+    wizard.SetCrashKeep(true);
+    wizard.Next();
+    Check(wizard.step() == Step::Ready && host.crash_answer == std::optional<bool>{true},
+          "flow: the crash-report answer is recorded and the setup goes on");
     Check(!LoadRecord(path).completed, "flow: not completed before Start Harbor");
     Check(wizard.NextLabel() == "Start Harbor", "flow: Ready says Start Harbor");
     wizard.Next();
     Check(finished && LoadRecord(path).completed, "flow: Start Harbor records completed and finishes");
-    Check(notes == 6, "flow: one cue per page shown");
+    Check(notes == 7, "flow: one cue per page shown");
 }
 
 // G4.WIZ.20, G4.WIZ.21 and G4.GPU.3: a picker that fails, Back on Welcome, no GitHub request

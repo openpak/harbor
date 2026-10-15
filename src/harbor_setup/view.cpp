@@ -833,6 +833,16 @@ brls::View* WizardActivity::PageContent() {
         pane->addView(list);
         break;
     }
+    case Step::Crash: {
+        auto* list = List();
+        const bool keep = model.CrashKeep();
+        list->addView(ButtonRow("crash:keep", "Keep reports", keep ? "Chosen" : "", [this] { model.SetCrashKeep(true); },
+                                keep));
+        list->addView(ButtonRow("crash:decline", "Don't keep", keep ? "" : "Chosen",
+                                [this] { model.SetCrashKeep(false); }, !keep));
+        pane->addView(list);
+        break;
+    }
     case Step::Ready: {
         auto* list = List();
         int index = 0;

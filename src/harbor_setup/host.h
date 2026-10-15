@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "common/harbor_crash.h"
+
 #include "harbor_setup/device_check.h"
 #include "harbor_setup/record.h"
 
@@ -72,6 +74,14 @@ public:
     }
     /// After firmware was installed: a running emulator core rescans its NAND.
     virtual void FirmwareInstalled() {}
+    /// The crash-report answer (nothing while it has not been asked) and where the wizard records it.
+    /// The defaults are this process's own store; a test host answers for itself.
+    virtual std::optional<bool> CrashReportConsent() {
+        return Common::HarborCrash::CrashReportConsent();
+    }
+    virtual void SetCrashReportConsent(bool keep) {
+        Common::HarborCrash::SetCrashReportConsent(keep);
+    }
     /// "Start Harbor" was pressed and the completed record saved.
     virtual void Finished(const Record& record) {}
 

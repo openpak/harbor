@@ -22,7 +22,7 @@
 
 namespace HarborSetup {
 
-enum class Step { Welcome, Device, Keys, Firmware, Games, Dlc, Updates, Driver, Account, Ready };
+enum class Step { Welcome, Device, Keys, Firmware, Games, Dlc, Updates, Driver, Account, Crash, Ready };
 
 enum class Tone { None, Ok, Warn, Bad };
 
@@ -184,6 +184,13 @@ public:
         return account_state;
     }
     void SetAccountMode(AccountMode mode);
+
+    /// The crash-report question (Step::Crash): whether Harbor keeps a report when it or a game
+    /// crashes. Not kept until chosen; Next records the answer.
+    bool CrashKeep() const {
+        return crash_keep;
+    }
+    void SetCrashKeep(bool keep);
     /// The value as the row shows it (the password as dots), or empty.
     std::string AccountValue(AccountField field) const;
     /// The value to start an edit from (empty for the password).
@@ -208,7 +215,8 @@ public:
     void PickerFailed(const std::string& message);
 
     /// The first page that still needs the user, judged from the files and the record.
-    static Step FirstIncomplete(const Readiness& readiness, const Record& record, bool has_driver_page);
+    static Step FirstIncomplete(const Readiness& readiness, const Record& record, bool has_driver_page,
+                                bool crash_unanswered = false);
 
 private:
     void GoTo(Step step);
@@ -269,6 +277,8 @@ private:
     bool driver_auto_download = false;  ///< the next listing installs its recommended release
 
     AccountMode account_mode = AccountMode::SignIn;
+    bool crash_keep = false;
+    bool crash_question = false; ///< the crash-report answer was missing when the setup opened
     AccountState account_state = AccountState::Form;
     std::string account_email, account_password, account_nickname, account_birthday, account_country;
     std::string account_name;

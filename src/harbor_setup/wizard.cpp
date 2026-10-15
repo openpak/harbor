@@ -120,7 +120,8 @@ Wizard::Wizard(Host& host_, std::filesystem::path record_path_, const Readiness&
         FillDriverChoices(setup.gpu_driver.value_or(host.CurrentDriver()));
     }
 
-    current = FirstIncomplete(readiness, setup, driver_page);
+    crash_question = !host.CrashReportConsent().has_value();
+    current = FirstIncomplete(readiness, setup, driver_page, crash_question);
     LOG_INFO(Frontend, "harbor: setup opens at step {}", static_cast<int>(current));
     Enter();
 }
@@ -134,7 +135,8 @@ Wizard::~Wizard() {
     }
 }
 
-Step Wizard::FirstIncomplete(const Readiness& readiness, const Record& record, bool has_driver_page) {
+Step Wizard::FirstIncomplete(const Readiness& readiness, const Record& record, bool has_driver_page,
+                             bool crash_unanswered) {
     if (!readiness.keys_usable) {
         return Step::Welcome;
     }
@@ -155,6 +157,10 @@ Step Wizard::FirstIncomplete(const Readiness& readiness, const Record& record, b
     }
     if (!record.openpak_account) {
         return Step::Account;
+    }
+    // Asked here, once, so the console's first start does not stop to ask it.
+    if (crash_unanswered) {
+        return Step::Crash;
     }
     return Step::Ready;
 }
@@ -179,6 +185,8 @@ std::string Wizard::Title() const {
         return "Graphics driver";
     case Step::Account:
         return "OpenPak account";
+    case Step::Crash:
+        return "Crash reports";
     case Step::Ready:
         return "Ready";
     }
@@ -228,6 +236,11 @@ std::string Wizard::Lead() const {
                      "or link a user in the console's settings."
                    : "Create an OpenPak account. A mail is sent to verify the address; the console's "
                      "first user is then linked to it.";
+    case Step::Crash:
+        return "If Harbor or a game crashes, Harbor can save a report on this device: what crashed and "
+               "the last lines of its log, with account ids, names, tokens and typed text removed. "
+               "Nothing is sent anywhere. At the next start Harbor offers the report: you can read it, "
+               "share it yourself, or delete it. Change this later in the Harbor menu.";
     case Step::Ready:
         return "Everything is in place. When Harbor starts, the console boots for the first time and "
                "runs its own setup: language, region, the first user and the network.";
@@ -303,6 +316,9 @@ std::optional<double> Wizard::ProgressFraction() const {
 }
 
 bool Wizard::Shown(Step step) const {
+    if (step == Step::Crash) {
+        return crash_question;
+    }
     return step != Step::Driver || driver_page;
 }
 
@@ -917,6 +933,14 @@ void Wizard::SetAccountMode(AccountMode mode) {
     Notify();
 }
 
+void Wizard::SetCrashKeep(bool keep) {
+    if (busy || keep == crash_keep) {
+        return;
+    }
+    crash_keep = keep;
+    Notify();
+}
+
 std::string Wizard::AccountValue(AccountField field) const {
     switch (field) {
     case AccountField::Email:
@@ -1191,6 +1215,9 @@ std::vector<SummaryRow> Wizard::Summary() const {
     rows.push_back({"OpenPak", setup.openpak_account == "signed-in"
                                    ? (account_name.empty() ? std::string{"Signed in"} : account_name)
                                    : std::string{"Later"}});
+    rows.push_back({"Crash reports", host.CrashReportConsent().value_or(false)
+                                           ? std::string{"Kept"}
+                                           : std::string{"Not kept"}});
     return rows;
 }
 
@@ -1260,6 +1287,10 @@ void Wizard::Next() {
         break;
     case Step::Updates:
         setup.update_dirs = ToLocations(updates);
+        break;
+    case Step::Crash:
+        host.SetCrashReportConsent(crash_keep);
+        LOG_INFO(Frontend, "harbor: crash reports {}", crash_keep ? "kept from now on" : "not kept");
         break;
     case Step::Driver: {
         std::string error;
