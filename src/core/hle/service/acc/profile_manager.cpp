@@ -134,8 +134,10 @@ bool ProfileManager::CreateOpenPakUser() {
     }
     WriteUserSaveFile();
     const std::string uid = uuid.RawString();
-    OpenPak::OnFirmwareUserRegistered(
-        uid, [uid](const std::string& id_token) { OpenPakAccount::KeepNamesOfLink(uid, id_token); });
+    OpenPak::OnFirmwareUserRegistered(uid, [uid](const std::string& id_token) {
+        OpenPakAccount::KeepNamesOfLink(uid, id_token);
+        OpenPakAccount::AdoptNewUserInBackground(uid);
+    });
     LOG_INFO(Service_ACC, "HOME session with no user: created the OpenPak account's user, the "
                           "firmware setup will find it");
     return true;

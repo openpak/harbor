@@ -110,6 +110,12 @@ bool EnsureAndAdopt(const std::string& uid);
 /// EnsureAndAdopt on a thread of its own, at most once at a time per user. Never blocks.
 void EnsureAndAdoptInBackground(const std::string& uid);
 
+/// For a user Harbor created from the OpenPak account (not the firmware's setup, where the person
+/// picks a picture): once linked, the account's nickname and picture are queued for it, or a plain
+/// generated avatar when the account has no picture, so it never shows the placeholder. Returns at
+/// once.
+void AdoptNewUserInBackground(const std::string& uid);
+
 /// Whether the user is signed in on the console server, starting the background sign-in and
 /// waiting for it up to `max` when it is not yet. False when it is not done by then or failed.
 bool SignedInWithin(const std::string& uid, std::chrono::milliseconds max);

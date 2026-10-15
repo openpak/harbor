@@ -383,6 +383,80 @@ bool EnsureAndAdopt(const std::string& uid) {
     return true;
 }
 
+namespace {
+
+/// A 256x256 baseline JPEG for an account with no picture: a light person on a colour taken from
+/// the user id. Original and deterministic; no assets.
+std::vector<u8> DefaultAvatar(const std::string& uid) {
+    constexpr int size = 256;
+    u32 hash = 2166136261u;
+    for (const char c : uid) {
+        hash = (hash ^ static_cast<u8>(c)) * 16777619u;
+    }
+    // Hue from the id, fixed saturation and value: HSV to RGB.
+    const float hue = static_cast<float>(hash % 360) / 60.0f;
+    const float s = 0.45f;
+    const float v = 0.78f;
+    const int sector = static_cast<int>(hue);
+    const float f = hue - static_cast<float>(sector);
+    const float p = v * (1.0f - s);
+    const float q = v * (1.0f - s * f);
+    const float t = v * (1.0f - s * (1.0f - f));
+    const float rgb[6][3] = {{v, t, p}, {q, v, p}, {p, v, t}, {p, q, v}, {t, p, v}, {v, p, q}};
+    const auto channel = [&](int i) {
+        return static_cast<u8>(rgb[sector % 6][i] * 255.0f);
+    };
+    const u8 background[3] = {channel(0), channel(1), channel(2)};
+
+    std::vector<u8> pixels(static_cast<std::size_t>(size) * size * 3);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            const float head_x = static_cast<float>(x - 128);
+            const float head_y = static_cast<float>(y - 98);
+            const float body_x = static_cast<float>(x - 128) / 96.0f;
+            const float body_y = static_cast<float>(y - 262) / 100.0f;
+            const bool person = head_x * head_x + head_y * head_y <= 46.0f * 46.0f ||
+                                body_x * body_x + body_y * body_y <= 1.0f;
+            u8* out = &pixels[(static_cast<std::size_t>(y) * size + x) * 3];
+            for (int i = 0; i < 3; i++) {
+                out[i] = person ? u8{245} : background[i];
+            }
+        }
+    }
+    std::vector<u8> jpeg;
+    const auto write = [](void* context, void* data, int length) {
+        auto* out = static_cast<std::vector<u8>*>(context);
+        const auto* bytes = static_cast<const u8*>(data);
+        out->insert(out->end(), bytes, bytes + length);
+    };
+    if (!stbi_write_jpg_to_func(write, &jpeg, size, size, 3, pixels.data(), 90)) {
+        return {};
+    }
+    return jpeg;
+}
+
+} // namespace
+
+void AdoptNewUserInBackground(const std::string& uid) {
+    if (uid.empty()) {
+        return;
+    }
+    // Detached like EnsureAndAdoptInBackground: it waits on the network and nothing waits for it.
+    std::thread([uid] {
+        if (!OpenPak::Session::Ensure(uid) || !OpenPak::Session::Linked(uid)) {
+            return;
+        }
+        std::vector<u8> image;
+        if (const std::string picture = OpenPak::Session::ThumbnailUrl(uid); !picture.empty()) {
+            image = FetchProfileImage(picture);
+        }
+        if (image.empty()) {
+            image = DefaultAvatar(uid);
+        }
+        QueueAdoption(Common::UUID{uid}, OpenPak::Session::Nickname(uid), std::move(image));
+    }).detach();
+}
+
 void EnsureAndAdoptInBackground(const std::string& uid) {
     if (uid.empty()) {
         return;

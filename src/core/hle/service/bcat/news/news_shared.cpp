@@ -224,12 +224,18 @@ void NewsShared::ClearSubscriptions() {
     {
         std::scoped_lock lock{subscription_mutex};
         subscriptions.clear();
+        // The firmware's first-time setup clears everything and then follows its own two channels;
+        // OpenPak's defaults come back so a new console still starts with them.
+        subscriptions["openpak_news"] = 2;
+        subscriptions["openpak_games"] = 2;
         SaveSubscriptions();
     }
-    LOG_INFO(Service_BCAT, "[OpenPak] News: every subscription cleared");
-    if (store.RemoveTopicsNotIn({}) > 0) {
+    LOG_INFO(Service_BCAT,
+             "[OpenPak] News: every subscription cleared; OpenPak News and Games followed again");
+    if (store.RemoveTopicsNotIn({"openpak_news", "openpak_games"}) > 0) {
         SignalOverwrite();
     }
+    StartFill();
 }
 
 void NewsShared::StartFill() {
