@@ -81,6 +81,9 @@ public:
     /// with no user gets the default one, as before.
     void ReloadForSession(bool home_session);
 
+    /// Creates, saves and links the user of the OpenPak account the Harbor wizard signed in to.
+    bool CreateOpenPakUser();
+
     /// IProfile 30 GetImageId: 16 bytes qlaunch compares to notice a new profile picture (it
     /// reloads the HOME icon when they change). Derived from the image bytes, so it changes with
     /// the picture and survives restarts.

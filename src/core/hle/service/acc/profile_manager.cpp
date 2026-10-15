@@ -21,7 +21,9 @@
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "core/file_sys/savedata_factory.h"
+#include "core/hle/service/acc/openpak_account.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/openpak/account.h"
 
 namespace Service::Account {
 
@@ -72,20 +74,71 @@ void ProfileManager::ReloadForSession(bool home_session_) {
 
     ParseUserSaveFile();
 
-    // A console with no user runs the firmware's first-time setup, which creates the first one.
+    // A console with no user runs the firmware's first-time setup, which creates the first one. When
+    // the Harbor wizard already signed in to an OpenPak account, that account's user is created here
+    // instead: the setup finds a user and does not ask for one.
     if (user_count == 0) {
         if (home_session) {
-            LOG_INFO(Service_ACC, "HOME session with no user: the setup creates the first one");
-            return;
+            if (!CreateOpenPakUser()) {
+                LOG_INFO(Service_ACC, "HOME session with no user: the setup creates the first one");
+                return;
+            }
+        } else {
+            CreateNewUser(UUID::MakeRandom(), "Eden");
+            WriteUserSaveFile();
         }
-        CreateNewUser(UUID::MakeRandom(), "Eden");
-        WriteUserSaveFile();
     }
 
     // A console opens no user at boot: an application opens the user it was started with (the
     // preselected one) and ListOpenUsers answers that. The current user still counts as the last
     // opened one until then.
     OpenCurrentUser(!home_session);
+}
+
+/// The first user of a HOME session on a console with none, named by the OpenPak account the wizard
+/// signed in to and linked to it in the background, as CompleteUserRegistration links a user the
+/// firmware creates. False (nothing created) when no account is signed in or its name is unknown;
+/// the firmware's setup then creates the user as before.
+bool ProfileManager::CreateOpenPakUser() {
+    if (!OpenPak::Account::HasAccount()) {
+        return false;
+    }
+    // The firmware's nickname is at most 10 characters; the field holds 0x20 bytes.
+    std::string name = OpenPak::Account::KnownDisplayName();
+    std::size_t end = 0;
+    std::size_t characters = 0;
+    while (end < name.size() && end < 0x1F) {
+        std::size_t length = 1;
+        const auto lead = static_cast<unsigned char>(name[end]);
+        if (lead >= 0xF0) {
+            length = 4;
+        } else if (lead >= 0xE0) {
+            length = 3;
+        } else if (lead >= 0xC0) {
+            length = 2;
+        }
+        if (characters == 10 || end + length > 0x1F || end + length > name.size()) {
+            break;
+        }
+        end += length;
+        ++characters;
+    }
+    name.resize(end);
+    if (name.empty()) {
+        return false;
+    }
+
+    const auto uuid = UUID::MakeRandom();
+    if (CreateNewUser(uuid, name).IsError()) {
+        return false;
+    }
+    WriteUserSaveFile();
+    const std::string uid = uuid.RawString();
+    OpenPak::OnFirmwareUserRegistered(
+        uid, [uid](const std::string& id_token) { OpenPakAccount::KeepNamesOfLink(uid, id_token); });
+    LOG_INFO(Service_ACC, "HOME session with no user: created the OpenPak account's user, the "
+                          "firmware setup will find it");
+    return true;
 }
 
 void ProfileManager::OpenCurrentUser(bool open) {

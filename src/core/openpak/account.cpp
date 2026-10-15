@@ -49,6 +49,7 @@ struct Kept {
     std::string bearer;
     std::string expires_at;
     std::string linked_uid;
+    std::string display_name; // the account's nickname as Me() last read it; not a secret
 };
 
 std::mutex& StateMutex() {
@@ -69,12 +70,16 @@ std::optional<Kept> Load() {
     kept.bearer = doc.at("bearer").get<std::string>();
     kept.expires_at = doc.value("expires_at", std::string{});
     kept.linked_uid = doc.value("linked_uid", std::string{});
+    kept.display_name = doc.value("display_name", std::string{});
     return kept.bearer.empty() ? std::nullopt : std::optional{kept};
 }
 
 bool Keep(const Kept& kept) {
     const nlohmann::json doc{
-        {"bearer", kept.bearer}, {"expires_at", kept.expires_at}, {"linked_uid", kept.linked_uid}};
+        {"bearer", kept.bearer},
+        {"expires_at", kept.expires_at},
+        {"linked_uid", kept.linked_uid},
+        {"display_name", kept.display_name}};
     return StoreSecret(SecretKey(), doc.dump());
 }
 
@@ -218,10 +223,29 @@ std::optional<Profile> Me(Status* status) {
     Profile profile;
     profile.email_verified = doc.value("email_verified", false);
     profile.display_name = doc.value("display_name", std::string{});
+    if (!profile.display_name.empty()) {
+        // Kept for the firmware user the setup's account creates before the network is asked.
+        std::scoped_lock lock{StateMutex()};
+        if (auto latest = Load(); latest && latest->display_name != profile.display_name) {
+            latest->display_name = profile.display_name;
+            Keep(*latest);
+        }
+    }
     if (status) {
         *status = Status::Ok;
     }
     return profile;
+}
+
+std::string KnownDisplayName() {
+    if (const auto kept = Load(); kept && !kept->display_name.empty()) {
+        return kept->display_name;
+    }
+    // An account signed in before the name was kept: one read, which keeps it.
+    if (const auto me = Me()) {
+        return me->display_name;
+    }
+    return {};
 }
 
 Status ResendVerification() {

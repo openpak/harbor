@@ -52,6 +52,10 @@ struct Profile {
 /// The signed-in account, or nothing (with `status` saying why).
 std::optional<Profile> Me(Status* status = nullptr);
 
+/// The signed-in account's nickname: the one Me() last kept, else one read of Me(). Empty when
+/// signed out or the server is unreachable.
+std::string KnownDisplayName();
+
 /// Sends the verification mail again (the server sends at most one per 10 minutes).
 Status ResendVerification();
 
