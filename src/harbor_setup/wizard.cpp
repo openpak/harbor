@@ -1352,6 +1352,9 @@ void Wizard::PickerFailed(const std::string& message) {
 }
 
 void Wizard::Back() {
+    if (back_intercept && back_intercept()) {
+        return;
+    }
     if (!CanGoBack()) {
         return;
     }

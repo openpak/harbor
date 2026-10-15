@@ -16,6 +16,7 @@
 
 #include "common/logging.h"
 #include "harbor_setup/harbor_setup.h"
+#include "harbor_setup/text_entry.h"
 #include "harbor_setup/ui.h"
 #include "harbor_setup/view.h"
 
@@ -146,6 +147,8 @@ WizardActivity::WizardActivity(Wizard& model_) : model{model_} {
     model.progress_changed = [this] { UpdateProgress(); };
     chime = std::make_unique<Chime>();
     model.page_shown = [this](int note) { chime->Play(note); };
+    // Android's Back reaches the model, not the page: while the text page is open it closes that.
+    model.back_intercept = [] { return CancelTextEntry(); };
 }
 
 WizardActivity::~WizardActivity() {
@@ -154,6 +157,7 @@ WizardActivity::~WizardActivity() {
     model.changed = nullptr;
     model.progress_changed = nullptr;
     model.page_shown = nullptr;
+    model.back_intercept = nullptr;
 }
 
 brls::View* WizardActivity::createContentView() {
@@ -244,6 +248,10 @@ void WizardActivity::Remember(brls::View* view, const std::string& key) {
 
 void WizardActivity::Render() {
     if (!frame) {
+        return;
+    }
+    if (editing) {
+        render_deferred = true;
         return;
     }
     rendering = true;
@@ -587,7 +595,7 @@ std::vector<std::string> ScriptedTexts() {
 } // namespace
 
 void WizardActivity::EditText(const std::string& title, const std::string& hint, const std::string& initial,
-                              int max_length, std::function<void(std::string)> done) {
+                              int max_length, std::function<void(std::string)> done, bool secret) {
     static std::vector<std::string> scripted = ScriptedTexts();
     static size_t next_scripted = 0;
     if (next_scripted < scripted.size()) {
@@ -595,8 +603,26 @@ void WizardActivity::EditText(const std::string& title, const std::string& hint,
         brls::sync([done, text = scripted[next_scripted++]] { done(text); });
         return;
     }
-    brls::Application::getImeManager()->openForText(
-        [done](std::string text) { done(std::move(text)); }, title, hint, max_length, initial);
+    TextEntryOptions options;
+    options.title = title;
+    options.hint = hint;
+    options.initial = initial;
+    options.max_length = max_length;
+    options.secret = secret;
+    options.closed = [this, alive = std::weak_ptr<bool>(alive)] {
+        if (alive.expired()) {
+            return;
+        }
+        editing = false;
+        if (render_deferred) {
+            render_deferred = false;
+            Render();
+        }
+    };
+    editing = true;
+    if (!OpenTextEntry(std::move(options), [done](std::string text) { done(std::move(text)); })) {
+        editing = false;
+    }
 }
 
 brls::View* WizardActivity::PageContent() {
@@ -790,10 +816,13 @@ brls::View* WizardActivity::PageContent() {
                 const std::string value = model.AccountValue(which);
                 list->addView(ButtonRow(key, title, value.empty() ? hint : value,
                                         [this, title, which, hint, max_length] {
-                                            EditText(title, hint, model.AccountEditValue(which), max_length,
+                                            // "Not entered" says the row is empty; it is no guidance for the field.
+                                            EditText(title, hint == "Not entered" ? std::string{} : hint,
+                                                     model.AccountEditValue(which), max_length,
                                                      [this, which](std::string text) {
                                                          model.SetAccountField(which, std::move(text));
-                                                     });
+                                                     },
+                                                     which == AccountField::Password);
                                         }));
             };
             field("account:email", "Email address", AccountField::Email, "Not entered", 254);

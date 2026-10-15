@@ -70,6 +70,8 @@ public:
     std::function<void(int note)> page_shown;
     /// Called once "Start Harbor" saved the completed record.
     std::function<void()> finished;
+    /// Asked first by Back(): true when something on top of the page (the text entry) took the press.
+    std::function<bool()> back_intercept;
 
     Step step() const {
         return current;

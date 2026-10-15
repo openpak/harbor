@@ -131,6 +131,8 @@ add_library(harbor_setup STATIC
     menu.cpp
     menu_view.cpp
     menu_view.h
+    text_entry.cpp
+    text_entry.h
     ui.cpp
     ui.h
     view.cpp

@@ -67,9 +67,10 @@ private:
                      std::function<void()> action);
     brls::View* StatusStrip();
     brls::View* ProgressPanel();
-    /// A text field: the on-screen keyboard on Android, typing on desktop.
+    /// A text field: Harbor's own Borealis keyboard page (text_entry.h), the same on Android and desktop.
+    /// A secret field (a password) shows bullets while typing.
     void EditText(const std::string& title, const std::string& hint, const std::string& initial, int max_length,
-                  std::function<void(std::string)> done);
+                  std::function<void(std::string)> done, bool secret = false);
 
     Wizard& model;
     std::unique_ptr<Chime> chime;
@@ -89,6 +90,9 @@ private:
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
     bool reveal_end = false;
     bool rendering = false;
+    /// The text page is open on top: the page behind is not rebuilt (it would take the focus) until it closes.
+    bool editing = false;
+    bool render_deferred = false;
     brls::GenericEvent::Subscription focus_subscription;
     brls::VoidEvent::Subscription theme_subscription;
     unsigned theme_frames = 0;
