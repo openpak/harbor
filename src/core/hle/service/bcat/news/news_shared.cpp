@@ -213,6 +213,11 @@ void NewsShared::SetSubscription(const std::string& topic, u32 status) {
     if (status < 2 && store.RemoveTopic(topic) > 0) {
         SignalOverwrite();
     }
+    // Following a channel fetches it now: the fill otherwise runs once, at boot, before the player
+    // follows anything.
+    if (status >= 2) {
+        StartFill();
+    }
 }
 
 void NewsShared::ClearSubscriptions() {
@@ -228,7 +233,10 @@ void NewsShared::ClearSubscriptions() {
 }
 
 void NewsShared::StartFill() {
+    std::scoped_lock lock{fill_mutex};
     if (filling.exchange(true)) {
+        // A fill is running and may already have passed this topic's lines: it runs once more.
+        refill = true;
         return;
     }
 
@@ -239,6 +247,18 @@ void NewsShared::StartFill() {
 // GET the local index ("<topic> <news_id> <bytes>" per line), then every article not stored yet or
 // changed in size; signals newly arrived when anything was added.
 void NewsShared::Fill(std::stop_token stop) {
+    for (;;) {
+        FillOnce(stop);
+        std::scoped_lock lock{fill_mutex};
+        if (refill.exchange(false) && !stop.stop_requested()) {
+            continue;
+        }
+        filling = false;
+        return;
+    }
+}
+
+void NewsShared::FillOnce(std::stop_token stop) {
     const auto fetcher = BCAT::GetOpenPakFetcher();
     int added = 0;
 
@@ -264,7 +284,6 @@ void NewsShared::Fill(std::stop_token stop) {
     if (stop.stop_requested() || !response.reached || response.status != 200) {
         LOG_WARNING(Service_BCAT, "[OpenPak] News index not fetched ({})",
                     response.reached ? response.status : 0);
-        filling = false;
         return;
     }
 
@@ -337,7 +356,6 @@ void NewsShared::Fill(std::stop_token stop) {
         SignalNewlyArrived();
     }
     LOG_INFO(Service_BCAT, "[OpenPak] News: {} new article(s)", added);
-    filling = false;
 }
 
 void RequestNewsFill() {

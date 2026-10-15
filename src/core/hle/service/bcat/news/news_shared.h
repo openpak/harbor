@@ -66,11 +66,14 @@ public:
 
 private:
     void Fill(std::stop_token stop);
+    void FillOnce(std::stop_token stop);
 
     KernelHelpers::ServiceContext service_context;
     std::mutex subscription_mutex;
     std::map<std::string, u32> subscriptions;
     std::atomic<bool> filling{false};
+    std::atomic<bool> refill{false}; // a follow arrived while a fill ran: fill once more
+    std::mutex fill_mutex;           // orders StartFill against a fill that is finishing
     std::jthread fill_thread;
     std::filesystem::path subscriptions_path;
     void SaveSubscriptions();
