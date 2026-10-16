@@ -7,6 +7,12 @@
 #include "common/scope_exit.h"
 #include "common/scratch_buffer.h"
 #include "core/core.h"
+#include "core/arm/debug.h"
+#include "core/openpak/guest_ipc_trace.h"
+#include "core/hle/kernel/k_thread.h"
+#include "core/memory.h"
+#include <array>
+#include <string>
 #include "core/hle/kernel/k_client_session.h"
 #include "core/hle/kernel/k_hardware_timer.h"
 #include "core/hle/kernel/k_process.h"
@@ -141,7 +147,52 @@ Result ReplyAndReceiveImpl(KernelCore& kernel, int32_t* out_index, uintptr_t mes
 } // namespace
 
 /// Makes a blocking IPC call to a service.
+// [OpenPak] See core/openpak/guest_ipc_trace.h.
+static void TraceGuestIpc(KernelCore& kernel, Handle session_handle, Result result, bool before,
+                          u32& cmd, std::string& name) {
+    auto& process = GetCurrentProcess(kernel);
+    if ((process.GetProgramId() & ~u64{0xFFFF}) != 0x0100000000000000ULL) {
+        return;
+    }
+    auto& thread = GetCurrentThread(kernel);
+    std::array<u32, 0x40> words{};
+    if (!process.GetMemory().ReadBlock(thread.GetTlsAddress(), words.data(), sizeof(words))) {
+        return;
+    }
+    if (before) {
+        KScopedAutoObject session =
+            process.GetHandleTable().GetObject<KClientSession>(kernel, session_handle);
+        name = session.IsNotNull() ? OpenPak::GuestIpcTrace::SessionName(session.GetPointerUnsafe())
+                                   : std::string{"?"};
+        cmd = 0xFFFFFFFF;
+        for (std::size_t i = 0; i + 2 < words.size(); ++i) {
+            if (words[i] == 0x49434653) { // SFCI
+                cmd = words[i + 2];
+                break;
+            }
+        }
+        return;
+    }
+    u32 sf_result = 0xFFFFFFFF;
+    for (std::size_t i = 0; i + 2 < words.size(); ++i) {
+        if (words[i] == 0x4F434653) { // SFCO
+            sf_result = words[i + 2];
+            break;
+        }
+    }
+    LOG_INFO(Kernel_SVC, "guest-ipc {:016X} [{}] {} {} -> svc {:#x} sf {:#x}", process.GetProgramId(),
+             Core::GetThreadName(&thread).value_or(std::string{}), name, cmd, result.raw, sf_result);
+}
+
 Result SendSyncRequest(Core::System& system, Handle session_handle) {
+    if (OpenPak::GuestIpcTrace::Enabled()) {
+        u32 cmd{};
+        std::string name;
+        TraceGuestIpc(system.Kernel(), session_handle, ResultSuccess, true, cmd, name);
+        const Result result = SendSyncRequestImpl(system.Kernel(), 0, 0, session_handle);
+        TraceGuestIpc(system.Kernel(), session_handle, result, false, cmd, name);
+        R_RETURN(result);
+    }
     R_RETURN(SendSyncRequestImpl(system.Kernel(), 0, 0, session_handle));
 }
 

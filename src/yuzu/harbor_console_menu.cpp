@@ -17,6 +17,7 @@
 #include "core/harbor_calibration/calibration.h"
 #include "qt_common/util/compress.h"
 #include "yuzu/harbor_console_menu.h"
+#include "yuzu/harbor_desktop.h"
 
 namespace HarborConsoleMenu {
 
@@ -38,12 +39,12 @@ QString Ask(QWidget* parent, const QString& title, const QString& label, bool* o
     return QInputDialog::getText(parent, title, label, QLineEdit::Password, QString{}, ok);
 }
 
-/// A progress dialog for a zip of the NAND, kept responsive from the copy's own callback.
-QtCommon::QtProgressCallback Progress(QProgressDialog& dialog) {
+/// A progress page (Borealis) for a zip of the NAND, kept responsive from the copy's own callback.
+QtCommon::QtProgressCallback Progress(HarborDesktop::ProgressPage& dialog) {
     return [&dialog](std::size_t total, std::size_t done) {
-        dialog.setValue(total == 0 ? 0 : static_cast<int>(done * 100 / total));
+        dialog.SetValue(total == 0 ? 0 : static_cast<int>(done * 100 / total));
         QApplication::processEvents();
-        return !dialog.wasCanceled();
+        return !dialog.Canceled();
     };
 }
 
@@ -63,14 +64,14 @@ void BackUp(QWidget* parent, const WhileStopped& while_stopped) {
         return;
     }
     if (passphrase.size() < MinimumPassphrase) {
-        QMessageBox::warning(parent, title,
+        HarborDesktop::Warning(parent, title,
                              QObject::tr("The passphrase needs at least %1 characters.")
                                  .arg(MinimumPassphrase));
         return;
     }
     if (Ask(parent, title, QObject::tr("The passphrase again:"), &ok) != passphrase || !ok) {
         if (ok) {
-            QMessageBox::warning(parent, title, QObject::tr("The passphrases differ."));
+            HarborDesktop::Warning(parent, title, QObject::tr("The passphrases differ."));
         }
         return;
     }
@@ -91,10 +92,9 @@ void BackUp(QWidget* parent, const WhileStopped& while_stopped) {
         if (!Harbor::WriteDeviceKeyBackup(passphrase.toStdString())) {
             return;
         }
-        QProgressDialog progress(QObject::tr("Backing up the console..."), QObject::tr("Cancel"),
-                                 0, 100, parent);
-        progress.setWindowModality(Qt::WindowModal);
-        progress.show();
+        HarborDesktop::ProgressPage progress(parent, QObject::tr("Backing up the console..."),
+                                             QObject::tr("Cancel"), 0, 100);
+        progress.Show();
         done = QtCommon::Compress::compressDir(
             target, QString::fromStdString(NandDir().string()),
             QtCommon::Compress::Options(QtCommon::Compress::Options::Storage), Progress(progress));
@@ -102,9 +102,9 @@ void BackUp(QWidget* parent, const WhileStopped& while_stopped) {
     });
     LOG_INFO(Frontend, "harbor: console backup {}", done ? "written" : "failed");
     if (done) {
-        QMessageBox::information(parent, title, QObject::tr("The console is backed up."));
+        HarborDesktop::Information(parent, title, QObject::tr("The console is backed up."));
     } else {
-        QMessageBox::critical(parent, title, QObject::tr("The backup could not be written."));
+        HarborDesktop::Critical(parent, title, QObject::tr("The backup could not be written."));
     }
 }
 
@@ -118,7 +118,7 @@ void Restore(QWidget* parent, const WhileStopped& while_stopped) {
     if (source.isEmpty()) {
         return;
     }
-    if (QMessageBox::warning(parent, title,
+    if (HarborDesktop::Warning(parent, title,
                              QObject::tr("The backup replaces this console's system memory: its "
                                          "users, saves and settings. Continue?"),
                              QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) {
@@ -135,10 +135,9 @@ void Restore(QWidget* parent, const WhileStopped& while_stopped) {
         fs::remove_all(incoming, ec);
         fs::create_directories(incoming, ec);
         {
-            QProgressDialog progress(QObject::tr("Restoring the console..."),
-                                     QObject::tr("Cancel"), 0, 100, parent);
-            progress.setWindowModality(Qt::WindowModal);
-            progress.show();
+            HarborDesktop::ProgressPage progress(parent, QObject::tr("Restoring the console..."),
+                                                 QObject::tr("Cancel"), 0, 100);
+            progress.Show();
             const auto files = QtCommon::Compress::extractDir(
                 source, QString::fromStdString(incoming.string()), Progress(progress));
             if (files.isEmpty() || !fs::exists(incoming / "calibration" / "prodinfo.bin")) {
@@ -177,7 +176,7 @@ void Restore(QWidget* parent, const WhileStopped& while_stopped) {
             }
             const auto result = Harbor::RestoreDeviceKey(passphrase.toStdString());
             if (result == Harbor::RestoreResult::WrongPassphrase) {
-                QMessageBox::warning(parent, title, QObject::tr("That passphrase does not open "
+                HarborDesktop::Warning(parent, title, QObject::tr("That passphrase does not open "
                                                                 "this backup."));
             } else if (result != Harbor::RestoreResult::Restored) {
                 outcome = QObject::tr("The device key could not be kept on this computer.");
@@ -190,7 +189,7 @@ void Restore(QWidget* parent, const WhileStopped& while_stopped) {
         outcome = QObject::tr("The console is restored.");
     });
     LOG_INFO(Frontend, "harbor: console restore: {}", outcome.toStdString());
-    QMessageBox::information(parent, title, outcome);
+    HarborDesktop::Information(parent, title, outcome);
 }
 
 std::string MakeNew(const WhileStopped& while_stopped) {
@@ -214,7 +213,7 @@ void WarnIfLocked(QWidget* parent) {
     if (std::getenv("HARBOR_CONTROL") != nullptr) {
         return; // test runs: the log line is the signal, no dialog in the way
     }
-    QMessageBox::warning(
+    HarborDesktop::Warning(
         parent, QObject::tr("This console's keys"),
         keys == Keys::BackupPending
             ? QObject::tr("This console was restored from a backup and its keys are still locked. "

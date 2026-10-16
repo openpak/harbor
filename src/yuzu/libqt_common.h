@@ -5,7 +5,10 @@
 
 #include "qt_common/abstract/progress.h"
 
-#include <QProgressDialog>
+#include <chrono>
+#include <memory>
+
+#include "yuzu/harbor_desktop.h"
 
 namespace QtCommon::Frontend {
 
@@ -31,7 +34,17 @@ public slots:
     void show() override;
 
 private:
-    QProgressDialog* m_dialog;
+    // Harbor's progress is a Borealis page over the main window (harbor_desktop.h), shown once the
+    // minimum duration has passed, as QProgressDialog did.
+    void Update();
+
+    std::unique_ptr<HarborDesktop::ProgressPage> m_page;
+    std::chrono::steady_clock::time_point m_created;
+    int m_minimum_duration = 100;
+    int m_minimum = 0;
+    int m_maximum = 0;
+    bool m_shown = false;
+    bool m_closed = false;
 };
 
 } // namespace QtCommon::Frontend

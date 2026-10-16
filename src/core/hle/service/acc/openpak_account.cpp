@@ -457,6 +457,32 @@ void AdoptNewUserInBackground(const std::string& uid) {
     }).detach();
 }
 
+void UploadProfileImageInBackground(const std::string& uid, std::vector<u8> jpeg) {
+    if (uid.empty() || jpeg.empty()) {
+        return;
+    }
+    // Detached like the adoptions: it waits on the network and nothing waits for it.
+    std::thread([uid, jpeg = std::move(jpeg)] {
+        if (!OpenPak::Session::Ensure(uid) || !OpenPak::Session::Linked(uid)) {
+            return;
+        }
+        OpenPak::Session::UploadProfileImage(uid, jpeg);
+    }).detach();
+}
+
+void UpdateNicknameInBackground(const std::string& uid, const std::array<u8, 32>& username) {
+    std::string nickname = UsernameText(username);
+    if (uid.empty() || nickname.empty()) {
+        return;
+    }
+    std::thread([uid, nickname = std::move(nickname)] {
+        if (!OpenPak::Session::Ensure(uid) || !OpenPak::Session::Linked(uid)) {
+            return;
+        }
+        OpenPak::Session::UpdateNickname(uid, nickname);
+    }).detach();
+}
+
 void EnsureAndAdoptInBackground(const std::string& uid) {
     if (uid.empty()) {
         return;

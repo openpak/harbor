@@ -6,9 +6,15 @@
 // and OpenPakFriends.Structs.cs.
 
 #include "core/openpak/friend_structs.h"
+#include "core/openpak/platform.h"
 
 #include <algorithm>
+#include <string>
+#include <sstream>
+#include <fstream>
+#include <chrono>
 #include <cstring>
+#include <iterator>
 #include <type_traits>
 
 #include <nlohmann/json.hpp>
@@ -664,6 +670,68 @@ FriendForViewerImplV2 ToFriendForViewerImplV2(const Baas::Friend& friend_, const
     return record;
 }
 
+namespace {
+
+/// MEASUREMENT (remove once the entry layout is known): when <data dir>/playlog-probe exists, each of
+/// its lines is one row of the friend page's Play Activity, built from `offset:kind` tokens instead of
+/// from the friend's real play log. Offsets are in the 0x28-byte entry (hex); kinds: first (i64, two
+/// days ago), last (i64, one day ago), time (u32, 600), count (u32, 5), id (u64, the title again).
+/// Rows cycle through four games the viewer can draw, so the subtitle is the whole result:
+/// "First played 2 days ago" names the first-played field, "Played for 8 hours or more" the time.
+bool ProbePlayLog(std::uint8_t* block, std::size_t& count) {
+    std::ifstream file(Platform::DataDir() / "playlog-probe");
+    if (!file) {
+        return false;
+    }
+    const std::int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+    // Four games the viewer can draw a tile for (a repeated title makes the page fail some rows):
+    // Splatoon 3, Animal Crossing, Don't Starve Together, Diablo II. Row r is game r % 4.
+    constexpr std::uint64_t Titles[4] = {0x0100c2500fc20000ull, 0x01006f8002326000ull,
+                                         0x010090100e334000ull, 0x0100726014352000ull};
+    std::string line;
+    std::size_t row = 0;
+    while (row < kPlayLogEntries && std::getline(file, line)) {
+        std::uint8_t entry[0x28] = {};
+        const std::uint64_t Title = Titles[row % 4];
+        std::memcpy(entry + 0x00, &Title, 8);
+        std::memcpy(entry + 0x08, &Title, 8);
+        std::istringstream tokens(line);
+        std::string token;
+        bool any = false;
+        while (tokens >> token) {
+            const auto colon = token.find(':');
+            if (colon == std::string::npos) {
+                continue;
+            }
+            const std::size_t offset = std::stoul(token.substr(0, colon), nullptr, 16);
+            const std::string kind = token.substr(colon + 1);
+            if (offset > 0x20) {
+                continue;
+            }
+            if (kind == "first" || kind == "last" || kind == "id") {
+                const std::int64_t value = kind == "first" ? now - 2 * 86400
+                                           : kind == "last" ? now - 86400
+                                                            : static_cast<std::int64_t>(Title);
+                std::memcpy(entry + offset, &value, 8);
+            } else if (offset <= 0x24) {
+                const std::uint32_t value = kind == "time" ? 600 : kind == "count" ? 5 : 0;
+                std::memcpy(entry + offset, &value, 4);
+            }
+            any = true;
+        }
+        if (any) {
+            std::memcpy(block + row * sizeof(entry), entry, sizeof(entry));
+            ++row;
+        }
+    }
+    count = row;
+    return row > 0;
+}
+
+} // namespace
+
 FriendDetailedInfoImpl ToDetailedInfoImpl(const Baas::Friend& friend_, const Uid& user_id) {
     FriendDetailedInfoImpl impl{};
     impl.user_id = user_id;
@@ -672,6 +740,31 @@ FriendDetailedInfoImpl ToDetailedInfoImpl(const Baas::Friend& friend_, const Uid
     impl.channel = static_cast<std::uint32_t>(friend_.channel);
     impl.is_valid = 1;
     FixedUtf8(Field(impl.thumbnail_url), friend_.thumbnail_url);
+    // "When You Became Friends": `createdAt` of the list entry (0 reads as 31/12/1999 00:00).
+    impl.friends_since = friend_.created_at;
+    // "Play Activity": `extras.<group>.playLog`, up to 20 titles. The valid flag stays clear with none,
+    // which is how the module says there is nothing to list.
+    //
+    // The entry (0x28): title id, presence group id, then one 8-byte field holding the play count (low
+    // 32 bits) and the play time (high 32 bits), then first played and last played (i64). Measured on
+    // 2026-10-15 against a real Switch's page for the same friend: the other orders and the swapped
+    // count/time packing gave different subtitles ("Played for a little while" where the console says
+    // "First played 3 days ago").
+    std::size_t count = std::min(friend_.play_log.size(), kPlayLogEntries);
+    if (ProbePlayLog(impl.play_log, count)) {
+        impl.is_play_log_valid = 1;
+        return impl;
+    }
+    for (std::size_t i = 0; i < count; ++i) {
+        const Baas::PlayLog& log = friend_.play_log[i];
+        const std::uint64_t counts = static_cast<std::uint32_t>(std::clamp<std::int64_t>(log.total_play_count, 0, 0xFFFFFFFF));
+        const std::uint64_t played = static_cast<std::uint32_t>(std::clamp<std::int64_t>(log.total_play_time, 0, 0xFFFFFFFF));
+        const std::uint64_t entry[5] = {log.application_id, log.presence_group_id, counts | (played << 32),
+                                        static_cast<std::uint64_t>(log.first_played_at),
+                                        static_cast<std::uint64_t>(log.last_played_at)};
+        std::memcpy(impl.play_log + i * sizeof(entry), entry, sizeof(entry));
+    }
+    impl.is_play_log_valid = count > 0 ? 1 : 0;
     return impl;
 }
 

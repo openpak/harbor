@@ -226,6 +226,11 @@ public:
 
     std::jthread RunOnHostCoreThread(std::string&& thread_name, std::function<void()> func);
 
+    /// [OpenPak] Runs func on a host thread that the kernel sees as a dummy thread of `process`
+    /// (for an IPC request sent on that process's behalf, see core/openpak/guest_client.h).
+    std::jthread RunOnHostThreadOfProcess(KProcess* process, std::string&& thread_name,
+                                          std::function<void()> func);
+
     /// Gets global data for KObjectName.
     KObjectNameGlobalData& ObjectNameGlobalData();
 

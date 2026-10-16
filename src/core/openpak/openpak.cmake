@@ -36,6 +36,14 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/presence_state.h
     openpak/push.cpp
     openpak/push.h
+    openpak/guest_client.cpp
+    openpak/guest_client.h
+    openpak/guest_ipc_trace.cpp
+    openpak/guest_ipc_trace.h
+    openpak/real_firmware.cpp
+    openpak/real_firmware.h
+    openpak/platform_titles.cpp
+    openpak/platform_titles.h
     openpak/secret_store.cpp
     openpak/service_hooks.cpp
     openpak/service_hooks.h

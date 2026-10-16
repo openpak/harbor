@@ -1,97 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Harbor: a handheld console with a lighthouse shining across its screen">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Harbor: a ship's helm framing a lighthouse at night">
 <!-- SPDX-FileCopyrightText: 2026 tobagin -->
 <!-- SPDX-License-Identifier: AGPL-3.0-only -->
   <!-- Original Harbor artwork. Regenerate Android assets with scripts/harbor/generate-android-icons.py. -->
   <defs>
-    <linearGradient id="body" x1="0" y1="156" x2="0" y2="392" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#e6ecf7"/>
+    <linearGradient id="wood" x1="0" y1="40" x2="0" y2="472" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b47a4f"/>
+      <stop offset="1" stop-color="#7a4a2c"/>
     </linearGradient>
-    <linearGradient id="sky" x1="0" y1="188" x2="0" y2="346" gradientUnits="userSpaceOnUse">
+    <radialGradient id="rimshade" cx="256" cy="256" r="180" gradientUnits="userSpaceOnUse">
+      <stop offset="0.83" stop-color="#2a140a" stop-opacity="0.35"/>
+      <stop offset="0.9" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#2a140a" stop-opacity="0.3"/>
+    </radialGradient>
+    <linearGradient id="brass" x1="0" y1="152" x2="0" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe08a"/>
+      <stop offset="1" stop-color="#c98a2e"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="166" x2="0" y2="330" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#0d1b40"/>
-      <stop offset="0.6" stop-color="#22457c"/>
+      <stop offset="0.65" stop-color="#22457c"/>
       <stop offset="1" stop-color="#4f93c2"/>
     </linearGradient>
-    <linearGradient id="beam" x1="256" y1="223" x2="468" y2="110" gradientUnits="userSpaceOnUse">
+    <linearGradient id="beam" x1="256" y1="214" x2="440" y2="90" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#ffe9ad" stop-opacity="0.95"/>
-      <stop offset="0.55" stop-color="#ffd36e" stop-opacity="0.65"/>
-      <stop offset="1" stop-color="#ffc44d" stop-opacity="0.35"/>
+      <stop offset="0.55" stop-color="#ffd36e" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffc44d" stop-opacity="0.25"/>
     </linearGradient>
-    <radialGradient id="glow" cx="256" cy="223" r="40" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffe29a" stop-opacity="0.75"/>
+    <radialGradient id="glow" cx="256" cy="214" r="34" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffe29a" stop-opacity="0.8"/>
       <stop offset="1" stop-color="#ffd36e" stop-opacity="0"/>
     </radialGradient>
-    <clipPath id="console"><path d="M122,156 H390 A78,78 0 0 1 468,234 V314 A78,78 0 0 1 390,392 H122 A78,78 0 0 1 44,314 V234 A78,78 0 0 1 122,156 Z M352,142 H408 A12,12 0 0 1 420,154 V160 A12,12 0 0 1 408,172 H352 A12,12 0 0 1 340,160 V154 A12,12 0 0 1 352,142 Z"/></clipPath>
-    <clipPath id="screen"><rect x="156" y="188" width="200" height="158" rx="14"/></clipPath>
+    <clipPath id="window"><circle cx="256" cy="256" r="90"/></clipPath>
+    <clipPath id="wheel"><circle cx="256" cy="256" r="181"/></clipPath>
+    <g id="spoke">
+      <rect x="248" y="54" width="16" height="104" fill="url(#wood)"/>
+      <path d="M246,30 C246,22 266,22 266,30 L268,40 C272,44 272,52 268,56 H244 C240,52 240,44 244,40 Z" fill="#b47a4f"/>
+      <rect x="244" y="56" width="24" height="10" rx="4" fill="#7a4a2c"/>
+      <rect x="249" y="26" width="5" height="26" rx="2.5" fill="#ffffff" opacity="0.22"/>
+    </g>
   </defs>
 
-  <g transform="translate(256 256) scale(1.15) translate(-256 -275)">
-    <!-- shoulder buttons -->
-    <rect x="92" y="142" width="80" height="30" rx="12" fill="#b9c6dc"/>
-    <rect x="340" y="142" width="80" height="30" rx="12" fill="#b9c6dc"/>
+  <!-- soft shadow -->
+  <circle cx="256" cy="266" r="165" fill="none" stroke="#140a05" stroke-opacity="0.18" stroke-width="36"/>
+  <circle cx="256" cy="266" r="104" fill="#140a05" opacity="0.18"/>
 
-    <!-- body: soft shadow, lower lip, face -->
-    <rect x="48" y="166" width="416" height="236" rx="78" fill="#030a18" opacity="0.18"/>
-    <rect x="44" y="156" width="424" height="236" rx="78" fill="#aebcd4"/>
-    <rect x="44" y="156" width="424" height="226" rx="78" fill="url(#body)"/>
+  <!-- spokes and handles -->
+  <use href="#spoke"/>
+  <use href="#spoke" transform="rotate(45 256 256)"/>
+  <use href="#spoke" transform="rotate(90 256 256)"/>
+  <use href="#spoke" transform="rotate(135 256 256)"/>
+  <use href="#spoke" transform="rotate(180 256 256)"/>
+  <use href="#spoke" transform="rotate(225 256 256)"/>
+  <use href="#spoke" transform="rotate(270 256 256)"/>
+  <use href="#spoke" transform="rotate(315 256 256)"/>
 
-    <!-- screen -->
-    <rect x="144" y="176" width="224" height="182" rx="24" fill="#13233d"/>
-    <rect x="156" y="188" width="200" height="158" rx="14" fill="url(#sky)"/>
+  <!-- rim -->
+  <circle cx="256" cy="256" r="165" fill="none" stroke="url(#wood)" stroke-width="32"/>
+  <circle cx="256" cy="256" r="165" fill="none" stroke="url(#rimshade)" stroke-width="32"/>
+  <circle cx="256" cy="256" r="165" fill="none" stroke="#5e351c" stroke-opacity="0.35" stroke-width="2"/>
 
-    <!-- beam: from the lantern across the screen and body, stopping at the console and shoulder-button outline -->
-    <g clip-path="url(#console)">
-      <path d="M256,223 L560,36 L560,136 Z" fill="url(#beam)"/>
-    </g>
-
-    <g clip-path="url(#screen)">
-      <circle cx="188" cy="214" r="9" fill="#fff4cf"/>
-      <circle cx="222" cy="206" r="1.6" fill="#f4f7ff" opacity="0.7"/>
-      <circle cx="176" cy="250" r="1.4" fill="#f4f7ff" opacity="0.5"/>
-      <circle cx="214" cy="238" r="1.2" fill="#f4f7ff" opacity="0.5"/>
-      <circle cx="256" cy="223" r="40" fill="url(#glow)"/>
-
-      <!-- island -->
-      <path d="M290,326 C294,317 302,314 310,318 C314,320 317,323 318,326 Z" fill="#22344f"/>
-      <path d="M204,328 C211,316 222,308 236,305 L246,303 H268 C281,303 293,310 301,320 C303,323 305,326 306,328 Z" fill="#2b3f5e"/>
-      <path d="M236,305 L246,303 H268 C277,303 285,306 292,311 C276,309 256,310 236,305 Z" fill="#4a6489"/>
-      <path d="M214,320 C220,314 226,311 232,310 C228,314 224,318 222,322 Z" fill="#4a6489" opacity="0.7"/>
-
-      <!-- lighthouse -->
-      <path d="M246,242 H266 L276,306 H236 Z" fill="#f4f7ff"/>
-      <path d="M242.6,264 H269.4 L271.6,278 H240.4 Z" fill="#ff6f61"/>
-      <path d="M262,242 H266 L276,306 H268 Z" fill="#c9d4e8" opacity="0.6"/>
-      <path d="M252,306 V295 A4,4 0 0 1 260,295 V306 Z" fill="#13233d"/>
-      <rect x="238" y="234" width="36" height="8" rx="4" fill="#f4f7ff"/>
-      <rect x="246" y="213" width="20" height="21" rx="3" fill="#ffd36e"/>
-      <rect x="254" y="213" width="4" height="21" fill="#fff4cf"/>
-      <path d="M241,215 L256,197 L271,215 Z" fill="#f4f7ff"/>
-
-      <!-- back water -->
-      <path d="M150,321 Q165,313 180,321 T210,321 T240,321 T270,321 T300,321 T330,321 T360,321 V346 H150 Z" fill="#2a9db3"/>
-
-      <!-- front water -->
-      <path d="M150,330 Q165,322 180,330 T210,330 T240,330 T270,330 T300,330 T330,330 T360,330 V346 H150 Z" fill="#59decf"/>
-      <!-- glass sheen -->
-      <path d="M156,188 H240 L180,346 H156 Z" fill="#ffffff" opacity="0.05"/>
-    </g>
-
-    <!-- d-pad -->
-    <rect x="85" y="232" width="20" height="60" rx="5" fill="#1b2b45"/>
-    <rect x="65" y="252" width="60" height="20" rx="5" fill="#1b2b45"/>
-    <circle cx="95" cy="262" r="4" fill="#2c4064"/>
-
-    <!-- face buttons -->
-    <circle cx="417" cy="241" r="11" fill="#ffb84d"/>
-    <circle cx="438" cy="262" r="11" fill="#ff6f61"/>
-    <circle cx="417" cy="283" r="11" fill="#1b2b45"/>
-    <circle cx="396" cy="262" r="11" fill="#1b2b45"/>
-
-    <!-- start / select -->
-    <rect x="76" y="320" width="22" height="8" rx="4" fill="#9fb0cc"/>
-    <rect x="414" y="320" width="22" height="8" rx="4" fill="#9fb0cc"/>
-
-    <!-- power light -->
-    <circle cx="126" cy="196" r="4" fill="#3fd6c6"/>
+  <!-- brass hub -->
+  <circle cx="256" cy="256" r="104" fill="url(#brass)"/>
+  <circle cx="256" cy="256" r="104" fill="none" stroke="#9a6420" stroke-width="3"/>
+  <g fill="#9a6420">
+    <circle cx="256" cy="158" r="4"/><circle cx="354" cy="256" r="4"/>
+    <circle cx="256" cy="354" r="4"/><circle cx="158" cy="256" r="4"/>
   </g>
+
+  <!-- the view: a lighthouse at night -->
+  <g clip-path="url(#window)">
+    <rect x="166" y="166" width="180" height="180" fill="url(#sky)"/>
+    <circle cx="214" cy="196" r="9" fill="#fff4cf"/>
+    <circle cx="300" cy="250" r="1.6" fill="#f4f7ff" opacity="0.7"/>
+    <circle cx="200" cy="240" r="1.4" fill="#f4f7ff" opacity="0.5"/>
+    <circle cx="236" cy="180" r="1.3" fill="#f4f7ff" opacity="0.6"/>
+    <circle cx="256" cy="214" r="34" fill="url(#glow)"/>
+    <path d="M206,314 C212,302 224,294 238,292 H274 C288,294 300,302 306,314 Z" fill="#2b3f5e"/>
+    <path d="M238,292 H274 C283,293 290,296 296,300 C278,298 258,298 238,292 Z" fill="#4a6489"/>
+    <path d="M247,232 H265 L274,294 H238 Z" fill="#f4f7ff"/>
+    <path d="M243.4,254 H268.6 L270.6,268 H241.4 Z" fill="#ff6f61"/>
+    <path d="M261,232 H265 L274,294 H267 Z" fill="#c9d4e8" opacity="0.6"/>
+    <path d="M252,294 V284 A4,4 0 0 1 260,284 V294 Z" fill="#13233d"/>
+    <rect x="240" y="225" width="32" height="7" rx="3.5" fill="#f4f7ff"/>
+    <rect x="247" y="205" width="18" height="20" rx="3" fill="#ffd36e"/>
+    <rect x="254" y="205" width="4" height="20" fill="#fff4cf"/>
+    <path d="M242,207 L256,190 L270,207 Z" fill="#f4f7ff"/>
+    <path d="M166,308 Q181,300 196,308 T226,308 T256,308 T286,308 T316,308 T346,308 V346 H166 Z" fill="#2a9db3"/>
+    <path d="M166,316 Q181,308 196,316 T226,316 T256,316 T286,316 T316,316 T346,316 V346 H166 Z" fill="#59decf"/>
+  </g>
+  <circle cx="256" cy="256" r="90" fill="none" stroke="#7a4a1a" stroke-opacity="0.5" stroke-width="3"/>
+
+  <!-- beam: from the lantern, across the hub, spokes and rim, stopping at the wheel's edge -->
+  <g clip-path="url(#window)">
+    <path d="M262,212 L560,40 L560,150 Z" fill="url(#beam)"/>
+  </g>
+  <circle cx="256" cy="214" r="6" fill="#fff4cf" opacity="0.9"/>
 </svg>

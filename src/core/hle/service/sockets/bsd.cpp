@@ -368,6 +368,33 @@ Outcome OpConnect(DescriptorTable& table, s32 fd, std::span<const u8> addr, Park
     return ErrnoResult(e);
 }
 
+// Datagram trace for peer-connectivity debugging (2026-10-14, Mario Party: the Switch punched
+// Harbor but nothing came back). Logs the first 600 datagram events and every failure other than
+// EAGAIN; the local port is the socket's real bound port, which is what peers must reach.
+void TraceDatagram(const char* dir, const OpenFile& file, const Network::SockAddrIn* peer, s64 len,
+                   Errno err) {
+    if (file.is_connection_based || file.is_proxy) {
+        return;
+    }
+    static std::atomic<u32> count{0};
+    const bool failed = len < 0;
+    if (failed && err == Errno::AGAIN) {
+        return;
+    }
+    if (!failed && count.fetch_add(1) >= 600) {
+        return;
+    }
+    const auto local = file.socket->GetSockName().first;
+    if (peer != nullptr) {
+        LOG_INFO(Service, "udp {} local={} peer={}.{}.{}.{}:{} len={} errno={}", dir, local.portno,
+                 peer->ip[0], peer->ip[1], peer->ip[2], peer->ip[3], peer->portno, len,
+                 static_cast<int>(err));
+    } else {
+        LOG_INFO(Service, "udp {} local={} peer=connected len={} errno={}", dir, local.portno, len,
+                 static_cast<int>(err));
+    }
+}
+
 // Written from: Ryujinx master IClient.DeferBlockingReceive (a blocking recv with nothing to
 // read parks instead of holding the service thread; readable or closed answers in this pass),
 // extended to streams because Eden's deferral has no pointer-buffer hazard; SO_RCVTIMEO bounds
@@ -417,6 +444,7 @@ Outcome OpRecv(DescriptorTable& table, s32 fd, u32 flags, std::vector<u8>& messa
         r = do_recv(flags);
     }
 
+    TraceDatagram("recv", *file, want_from ? &from : nullptr, r.first, r.second);
     if (addr_out != nullptr) {
         if (!want_from || r.first < 0) {
             addr_out->clear();
@@ -443,13 +471,17 @@ Result2 OpSend(DescriptorTable& table, s32 fd, u32 flags, std::span<const u8> me
         if (file->is_connection_based) {
             return Translate(file->socket->Send(message, static_cast<int>(flags)));
         }
-        return Translate(file->socket->SendTo(flags, message, nullptr));
+        const auto sent = Translate(file->socket->SendTo(flags, message, nullptr));
+        TraceDatagram("send", *file, nullptr, sent.first, sent.second);
+        return sent;
     }
     const auto host_addr = ParseGuestAddr(addr);
     if (!host_addr) {
         return {-1, file->is_inet6 ? Errno::NETUNREACH : Errno::INVAL};
     }
-    return Translate(file->socket->SendTo(flags, message, &*host_addr));
+    const auto sent = Translate(file->socket->SendTo(flags, message, &*host_addr));
+    TraceDatagram("send", *file, &*host_addr, sent.first, sent.second);
+    return sent;
 }
 
 // Written from: POSIX accept(2), FreeBSD accept(2) (the new socket inherits O_NONBLOCK), and the
@@ -2505,7 +2537,7 @@ BSD_USA::BSD_USA(Core::System& system_, const char* name, bool is_user_)
         {30, &BSD_USA::SendMMsg, "SendMMsg"}, //3.0.0+
         {31, &BSD_USA::EventFd, "EventFd"}, //7.0.0+
         {32, nullptr, "RegisterResourceStatisticsName"}, //7.0.0+
-        {33, nullptr, "RegisterClientShared"}, //10.0.0+
+        {33, &BSD_USA::RegisterClient, "RegisterClientShared"}, //10.0.0+ [OpenPak] the firmware friends program calls it; same answer as RegisterClient
         {34, nullptr, "GetSocketStatistics"}, //15.0.0+
         {35, nullptr, "NifIoctl"}, //17.0.0+
         {36, nullptr, "Unknown36"}, //18.0.0+

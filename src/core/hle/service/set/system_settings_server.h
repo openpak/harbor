@@ -16,6 +16,7 @@
 #include "common/uuid.h"
 #include "core/hle/result.h"
 #include "core/hle/service/cmif_types.h"
+#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/psc/time/common.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/set/setting_formats/appln_settings.h"
@@ -65,6 +66,8 @@ public:
     Result SetUserSystemClockContext(const Service::PSC::Time::SystemClockContext& clock_context);
     Result GetAccountSettings(Out<AccountSettings> out_account_settings);
     Result SetAccountSettings(AccountSettings account_settings);
+    Result GetInRepairProcessEnableFlag(Out<bool> out_enabled);
+    Result GetRequiresRunRepairTimeReviser(Out<bool> out_requires);
     Result GetEulaVersions(Out<s32> out_count,
                            OutArray<EulaVersion, BufferAttr_HipcMapAlias> out_eula_versions);
     Result SetEulaVersions(InArray<EulaVersion, BufferAttr_HipcMapAlias> eula_versions);
@@ -165,6 +168,9 @@ public:
     Result GetHomeMenuScheme(Out<HomeMenuScheme> out_home_menu_scheme);
     Result GetHomeMenuSchemeModel(Out<u32> out_home_menu_scheme_model);
     Result GetTouchScreenMode(Out<TouchScreenMode> out_touch_screen_mode);
+    // [OpenPak] The firmware's own npns waits on this; nothing in Harbor ever raises it.
+    Result AcquirePushNotificationDirtyFlagEventHandle(OutCopyHandle<Kernel::KReadableEvent> out_event);
+    Result GetPushNotificationDirtyFlags(Out<u64> out_flags);
     Result GetPlatformRegion(Out<PlatformRegion> out_platform_region);
     Result SetPlatformRegion(PlatformRegion platform_region);
     Result SetTouchScreenMode(TouchScreenMode touch_screen_mode);
@@ -187,6 +193,9 @@ public:
     Result GetDefaultAccountUserSettings(Out<AccountUserSettings> out_settings);
 
 private:
+    KernelHelpers::ServiceContext m_service_context;
+    Kernel::KEvent* m_push_notification_event{};
+
     bool LoadSettingsFile(std::filesystem::path& path, auto&& default_func);
     bool StoreSettingsFile(std::filesystem::path& path, auto& settings);
     void SetupSettings();

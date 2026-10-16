@@ -151,8 +151,8 @@ void GameList::OnPopulate() {
     }
 }
 
-void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
-    item_model->PopulateAsync(game_dirs);
+void GameList::PopulateAsync(QVector<UISettings::GameDir>& game_dirs, bool content_only) {
+    item_model->PopulateAsync(game_dirs, content_only);
 }
 
 void GameList::SaveInterfaceLayout() {

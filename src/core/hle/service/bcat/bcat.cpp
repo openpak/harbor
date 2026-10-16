@@ -18,6 +18,7 @@
 #include "core/hle/service/bcat/service_creator.h"
 #include "core/hle/service/server_manager.h"
 #include "core/openpak/boot_connection.h"
+#include "core/openpak/real_firmware.h"
 
 namespace Service::BCAT {
 
@@ -55,17 +56,21 @@ void LoopProcess(Core::System& system) {
         OpenPak::BootConnection::Run(user_dir);
     }
 
-    // One store, two events and one fill worker behind all five news ports.
-    const auto news = std::make_shared<News::NewsShared>(
-        system, Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "openpak" / "news");
+    // The firmware owns News storage and reception when its service is hosted. Do not start
+    // an HLE fill worker whose separate store the guest cannot read.
+    if (!OpenPak::RealFirmware::Hosts(system, "news:m")) {
+        // One store, two events and one fill worker behind all five news ports.
+        const auto news = std::make_shared<News::NewsShared>(
+            system, Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "openpak" / "news");
 
-    server_manager->RegisterNamedService("news:a", std::make_shared<News::IServiceCreator>(system, news, 0xffffffff, "news:a"), 32);
-    server_manager->RegisterNamedService("news:p", std::make_shared<News::IServiceCreator>(system, news, 0x1, "news:p"), 32);
-    server_manager->RegisterNamedService("news:c", std::make_shared<News::IServiceCreator>(system, news, 0x2, "news:c"), 32);
-    server_manager->RegisterNamedService("news:v", std::make_shared<News::IServiceCreator>(system, news, 0x4, "news:v"), 32);
-    server_manager->RegisterNamedService("news:m", std::make_shared<News::IServiceCreator>(system, news, 0xd, "news:m"), 32);
+        server_manager->RegisterNamedService("news:a", std::make_shared<News::IServiceCreator>(system, news, 0xffffffff, "news:a"), 32);
+        server_manager->RegisterNamedService("news:p", std::make_shared<News::IServiceCreator>(system, news, 0x1, "news:p"), 32);
+        server_manager->RegisterNamedService("news:c", std::make_shared<News::IServiceCreator>(system, news, 0x2, "news:c"), 32);
+        server_manager->RegisterNamedService("news:v", std::make_shared<News::IServiceCreator>(system, news, 0x4, "news:v"), 32);
+        server_manager->RegisterNamedService("news:m", std::make_shared<News::IServiceCreator>(system, news, 0xd, "news:m"), 32);
 
-    news->StartFill();
+        news->StartFill();
+    }
 
     ServerManager::RunServer(std::move(server_manager));
 }

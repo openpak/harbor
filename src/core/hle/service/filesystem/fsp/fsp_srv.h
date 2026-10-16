@@ -49,6 +49,8 @@ enum class AccessLogMode : u32 {
     SdCard,
 };
 
+class IEventNotifier;
+
 class FSP_SRV final : public ServiceFramework<FSP_SRV> {
 public:
     explicit FSP_SRV(Core::System& system_);
@@ -60,6 +62,7 @@ private:
     Result OpenFileSystemWithPatch(OutInterface<IFileSystem> out_interface,
                                    FileSystemProxyType type, u64 open_program_id);
     Result OpenSdCardFileSystem(OutInterface<IFileSystem> out_interface);
+    Result OpenEventNotifier(OutInterface<IEventNotifier> out_interface);
     Result CreateSaveDataFileSystem(FileSys::SaveDataCreationInfo save_create_struct,
                                     FileSys::SaveDataAttribute save_struct, u128 uid);
     Result CreateSaveDataFileSystemBySystemSaveDataId(

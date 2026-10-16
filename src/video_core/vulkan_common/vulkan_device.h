@@ -379,17 +379,18 @@ public:
         return properties.properties.limits.maxPushConstantsSize;
     }
 
-#define FN_MAX_LIMIT_LIST \
-    FN_MAX_LIMIT_ELEM(ComputeSharedMemorySize) \
-    FN_MAX_LIMIT_ELEM(PerStageDescriptorSampledImages) \
-    FN_MAX_LIMIT_ELEM(PerStageResources) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetSamplers) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffersDynamic) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetStorageBuffers) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetStorageBuffersDynamic) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetSampledImages) \
-    FN_MAX_LIMIT_ELEM(DescriptorSetStorageImages) \
+#define FN_MAX_LIMIT_LIST                                                                          \
+    FN_MAX_LIMIT_ELEM(ComputeSharedMemorySize)                                                     \
+    FN_MAX_LIMIT_ELEM(PerStageDescriptorSamplers)                                                  \
+    FN_MAX_LIMIT_ELEM(PerStageDescriptorSampledImages)                                             \
+    FN_MAX_LIMIT_ELEM(PerStageResources)                                                           \
+    FN_MAX_LIMIT_ELEM(DescriptorSetSamplers)                                                       \
+    FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffers)                                                 \
+    FN_MAX_LIMIT_ELEM(DescriptorSetUniformBuffersDynamic)                                          \
+    FN_MAX_LIMIT_ELEM(DescriptorSetStorageBuffers)                                                 \
+    FN_MAX_LIMIT_ELEM(DescriptorSetStorageBuffersDynamic)                                          \
+    FN_MAX_LIMIT_ELEM(DescriptorSetSampledImages)                                                  \
+    FN_MAX_LIMIT_ELEM(DescriptorSetStorageImages)                                                  \
     FN_MAX_LIMIT_ELEM(DescriptorSetInputAttachments)
 #define FN_MAX_LIMIT_ELEM(name) \
     u32 GetMax##name() const { return properties.properties.limits.max##name; }
@@ -966,9 +967,7 @@ FN_MAX_LIMIT_LIST
         return supported_extensions;
     }
 
-    u64 GetDeviceLocalMemory() const {
-        return device_access_memory;
-    }
+    u64 GetDeviceLocalMemory() const;
 
     bool CanReportMemoryUsage() const {
         return extensions.memory_budget;

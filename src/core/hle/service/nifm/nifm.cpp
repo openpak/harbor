@@ -855,6 +855,14 @@ void IGeneralService::IsEthernetCommunicationEnabled(HLERequestContext& ctx) {
     rb.Push<u8>(1);
 }
 
+void IGeneralService::NotifyConnectionStateChanged(HLERequestContext& ctx) {
+    // The real npns module (010000000000002F) calls this after its Penne stream changes
+    // state; an error here makes it throw fatal 2511-8191 and the stream goes deaf.
+    LOG_DEBUG(Service_NIFM, "called");
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
 void IGeneralService::IsAnyInternetRequestAccepted(HLERequestContext& ctx) {
     LOG_ERROR(Service_NIFM, "(STUBBED) called");
 
@@ -983,7 +991,7 @@ IGeneralService::IGeneralService(Core::System& system_)
         {39, nullptr, "NotifyApplicationSuspended"},
         {40, nullptr, "SetAcceptableNetworkTypeFlag"},
         {41, nullptr, "GetAcceptableNetworkTypeFlag"},
-        {42, nullptr, "NotifyConnectionStateChanged"},
+        {42, &IGeneralService::NotifyConnectionStateChanged, "NotifyConnectionStateChanged"},
         {43, nullptr, "SetWowlDelayedWakeTime"},
         {44, nullptr, "IsWiredConnectionAvailable"}, // 18.0.0+
         {45, nullptr, "IsNetworkEmulationFeatureEnabled"}, // 18.0.0+

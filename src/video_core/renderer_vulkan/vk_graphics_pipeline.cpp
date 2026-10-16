@@ -381,6 +381,24 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             const GPUVAddr addr{cbufs[desc.cbuf_index].address + offset};
             if constexpr (std::is_same_v<decltype(desc), const Shader::TextureDescriptor&> ||
                           std::is_same_v<decltype(desc), const Shader::TextureBufferDescriptor&>) {
+                if (desc.storage_stride != 0) {
+                    const GPUVAddr pointer_addr{addr - index_offset};
+                    const GPUVAddr storage_addr{gpu_memory->Read<u64>(pointer_addr)};
+                    const u64 byte_offset = static_cast<u64>(desc.storage_offset) +
+                                            static_cast<u64>(index) * desc.storage_stride;
+                    const u32 raw =
+                        storage_addr != 0 && byte_offset + sizeof(u32) <=
+                                                 gpu_memory->GetMemoryLayoutSize(storage_addr)
+                            ? gpu_memory->Read<u32>(storage_addr + byte_offset)
+                            : 0;
+                    const auto handle = TexturePair(raw, via_header_index);
+                    const u32 sampler_limit =
+                        via_header_index ? regs.tex_header.limit : regs.tex_sampler.limit;
+                    // Unused records can contain arbitrary data; bind the null texture for them.
+                    return handle.first <= regs.tex_header.limit && handle.second <= sampler_limit
+                               ? handle
+                               : TexturePair(0, via_header_index);
+                }
                 if (desc.has_secondary) {
                     ASSERT(cbufs[desc.secondary_cbuf_index].enabled);
                     const u32 second_offset{desc.secondary_cbuf_offset + index_offset};

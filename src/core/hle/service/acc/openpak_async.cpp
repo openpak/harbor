@@ -20,7 +20,8 @@ constexpr u32 LicenseKindSubscribed = 1;
 
 OpenPakAsyncContext::OpenPakAsyncContext(Core::System& system_,
                                          std::shared_ptr<OpenPak::AsyncWorker> worker_,
-                                         OpenPak::AsyncWorker::Work work, bool license_kind)
+                                         OpenPak::AsyncWorker::Work work, bool license_kind,
+                                         bool dauth_result)
     : ServiceFramework{system_, license_kind ? "IAsyncNetworkServiceLicenseKindContext"
                                              : "IAsyncContext"},
       service_context{system_, "acc:IAsyncContext"}, worker{std::move(worker_)} {
@@ -34,9 +35,20 @@ OpenPakAsyncContext::OpenPakAsyncContext(Core::System& system_,
     static const FunctionInfo license_functions[] = {
         {100, &OpenPakAsyncContext::GetNetworkServiceLicenseKind, "GetNetworkServiceLicenseKind"},
     };
+    // [OpenPak] nn::dauth::IAsyncResult: the same four, in its order.
+    static const FunctionInfo dauth_functions[] = {
+        {0, &OpenPakAsyncContext::GetResult, "GetResult"},
+        {1, &OpenPakAsyncContext::Cancel, "Cancel"},
+        {2, &OpenPakAsyncContext::HasDone, "IsAvailable"},
+        {3, &OpenPakAsyncContext::GetSystemEvent, "GetSystemEvent"},
+    };
     // clang-format on
 
-    RegisterHandlers(functions);
+    if (dauth_result) {
+        RegisterHandlers(dauth_functions);
+    } else {
+        RegisterHandlers(functions);
+    }
     if (license_kind) {
         RegisterHandlers(license_functions);
     }

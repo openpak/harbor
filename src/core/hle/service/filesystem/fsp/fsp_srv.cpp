@@ -32,6 +32,8 @@
 #include "core/file_sys/system_archive/system_archive.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/result.h"
+#include "core/hle/service/kernel_helpers.h"
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
@@ -51,6 +53,40 @@
 #include "core/reporter.h"
 
 namespace Service::FileSystem {
+
+// [OpenPak] fsp-srv 500/501/510: IEventNotifier, an event that never fires here (no SD card, game
+// card or system data changes at run time). The firmware's sdb opens 510 at start and aborts
+// without an object.
+class IEventNotifier final : public ServiceFramework<IEventNotifier> {
+public:
+    explicit IEventNotifier(Core::System& system_)
+        : ServiceFramework{system_, "IEventNotifier"}, service_context{system_, "IEventNotifier"} {
+        static const FunctionInfo functions[] = {
+            {0, &IEventNotifier::GetEventHandle, "GetEventHandle"},
+        };
+        RegisterHandlers(functions);
+        event = service_context.CreateEvent("IEventNotifier:Event");
+    }
+
+    ~IEventNotifier() override {
+        service_context.CloseEvent(event);
+    }
+
+private:
+    void GetEventHandle(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, &event->GetReadableEvent());
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* event{};
+};
+
+Result FSP_SRV::OpenEventNotifier(OutInterface<IEventNotifier> out_interface) {
+    *out_interface = std::make_shared<IEventNotifier>(system);
+    R_SUCCEED();
+}
 
 namespace {
 
@@ -138,9 +174,9 @@ FSP_SRV::FSP_SRV(Core::System& system_)
         {210, D<&FSP_SRV::OpenDataStorageByCurrentProcess2>, "OpenDataStorageByCurrentProcess2"},
         {212, D<&FSP_SRV::OpenDataStorageWithProgramIndex>, "OpenDataStorageWithProgramIndex2"},
         {400, nullptr, "OpenDeviceOperator"},
-        {500, nullptr, "OpenSdCardDetectionEventNotifier"},
-        {501, nullptr, "OpenGameCardDetectionEventNotifier"},
-        {510, nullptr, "OpenSystemDataUpdateEventNotifier"},
+        {500, D<&FSP_SRV::OpenEventNotifier>, "OpenSdCardDetectionEventNotifier"},
+        {501, D<&FSP_SRV::OpenEventNotifier>, "OpenGameCardDetectionEventNotifier"},
+        {510, D<&FSP_SRV::OpenEventNotifier>, "OpenSystemDataUpdateEventNotifier"},
         {511, nullptr, "NotifySystemDataUpdateEvent"},
         {520, nullptr, "SimulateGameCardDetectionEvent"},
         {600, nullptr, "SetCurrentPosixTime"},
@@ -456,7 +492,23 @@ Result FSP_SRV::OpenSaveDataFileSystemBySystemSaveDataId(OutInterface<IFileSyste
     }
 
     FileSys::VirtualDir dir{};
-    R_TRY(save_data_controller->OpenSaveData(&dir, space_id, attribute));
+    auto open_result = save_data_controller->OpenSaveData(&dir, space_id, attribute);
+    // [OpenPak] A firmware program's own system save data (friends' per-user database) is made by
+    // the console at setup; Harbor's NAND has none until a program asks, so the first open makes it.
+    if (R_FAILED(open_result) && open_result == FileSys::ResultTargetNotFound &&
+        (program_id & ~u64{0xFFFF}) == 0x0100000000000000ULL &&
+        space_id == FileSys::SaveDataSpaceId::System) {
+        LOG_INFO(Service_FS, "program {:016X} opens system save {:016X} that does not exist: creating it",
+                 program_id, attribute.system_save_data_id);
+        const auto created = CreateSaveDataUnlessExists(space_id, attribute, program_id, 0,
+                                                        0x400000, 0,
+                                                        FileSys::SaveDataFormatType::Normal);
+        if (R_SUCCEEDED(created) || created == FileSys::ResultPathAlreadyExists) {
+            RecordSystemSaveDataOwner(attribute, program_id);
+            open_result = save_data_controller->OpenSaveData(&dir, space_id, attribute);
+        }
+    }
+    R_TRY(open_result);
 
     FileSys::StorageId id{};
     switch (space_id) {

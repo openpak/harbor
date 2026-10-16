@@ -14,9 +14,13 @@
 #include "common/stb.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/vfs/vfs_vector.h"
+#include "core/openpak/baas.h"
+#include "core/openpak/platform_titles.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_transfer_memory.h"
@@ -37,7 +41,23 @@ namespace {
 
 FileSys::PatchManager::Metadata GetApplicationControlMetadata(Core::System& system,
                                                               u64 application_id) {
-    return FileSys::PatchManager::GetMetadataFromBaseOrUpdate(system, application_id);
+    auto metadata = FileSys::PatchManager::GetMetadataFromBaseOrUpdate(system, application_id);
+    if (metadata.first == nullptr && application_id != 0) {
+        // A title this machine does not have: ask the server to name it, as a console does (a
+        // friend's platform is one: the server serves it as a title of its own). Nothing here
+        // knows which ids the server uses. What came back last time answers now; the first ask
+        // is in the background and redraws the friend list when it lands.
+        if (auto nca = OpenPak::PlatformTitles::Cached(application_id); !nca.empty()) {
+            const FileSys::PatchManager pm{application_id, system.GetFileSystemController(),
+                                           system.GetContentProvider()};
+            metadata = pm.ParseControlNCA(
+                FileSys::NCA{std::make_shared<FileSys::VectorVfsFile>(std::move(nca))});
+        } else {
+            OpenPak::PlatformTitles::Prefetch(application_id,
+                                              [] { OpenPak::Baas::NotifyFriendListChanged(); });
+        }
+    }
+    return metadata;
 }
 
 void JPGToMemory(void* context, void* data, int size) {

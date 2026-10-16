@@ -4,19 +4,43 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "common/redact.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/npns/npns.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
 
 namespace Service::NPNS {
+
+// [OpenPak] What the firmware's friends program gets from npns:s 61: an object whose methods all
+// succeed and answer nothing, until the calls it makes are known.
+class INpnsStubObject final : public ServiceFramework<INpnsStubObject> {
+public:
+    explicit INpnsStubObject(Core::System& system_)
+        : ServiceFramework{system_, "INpnsStubObject"} {
+        std::vector<FunctionInfo> functions;
+        for (u32 id = 0; id < 64; ++id) {
+            functions.push_back({id, &INpnsStubObject::Succeed, "Stub"});
+        }
+        RegisterHandlers(functions.data(), functions.size());
+    }
+
+private:
+    void Succeed(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+};
 
 class INpnsSystem final : public ServiceFramework<INpnsSystem> {
 public:
@@ -61,8 +85,14 @@ public:
             {42, nullptr, "SetNetworkServiceAccountIdTokenSuccess"}, // 17.0.0+
             {43, nullptr, "SetNetworkServiceAccountIdTokenFailure"}, // 17.0.0+
             {44, nullptr, "SetUidList"}, // 17.0.0+
-            {45, nullptr, "PutDigitalTwinKeyValue"}, // 17.0.0+
+            {45, &INpnsSystem::PutDigitalTwinKeyValue, "PutDigitalTwinKeyValue"}, // 17.0.0+
+            {46, &INpnsSystem::PutDigitalTwinKeyValue, "DigitalTwin46"}, // [OpenPak] undocumented
+            {47, &INpnsSystem::PutDigitalTwinKeyValue, "DigitalTwin47"}, // [OpenPak] undocumented
+            {48, &INpnsSystem::PutDigitalTwinKeyValue, "DigitalTwin48"}, // [OpenPak] undocumented
+            {49, &INpnsSystem::PutDigitalTwinKeyValue, "DigitalTwin49"}, // [OpenPak] undocumented
+            {50, &INpnsSystem::PutDigitalTwinKeyValue, "DigitalTwin50"}, // [OpenPak] two input buffers, no output (friends)
             {51, nullptr, "DeleteDigitalTwinKeyValue"}, // 18.0.0+
+            {61, &INpnsSystem::OpenStubObject, "OpenObject61"}, // [OpenPak] undocumented
             {101, nullptr, "Suspend"},
             {102, nullptr, "Resume"},
             {103, C<&INpnsSystem::GetState>, "GetState"},
@@ -76,9 +106,9 @@ public:
             {114, nullptr, "AttachJid"},
             {115, nullptr, "DetachJid"},
             {120, nullptr, "CreateNotificationReceiver"},
-            {151, nullptr, "GetStateWithHandover"},
-            {152, nullptr, "GetStateChangeEventWithHandover"},
-            {153, nullptr, "GetDropEventWithHandover"},
+            {151, C<&INpnsSystem::GetStateWithHandover>, "GetStateWithHandover"},
+            {152, C<&INpnsSystem::GetStateChangeEventWithHandover>, "GetStateChangeEventWithHandover"},
+            {153, C<&INpnsSystem::GetStateChangeEventWithHandover>, "GetDropEventWithHandover"},
             {154, nullptr, "CreateTokenAsync"},
             {155, nullptr, "CreateTokenAsyncWithApplicationId"},
             {156, nullptr, "CreateTokenWithNameAsync"}, // 18.0.0+
@@ -104,6 +134,21 @@ private:
     // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): no push server delivers to
     // the HOME menu, so the receive and state-change events exist for it to wait on and never
     // signal; listen registrations are only recorded.
+    // [OpenPak] The firmware's friends program puts "c-friends.inv.subsTypes" here at start-up;
+    // there is no digital twin store, so the value is accepted and dropped.
+    void OpenStubObject(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_NPNS, "called");
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<INpnsStubObject>(ctx, system);
+    }
+
+    void PutDigitalTwinKeyValue(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_NPNS, "called, digital twin value dropped");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
     Result ListenAll() {
         LOG_DEBUG(Service_NPNS, "called, system listener registered for all programs");
         R_SUCCEED();
@@ -112,6 +157,21 @@ private:
     Result GetStateChangeEvent(OutCopyHandle<Kernel::KReadableEvent> out_event) {
         LOG_DEBUG(Service_NPNS, "called");
 
+        *out_event = get_state_change_event.GetHandle();
+        R_SUCCEED();
+    }
+
+    // [OpenPak] The "with handover" forms take a u32 the firmware's friends program passes; the
+    // state is the same one GetState answers and the events never fire.
+    Result GetStateWithHandover(Out<u32> out_state, u32 handover) {
+        LOG_DEBUG(Service_NPNS, "called, handover={}", handover);
+        *out_state = 0;
+        R_SUCCEED();
+    }
+
+    Result GetStateChangeEventWithHandover(OutCopyHandle<Kernel::KReadableEvent> out_event,
+                                           u32 handover) {
+        LOG_DEBUG(Service_NPNS, "called, handover={}", handover);
         *out_event = get_state_change_event.GetHandle();
         R_SUCCEED();
     }
@@ -311,6 +371,8 @@ private:
 void LoopProcess(Core::System& system) {
     auto server_manager = std::make_unique<ServerManager>(system);
 
+    // [OpenPak] With the firmware's npns program on the real-firmware list, these register nothing
+    // (server_manager leaves hosted names to it).
     server_manager->RegisterNamedService("npns:s", std::make_shared<INpnsSystem>(system));
     server_manager->RegisterNamedService("npns:u", std::make_shared<INpnsUser>(system));
     ServerManager::RunServer(std::move(server_manager));

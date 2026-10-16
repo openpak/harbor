@@ -57,6 +57,11 @@ public:
         void ListOpenContextStoredUsers(HLERequestContext& ctx);
         void StoreSaveDataThumbnailApplication(HLERequestContext& ctx);
         void GetBaasAccountManagerForSystemService(HLERequestContext& ctx);
+    void GetNotifier(HLERequestContext& ctx); // [OpenPak] the account change notifiers
+        // [OpenPak] acc:aa as the firmware's own friends program uses it: the user's id token.
+        void AaEnsureCacheAsync(HLERequestContext& ctx);
+        void AaLoadCache(HLERequestContext& ctx);
+        void AaGetDeviceAccountId(HLERequestContext& ctx);
         void StoreSaveDataThumbnailSystem(HLERequestContext& ctx);
         void GetPinCodeLength(HLERequestContext& ctx);
         void CreateProcedureToRegisterUserWithNintendoAccount(HLERequestContext& ctx);

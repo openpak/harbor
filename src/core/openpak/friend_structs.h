@@ -436,9 +436,15 @@ struct FriendDetailedInfoImpl {
     std::uint32_t channel;
     std::uint8_t pad_0x4bc[0x64];
     std::uint8_t is_valid;
-    std::uint8_t pad_0x521[0x2DF];
+    std::uint8_t pad_0x521[0xAF];
+    /// "When You Became Friends" on the friend's page: an i64 of seconds. Measured on 2026-10-15
+    /// (every slot of the unknown part carried the time plus its ordinal in days; the page showed
+    /// the time + 56 days, the 56th slot, which is this one). Not at 0x528 as the notes said.
+    std::int64_t friends_since;
+    std::uint8_t pad_0x5d8[0x228];
 };
 static_assert(sizeof(FriendDetailedInfoImpl) == 0x800);
+static_assert(offsetof(FriendDetailedInfoImpl, friends_since) == 0x5D0);
 static_assert(offsetof(FriendDetailedInfoImpl, thumbnail_url) == 0x40);
 static_assert(offsetof(FriendDetailedInfoImpl, play_log) == 0xE0);
 static_assert(offsetof(FriendDetailedInfoImpl, is_play_log_valid) == 0x400);
@@ -971,7 +977,9 @@ FriendForViewerImpl ToFriendForViewerImpl(const Baas::Friend& friend_, const Uid
 FriendForViewerImplV2 ToFriendForViewerImplV2(const Baas::Friend& friend_, const Uid& user_id,
                                               std::uint64_t own_presence_group_id);
 
-/// One friend's profile page (20102 / 20107).
+/// One friend's profile page (20102 / 20107), built from what the server says in the friend list, as
+/// the console's own module builds it: the friendship time from `createdAt`, the play log from
+/// `extras.<group>.playLog`.
 FriendDetailedInfoImpl ToDetailedInfoImpl(const Baas::Friend& friend_, const Uid& user_id);
 
 /// The per-friend flags (20110), and the same plus the private note (20111).

@@ -17,6 +17,7 @@
 #include "core/hle/service/btm/btm.h"
 #include "core/hle/service/caps/caps.h"
 #include "core/hle/service/erpt/erpt.h"
+#include "core/hle/service/srepo/srepo.h"
 #include "core/hle/service/es/es.h"
 #include "core/hle/service/eupld/eupld.h"
 #include "core/hle/service/fatal/fatal.h"
@@ -110,6 +111,7 @@ Services::Services(std::shared_ptr<SM::ServiceManager>& sm, Core::System& system
         {"btm",        &BTM::LoopProcess},
         {"capsrv",     &Capture::LoopProcess},
         {"erpt",       &ERPT::LoopProcess},
+        {"srepo",      &SREPO::LoopProcess},
         {"es",         &ES::LoopProcess},
         {"eupld",      &EUPLD::LoopProcess},
         {"fatal",      &Fatal::LoopProcess},

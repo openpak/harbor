@@ -44,6 +44,7 @@ private:
     void SetEthernetCommunicationEnabled(HLERequestContext& ctx);
     void IsEthernetCommunicationEnabled(HLERequestContext& ctx);
     void IsAnyInternetRequestAccepted(HLERequestContext& ctx);
+    void NotifyConnectionStateChanged(HLERequestContext& ctx);
     void IsAnyForegroundRequestAccepted(HLERequestContext& ctx);
     void GetSsidListVersion(HLERequestContext& ctx);
     void GetScanDataV2(HLERequestContext& ctx);

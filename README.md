@@ -5,86 +5,55 @@
 # SPDX-FileCopyrightText: 2018 yuzu Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 -->
-<!-- lang: en-GB -->
 
-<h1 align="center">
-  <br>
-  <a href="https://git.eden-emu.dev/eden-emu/eden"><img src="./dist/qt_themes/default/icons/256x256/eden.png" alt="Eden" width="200"></a>
-  <br>
-  <b>Eden</b>
-  <br>
-</h1>
+# Harbor
 
-<h4 align="center"><b>Eden</b> is a free and open-source (FOSS) Switch 1 emulator started by developer Camille LaVey.
-<br>
-Written in C++, with builds for Windows, Linux, macOS, Android, FreeBSD and more.
-</h4>
+Harbor is OpenPak's Nintendo Switch emulator, built on the Eden codebase.
+It is an independent project with its own name, direction and OpenPak
+integration. This marks our departure from maintaining an OpenPak-branded
+Eden build: the project is now Harbor.
 
-<p align="center">
-    </a>
-    <a href="https://discord.gg/HstXbPch7X">
-        <img src="https://img.shields.io/discord/1367654015269339267?color=5865F2&label=Eden&logo=discord&logoColor=white"
-            alt="Discord">
-    </a>
-    <a href="https://stt.gg/qKgFEAbH">
-        <img src="https://img.shields.io/revolt/invite/qKgFEAbH?color=d61f3a&label=Stoat"
-            alt="Stoat">
-    </a>
-</p>
+**Eden remains our upstream base.** We acknowledge and preserve the work of
+Eden, yuzu and their contributors, and can continue integrating applicable
+upstream improvements. Harbor is maintained by OpenPak; it is not an official
+Eden release and is not presented as endorsed by the Eden project.
 
-<p align="center">
-  <a href="#compatibility">Compatibility</a> |
-  <a href="#development">Development</a> |
-  <a href="#building">Building</a> |
-  <a href="#download">Download</a> |
-  <a href="#support">Support</a> |
-  <a href="#license">License</a>
-</p>
+## OpenPak direction
 
-## Compatibility
+Harbor is the active Switch emulator for OpenPak development and online
+compatibility work. Its direction is integration with OpenPak's accounts,
+friends and replacement online services. Support varies by title and feature;
+a successful emulator launch does not establish online compatibility.
 
-The emulator is capable of running most commercial games at full speed, provided you meet the necessary hardware requirements.
+The OpenPak Citron and Ryujinx forks, including Ryujinx Android, are retired.
+Do not use those forks for current OpenPak development, builds or testing.
 
-A list of supported games will be available in future. Please be patient.
+## Source and development
 
-Check out our [website](https://eden-emu.dev) for the latest news on exciting features, monthly progress reports, and more!
+- Harbor source and issue tracking: [openpak/harbor](https://github.com/openpak/harbor).
+- Upstream base: [Eden](https://git.eden-emu.dev/eden-emu/eden).
+- Workspace checkout: `emulators/harbor`.
+- Build instructions: [General Build Guide](docs/Build.md).
+- Inherited user documentation: [User Handbook](docs/user/README.md).
+- Contribution guidance: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/eden-emulator.svg)](https://repology.org/project/eden-emulator/versions)
+Some inherited build targets, filenames, assets and documentation still use
+Eden identifiers. These reflect the codebase's origin; the OpenPak project is
+Harbor. Follow local handoff documents for the current implementation status.
+Send Harbor-specific reports and changes to Harbor's repository.
 
-## Contribute
+## Releases
 
-To contribute to Eden; be it financially, code, bug reports, or otherwise, see our [Contributing guidelines](./CONTRIBUTING.md).
+Harbor releases belong to [openpak/harbor](https://github.com/openpak/harbor/releases).
+Eden's releases are upstream Eden builds and should not be described as Harbor
+releases. Refer to the Harbor repository for available builds.
 
-## Documentation
+## License and acknowledgements
 
-We have a user manual! See our [User Handbook](./docs/user/README.md).
+Harbor preserves the upstream licensing and copyright notices. See
+[LICENSE.txt](LICENSE.txt), [LICENSES](LICENSES) and individual source-file
+notices for the applicable terms. The Eden codebase is GPL-3.0-or-later;
+components retain their own license terms.
 
-## Building
-
-See the [General Build Guide](docs/Build.md)
-
-For information on provided development tooling, see the [Tools directory](./tools)
-
-## Download
-
-You can download the latest releases from [our release page](https://git.eden-emu.dev/eden-emu/eden/releases).
-
-Save us some bandwidth! We have [mirrors available](./docs/user/ThirdParty.md#mirrors) as well.
-
-## License
-
-Eden is licensed under the GPLv3 (or any later version). Refer to the [LICENSE.txt](https://git.eden-emu.dev/eden-emu/eden/src/branch/master/LICENSE.txt) file.
-
-## Special thanks
-
-Super special thanks to Cloudflare for preventing the git server from blowing up.
-
-- Yuzu
-- Ryujinx
-- Sudachi
-- Citron
-- Torzu
-- Suyu
-- Ryubing
-
-And everyone who continues or had contributed to the project! <3
+Thanks to the Eden and yuzu contributors and the other projects credited in
+the inherited source. Renaming the fork does not change that provenance.

@@ -221,7 +221,23 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci) const
     VkImage handle{};
     VmaAllocation allocation{};
     VmaAllocationInfo alloc_info{};
-    vk::Check(vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+    VkResult result = vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        // Same fallback buffers have: retry once without the budget bit.
+        VmaAllocationCreateInfo retry_ci = alloc_ci;
+        retry_ci.flags &= ~VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
+        result = vmaCreateImage(allocator, &ci, &retry_ci, &handle, &allocation, &alloc_info);
+    }
+    if (result != VK_SUCCESS) {
+        LOG_ERROR(Render_Vulkan,
+                  "Image allocation failed: result={} extent={}x{}x{} levels={} layers={} format={} "
+                  "memory_limit={} memory_usage={}",
+                  static_cast<int>(result), ci.extent.width, ci.extent.height, ci.extent.depth,
+                  ci.mipLevels, ci.arrayLayers, static_cast<int>(ci.format),
+                  device.GetDeviceLocalMemory(),
+                  device.CanReportMemoryUsage() ? device.GetDeviceMemoryUsage() : 0);
+    }
+    vk::Check(result);
 
     // Log GPU memory allocation for images
     if (GPU::Logging::IsActive() &&

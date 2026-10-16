@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <mutex>
+#include <map>
 #include <array>
 #include <cstring>
 #include <random>
@@ -26,6 +28,9 @@
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
 #include "core/hle/service/acc/acc.h"
+#include "core/hle/service/kernel_helpers.h"
+#include "core/hle/kernel/k_readable_event.h"
+#include "core/hle/kernel/k_event.h"
 #include "core/hle/service/acc/async_context.h"
 #include "core/hle/service/acc/errors.h"
 #include "core/hle/service/acc/nintendo_account_oauth.h"
@@ -213,7 +218,7 @@ public:
             {2, &IManagerForSystemService::EnsureIdTokenCacheAsync, "EnsureIdTokenCacheAsync"},
             {3, &IManagerForSystemService::LoadIdTokenCache, "LoadIdTokenCacheDeprecated"},
             {4, &IManagerForSystemService::LoadIdTokenCache, "LoadIdTokenCache"}, // 19.0.0+
-            {100, nullptr, "SetSystemProgramIdentification"},
+            {100, &IManagerForSystemService::SetSystemProgramIdentification, "SetSystemProgramIdentification"},
             {101, nullptr, "RefreshNotificationTokenAsync"}, // 7.0.0+
             {110, nullptr, "GetServiceEntryRequirementCache"}, // 4.0.0+
             {111, &IManagerForSystemService::InvalidateServiceEntryRequirementCache, "InvalidateServiceEntryRequirementCache"}, // 4.0.0+
@@ -279,6 +284,14 @@ private:
     // signs every active user in with a device account of its own, which the firmware never made:
     // once signed in this process, a user counts as registered when it is linked; before that, when
     // it has a device account in the secret store. Offline: as stock Eden.
+    // [OpenPak] 100: the caller names the system program the manager works for (olsc at start).
+    // Nothing here depends on it.
+    void SetSystemProgramIdentification(HLERequestContext& ctx) {
+        LOG_DEBUG(Service_ACC, "called");
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
     void CheckAvailability(HLERequestContext& ctx) {
         const bool registered = IsRegisteredAtBaas();
         LOG_DEBUG(Service_ACC, "called, registered={}", registered);
@@ -691,15 +704,32 @@ public:
 class INotifier final : public ServiceFramework<INotifier> {
 public:
     explicit INotifier(Core::System& system_, Common::UUID)
-        : ServiceFramework{system_, "INotifier"} {
+        : ServiceFramework{system_, "INotifier"}, service_context{system_, "INotifier"} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "GetSystemEvent"},
+            {0, &INotifier::GetSystemEvent, "GetSystemEvent"},
         };
         // clang-format on
 
         RegisterHandlers(functions);
+        event = service_context.CreateEvent("INotifier:Event");
     }
+
+    ~INotifier() override {
+        service_context.CloseEvent(event);
+    }
+
+private:
+    // [OpenPak] Never signalled: the firmware's own friends program waits on these (user
+    // registration, state change, profile update) and Harbor's account changes do not raise them.
+    void GetSystemEvent(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, &event->GetReadableEvent());
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* event{};
 };
 
 class IProfileCommon : public ServiceFramework<IProfileCommon> {
@@ -920,12 +950,15 @@ protected:
         UserData data;
         std::memcpy(&data, user_data.data(), sizeof(UserData));
 
+        const ProfileUsername before = CurrentUsername();
         if (!profile_manager.SetProfileBaseAndData(user_id, base, data)) {
             LOG_ERROR(Service_ACC, "Failed to update user data and base!");
             IPC::ResponseBuilder rb{ctx, 2};
             rb.Push(Account::ResultAccountUpdateFailed);
             return;
         }
+
+        SendNicknameIfChanged(before, base);
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -952,6 +985,7 @@ protected:
 
         // A new console has no su/avators yet: the setup's first user is stored with its image
         // before profiles.dat is ever written.
+        const ProfileUsername before = CurrentUsername();
         const auto image_path = GetImagePath(user_id);
         if (!Common::FS::CreateParentDirs(image_path)) {
             LOG_ERROR(Service_ACC, "Could not create the profile image directory");
@@ -968,8 +1002,32 @@ protected:
             return;
         }
 
+        // A real console's account module sends the picture and the nickname on; here nothing
+        // else does.
+        SendNicknameIfChanged(before, base);
+        if (OpenPakAccount::Enabled()) {
+            OpenPakAccount::UploadProfileImageInBackground(
+                OpenPakAccount::UidString(user_id),
+                std::vector<u8>(image_data.begin(), image_data.end()));
+        }
+
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
+    }
+
+    /// The nickname the profile holds now; empty when it has no profile yet (the setup's user).
+    ProfileUsername CurrentUsername() const {
+        ProfileBase base{};
+        UserData data{};
+        return profile_manager.GetProfileBaseAndData(user_id, base, data) ? base.username
+                                                                           : ProfileUsername{};
+    }
+
+    void SendNicknameIfChanged(const ProfileUsername& before, const ProfileBase& after) const {
+        if (OpenPakAccount::Enabled() && before != after.username) {
+            OpenPakAccount::UpdateNicknameInBackground(OpenPakAccount::UidString(user_id),
+                                                       after.username);
+        }
     }
 
     ProfileManager& profile_manager;
@@ -1616,6 +1674,56 @@ void Module::Interface::StoreSaveDataThumbnailApplication(HLERequestContext& ctx
     StoreSaveDataThumbnail(ctx, uuid, tid);
 }
 
+void Module::Interface::AaEnsureCacheAsync(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uid = rp.PopRaw<Common::UUID>();
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<OpenPakAsyncContext>(
+        ctx, system, module->worker,
+        [uid_string = OpenPakAccount::UidString(uid)](std::stop_token, std::vector<u8>&) {
+            if (OpenPakAccount::Enabled()) {
+                OpenPakAccount::EnsureAndAdopt(uid_string);
+            }
+            return ResultSuccess;
+        });
+}
+
+void Module::Interface::AaLoadCache(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uid = rp.PopRaw<Common::UUID>();
+    LOG_DEBUG(Service_ACC, "called");
+    // acc:aa's cache is the BAAS access token (the Bearer), not the id_token a title gets.
+    const std::string token =
+        OpenPakAccount::Enabled() ? OpenPak::Session::AccessToken(OpenPakAccount::UidString(uid))
+                                  : std::string{};
+    if (token.empty() || !ctx.CanWriteBuffer() || token.size() > ctx.GetWriteBufferSize()) {
+        LoadIdTokenCacheFor(ctx, uid);
+        return;
+    }
+    ctx.WriteBuffer(token.data(), token.size());
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(static_cast<u32>(token.size()));
+}
+
+void Module::Interface::AaGetDeviceAccountId(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto uid = rp.PopRaw<Common::UUID>();
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push(NetworkServiceAccountIdOf(uid));
+}
+
+void Module::Interface::GetNotifier(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<INotifier>(ctx, system, Common::UUID{});
+}
+
 void Module::Interface::GetBaasAccountManagerForSystemService(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     const auto uuid = rp.PopRaw<Common::UUID>();
@@ -1868,9 +1976,9 @@ public:
         : Interface(std::move(module_), std::move(profile_manager_), system_, "acc:aa") {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "EnsureCacheAsync"},
-            {1, nullptr, "LoadCache"},
-            {2, nullptr, "GetDeviceAccountId"},
+            {0, &ACC_AA::AaEnsureCacheAsync, "EnsureCacheAsync"},
+            {1, &ACC_AA::AaLoadCache, "LoadCache"},
+            {2, &ACC_AA::AaGetDeviceAccountId, "GetDeviceAccountId"},
             {50, nullptr, "RegisterNotificationTokenAsync"},   // 1.0.0 - 6.2.0
             {51, nullptr, "UnregisterNotificationTokenAsync"}, // 1.0.0 - 6.2.0
         };
@@ -2048,19 +2156,24 @@ public:
     ~ACC_U1() override = default;
 };
 
+// [OpenPak] dauth:0, the device authentication tokens the firmware's own programs (olsc, nim,
+// npns) fetch for their clients. The token comes from the console server through the session's
+// dauth client; one cache entry per client id, loaded by the Ensure call's async context.
 class DAUTH_0 final : public ServiceFramework<DAUTH_0> {
 public:
-    explicit DAUTH_0(Core::System& system_) : ServiceFramework{system_, "dauth:0"} {
+    explicit DAUTH_0(Core::System& system_)
+        : ServiceFramework{system_, "dauth:0"},
+          worker{std::make_shared<OpenPak::AsyncWorker>(system_, "dauth:OpenPak")} {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "EnsureAuthenticationTokenCacheAsync"},
-            {1, nullptr, "LoadAuthenticationTokenCache"},
-            {2, nullptr, "InvalidateAuthenticationTokenCache"},
-            {3, nullptr, "IsDeviceAuthenticationTokenCacheAvailable"},
-            {10, nullptr, "EnsureEdgeTokenCacheAsync"},
-            {11, nullptr, "LoadEdgeTokenCache"},
-            {12, nullptr, "InvalidateEdgeTokenCache"},
-            {13, nullptr, "IsEdgeTokenCacheAvailable"},
+            {0, &DAUTH_0::EnsureAuthenticationTokenCacheAsync, "EnsureAuthenticationTokenCacheAsync"},
+            {1, &DAUTH_0::LoadAuthenticationTokenCache, "LoadAuthenticationTokenCache"},
+            {2, &DAUTH_0::InvalidateAuthenticationTokenCache, "InvalidateAuthenticationTokenCache"},
+            {3, &DAUTH_0::IsDeviceAuthenticationTokenCacheAvailable, "IsDeviceAuthenticationTokenCacheAvailable"},
+            {10, &DAUTH_0::EnsureEdgeTokenCacheAsync, "EnsureEdgeTokenCacheAsync"},
+            {11, &DAUTH_0::LoadEdgeTokenCache, "LoadEdgeTokenCache"},
+            {12, &DAUTH_0::InvalidateEdgeTokenCache, "InvalidateEdgeTokenCache"},
+            {13, &DAUTH_0::IsEdgeTokenCacheAvailable, "IsEdgeTokenCacheAvailable"},
             {20, nullptr, "EnsureApplicationAuthenticationCacheAsync"},
             {21, nullptr, "LoadApplicationAuthenticationTokenCache"},
             {22, nullptr, "LoadApplicationNetworkServiceClientConfigCache"},
@@ -2075,8 +2188,107 @@ public:
             {9010, nullptr, "DeleteVirtualClientCertificate"},
         };
         // clang-format on
+
         RegisterHandlers(functions);
     }
+
+private:
+    // Ensure carries (pid placeholder, client id, flag); Load, Invalidate and IsAvailable carry
+    // (pid placeholder, a zero u64, client id). Read from the bcat program's client stubs.
+    // Ensure carries (pid placeholder, client id, force flag). Load, Invalidate and IsAvailable
+    // carry no client id, only an offset and the buffer size: they mean the token the calling
+    // program ensured last, so the cache is keyed by process.
+    static u64 PopClientId(HLERequestContext& ctx, bool ensure) {
+        if (!ensure) {
+            const auto* process = ctx.GetThread().GetOwnerProcess();
+            return process != nullptr ? process->GetProcessId() : 0;
+        }
+        IPC::RequestParser rp{ctx};
+        rp.Pop<u64>();
+        return rp.Pop<u64>();
+    }
+
+    static u64 Caller(HLERequestContext& ctx) {
+        const auto* process = ctx.GetThread().GetOwnerProcess();
+        return process != nullptr ? process->GetProcessId() : 0;
+    }
+
+    void Ensure(HLERequestContext& ctx, std::map<u64, std::string>& cache, std::string vendor) {
+        const u64 client_id = PopClientId(ctx, true);
+        const u64 caller = Caller(ctx);
+        LOG_INFO(Service_ACC, "dauth: token for client {:016x}{}{} requested", client_id,
+                 vendor.empty() ? "" : " vendor ", vendor);
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(
+            ctx, system, worker,
+            [this, &cache, client_id, caller, vendor](std::stop_token, std::vector<u8>&) {
+                const auto token =
+                    OpenPak::Session::DauthToken(fmt::format("{:016x}", client_id), vendor);
+                LOG_INFO(Service_ACC, "dauth: token for client {:016x}{}{} -> {}", client_id,
+                         vendor.empty() ? "" : " vendor ", vendor, token.empty() ? "none" : "ok");
+                std::scoped_lock lk{mutex};
+                if (token.empty()) {
+                    cache.erase(caller);
+                    return ResultInternetRequestDenied;
+                }
+                cache[caller] = token;
+                return ResultSuccess;
+            },
+            false, true);
+    }
+
+    void Load(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+        const u64 client_id = PopClientId(ctx, false);
+        std::scoped_lock lk{mutex};
+        const auto it = cache.find(client_id);
+        if (it == cache.end()) {
+            LOG_WARNING(Service_ACC, "dauth: no cached token for process {}", client_id);
+            IPC::ResponseBuilder rb{ctx, 2};
+            rb.Push(ResultInternetRequestDenied);
+            return;
+        }
+        std::vector<u8> out(it->second.begin(), it->second.end());
+        out.push_back(0);
+        ctx.WriteBuffer(out);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void Invalidate(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+        const u64 client_id = PopClientId(ctx, false);
+        std::scoped_lock lk{mutex};
+        cache.erase(client_id);
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void IsAvailable(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+        const u64 client_id = PopClientId(ctx, false);
+        std::scoped_lock lk{mutex};
+        IPC::ResponseBuilder rb{ctx, 3};
+        rb.Push(ResultSuccess);
+        rb.Push<bool>(cache.contains(client_id));
+    }
+
+    void EnsureAuthenticationTokenCacheAsync(HLERequestContext& ctx) { Ensure(ctx, device_tokens, ""); }
+    void LoadAuthenticationTokenCache(HLERequestContext& ctx) { Load(ctx, device_tokens); }
+    void InvalidateAuthenticationTokenCache(HLERequestContext& ctx) { Invalidate(ctx, device_tokens); }
+    void IsDeviceAuthenticationTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, device_tokens); }
+
+    // No vendor is passed: the dauth program knows it per client, and every edge client here is
+    // the CDN's ("akamai").
+    void EnsureEdgeTokenCacheAsync(HLERequestContext& ctx) {
+        Ensure(ctx, edge_tokens, "akamai");
+    }
+    void LoadEdgeTokenCache(HLERequestContext& ctx) { Load(ctx, edge_tokens); }
+    void InvalidateEdgeTokenCache(HLERequestContext& ctx) { Invalidate(ctx, edge_tokens); }
+    void IsEdgeTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, edge_tokens); }
+
+    std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::mutex mutex;
+    std::map<u64, std::string> device_tokens;
+    std::map<u64, std::string> edge_tokens;
 };
 
 class ACC_E final : public Module::Interface {
@@ -2174,33 +2386,33 @@ public:
         : Interface(std::move(module_), std::move(profile_manager_), system_, "acc:e:u1") {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "GetUserCount"},
-            {1, nullptr, "GetUserExistence"},
-            {2, nullptr, "ListAllUsers"},
-            {3, nullptr, "ListOpenUsers"},
-            {4, nullptr, "GetLastOpenedUser"},
-            {5, nullptr, "GetProfile"},
+            {0, &ACC_E_U1::GetUserCount, "GetUserCount"},
+            {1, &ACC_E_U1::GetUserExistence, "GetUserExistence"},
+            {2, &ACC_E_U1::ListAllUsers, "ListAllUsers"},
+            {3, &ACC_E_U1::ListOpenUsers, "ListOpenUsers"},
+            {4, &ACC_E_U1::GetLastOpenedUser, "GetLastOpenedUser"},
+            {5, &ACC_E_U1::GetProfile, "GetProfile"},
             {6, nullptr, "GetProfileDigest"},
-            {50, nullptr, "IsUserRegistrationRequestPermitted"},
-            {51, nullptr, "TrySelectUserWithoutInteractionDeprecated"},
+            {50, &ACC_E_U1::IsUserRegistrationRequestPermitted, "IsUserRegistrationRequestPermitted"},
+            {51, &ACC_E_U1::TrySelectUserWithoutInteractionDeprecated, "TrySelectUserWithoutInteractionDeprecated"},
             {99, nullptr, "DebugActivateOpenContextRetention"},
-            {100, nullptr, "GetUserRegistrationNotifier"},
-            {101, nullptr, "GetUserStateChangeNotifier"},
-            {102, nullptr, "GetBaasAccountManagerForSystemService"},
-            {103, nullptr, "GetBaasUserAvailabilityChangeNotifier"},
-            {104, nullptr, "GetProfileUpdateNotifier"},
+            {100, &ACC_E_U1::GetNotifier, "GetUserRegistrationNotifier"},
+            {101, &ACC_E_U1::GetNotifier, "GetUserStateChangeNotifier"},
+            {102, &ACC_E_U1::GetBaasAccountManagerForSystemService, "GetBaasAccountManagerForSystemService"},
+            {103, &ACC_E_U1::GetNotifier, "GetBaasUserAvailabilityChangeNotifier"},
+            {104, &ACC_E_U1::GetNotifier, "GetProfileUpdateNotifier"},
             {105, nullptr, "CheckNetworkServiceAvailabilityAsync"},
-            {106, nullptr, "GetProfileSyncNotifier"},
-            {110, nullptr, "StoreSaveDataThumbnail"},
+            {106, &ACC_E_U1::GetNotifier, "GetProfileSyncNotifier"},
+            {110, &ACC_E_U1::StoreSaveDataThumbnailApplication, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
             {112, &ACC_E_U1::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},
-            {140, nullptr, "ListQualifiedUsers"},
+            {140, &ACC_E_U1::ListQualifiedUsers, "ListQualifiedUsers"},
             {151, nullptr, "EnsureSignedDeviceIdentifierCacheForNintendoAccountAsync"},
             {152, nullptr, "LoadSignedDeviceIdentifierCacheForNintendoAccount"},
-            {170, nullptr, "GetNasOp2MembershipStateChangeNotifier"},
+            {170, &ACC_E_U1::GetNotifier, "GetNasOp2MembershipStateChangeNotifier"},
             {191, nullptr, "UpdateNotificationReceiverInfo"},
             {997, nullptr, "DebugInvalidateTokenCacheForUser"},
             {998, nullptr, "DebugSetUserStateClose"},
@@ -2211,47 +2423,41 @@ public:
     }
 };
 
+// [OpenPak] acc:e:u2 answers like acc:e:u1 (the firmware bcat program opens it).
 class ACC_E_U2 final : public Module::Interface {
 public:
     explicit ACC_E_U2(std::shared_ptr<Module> module_, std::shared_ptr<ProfileManager> profile_manager_, Core::System& system_)
         : Interface(std::move(module_), std::move(profile_manager_), system_, "acc:e:u2") {
         // clang-format off
         static const FunctionInfo functions[] = {
-            {0, nullptr, "GetUserCount"},
-            {1, nullptr, "GetUserExistence"},
-            {2, nullptr, "ListAllUsers"},
-            {3, nullptr, "ListOpenUsers"},
-            {4, nullptr, "GetLastOpenedUser"},
-            {5, nullptr, "GetProfile"},
+            {0, &ACC_E_U2::GetUserCount, "GetUserCount"},
+            {1, &ACC_E_U2::GetUserExistence, "GetUserExistence"},
+            {2, &ACC_E_U2::ListAllUsers, "ListAllUsers"},
+            {3, &ACC_E_U2::ListOpenUsers, "ListOpenUsers"},
+            {4, &ACC_E_U2::GetLastOpenedUser, "GetLastOpenedUser"},
+            {5, &ACC_E_U2::GetProfile, "GetProfile"},
             {6, nullptr, "GetProfileDigest"},
-            {50, nullptr, "#IsUserRegistrationRequestPermitted"},
-            {51, nullptr, "TrySelectUserWithoutInteractionDeprecated"},
-            {52, nullptr, "TrySelectUserWithoutInteraction"},
+            {50, &ACC_E_U2::IsUserRegistrationRequestPermitted, "IsUserRegistrationRequestPermitted"},
+            {51, &ACC_E_U2::TrySelectUserWithoutInteractionDeprecated, "TrySelectUserWithoutInteractionDeprecated"},
             {99, nullptr, "DebugActivateOpenContextRetention"},
-            {100, nullptr, "GetUserRegistrationNotifier"},
-            {101, nullptr, "GetUserStateChangeNotifier"},
-            {102, nullptr, "GetBaasAccountManagerForSystemService"},
-            {103, nullptr, "GetBaasUserAvailabilityChangeNotifier"},
-            {104, nullptr, "GetProfileUpdateNotifier"},
+            {100, &ACC_E_U2::GetNotifier, "GetUserRegistrationNotifier"},
+            {101, &ACC_E_U2::GetNotifier, "GetUserStateChangeNotifier"},
+            {102, &ACC_E_U2::GetBaasAccountManagerForSystemService, "GetBaasAccountManagerForSystemService"},
+            {103, &ACC_E_U2::GetNotifier, "GetBaasUserAvailabilityChangeNotifier"},
+            {104, &ACC_E_U2::GetNotifier, "GetProfileUpdateNotifier"},
             {105, nullptr, "CheckNetworkServiceAvailabilityAsync"},
-            {106, nullptr, "GetProfileSyncNotifier"},
-            {110, nullptr, "StoreSaveDataThumbnail"},
+            {106, &ACC_E_U2::GetNotifier, "GetProfileSyncNotifier"},
+            {110, &ACC_E_U2::StoreSaveDataThumbnailApplication, "StoreSaveDataThumbnail"},
             {111, nullptr, "ClearSaveDataThumbnail"},
             {112, &ACC_E_U2::LoadSaveDataThumbnail, "LoadSaveDataThumbnail"},
             {113, nullptr, "GetSaveDataThumbnailExistence"},
             {120, nullptr, "ListOpenUsersInApplication"},
             {130, nullptr, "ActivateOpenContextRetention"},
-            {140, nullptr, "ListQualifiedUsers"},
+            {140, &ACC_E_U2::ListQualifiedUsers, "ListQualifiedUsers"},
             {151, nullptr, "EnsureSignedDeviceIdentifierCacheForNintendoAccountAsync"},
             {152, nullptr, "LoadSignedDeviceIdentifierCacheForNintendoAccount"},
-            {170, nullptr, "GetNasOp2MembershipStateChangeNotifier"},
+            {170, &ACC_E_U2::GetNotifier, "GetNasOp2MembershipStateChangeNotifier"},
             {191, nullptr, "UpdateNotificationReceiverInfo"},
-            {205, nullptr, "GetProfileEditor"},
-            {401, nullptr, "GetPinCodeLength"},
-            {402, nullptr, "GetPinCode"},
-            {403, nullptr, "GetPinCodeParity"},
-            {404, nullptr, "VerifyPinCode"},
-            {405, nullptr, "IsPinCodeVerificationForbidden"},
             {997, nullptr, "DebugInvalidateTokenCacheForUser"},
             {998, nullptr, "DebugSetUserStateClose"},
             {999, nullptr, "DebugSetUserStateOpen"},

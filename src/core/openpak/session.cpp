@@ -75,6 +75,7 @@ EVP_PKEY* GenerateRsaKey() {
 constexpr const char* DauthHost = "dauth-lp1.ndas.srv.nintendo.net";
 constexpr const char* AauthHost = "aauth-lp1.ndas.srv.nintendo.net";
 constexpr const char* BaasHost = "e0d67c509fb203858ebcb2fe3f88c2aa.baas.nintendo.com";
+constexpr const char* AtumHost = "atum.hac.lp1.d4c.nintendo.net";
 
 // Where an invitation sent by a console lands.
 constexpr const char* FiveHost = "app.lp1.five.nintendo.net";
@@ -1429,6 +1430,10 @@ std::string IdToken(const std::string& uid) {
     return Read<std::string>(uid, [](const Identity& i) { return i.id_token; });
 }
 
+std::string AccessToken(const std::string& uid) {
+    return Read<std::string>(uid, [](const Identity& i) { return i.application_token; });
+}
+
 std::uint64_t NetworkServiceAccountId(const std::string& uid) {
     return Read<std::uint64_t>(uid, [](const Identity& i) { return i.nsa_id; });
 }
@@ -1494,6 +1499,125 @@ std::string Country(const std::string& uid) {
 
 std::string ThumbnailUrl(const std::string& uid) {
     return Read<std::string>(uid, [](const Identity& i) { return i.thumbnail_url; });
+}
+
+namespace {
+
+/// The user-scoped token and BAAS user id of a signed-in, linked `uid`; false for anyone else.
+bool LinkedCredentials(const std::string& uid, std::string& token, std::string& user_id) {
+    State& state = Get();
+    const std::string who = Resolve(uid);
+    std::lock_guard lock{state.mutex};
+    const auto it = state.identities.find(who);
+    if (it == state.identities.end() || !it->second->linked ||
+        it->second->application_token.empty() || it->second->user_id.empty()) {
+        return false;
+    }
+    token = it->second->application_token;
+    user_id = it->second->user_id;
+    return true;
+}
+
+} // namespace
+
+bool UploadProfileImage(const std::string& uid, const std::vector<std::uint8_t>& jpeg) {
+    if (!Enabled() || jpeg.empty()) {
+        return false;
+    }
+
+    State& state = Get();
+    std::string token;
+    std::string user_id;
+    if (!LinkedCredentials(uid, token, user_id)) {
+        return false;
+    }
+
+    // The account module's own upload: {"rawContent": <base64 JPEG>}. The server keeps it and
+    // hands it on to the OpenPak account, which is what the website and the app show.
+    std::string encoded(4 * ((jpeg.size() + 2) / 3) + 1, '\0');
+    encoded.resize(static_cast<std::size_t>(
+        EVP_EncodeBlock(reinterpret_cast<unsigned char*>(encoded.data()), jpeg.data(),
+                        static_cast<int>(jpeg.size()))));
+    const std::string body = nlohmann::json{{"rawContent", encoded}}.dump();
+
+    auto baas = MakeClient(EndpointSnapshot(state), BaasHost);
+    const auto reply = Parsed(baas->Post("/1.0.0/image_upload", Bearer(token), body,
+                                         "application/json"),
+                              "profile picture upload");
+    if (!reply) {
+        return false;
+    }
+
+    // The reply names the picture's address; the server serves the user from it from now on, so
+    // the next sign-in and our own copy agree.
+    const auto content = reply->find("content");
+    if (content != reply->end() && content->is_object()) {
+        if (const std::string url = Text(*content, "url"); !url.empty()) {
+            std::lock_guard lock{state.mutex};
+            if (const auto it = state.identities.find(Resolve(uid)); it != state.identities.end()) {
+                it->second->thumbnail_url = url;
+            }
+        }
+    }
+    LOG_INFO(WebService, "[OpenPak] Profile picture sent ({} bytes)", jpeg.size());
+    return true;
+}
+
+std::vector<std::uint8_t> FetchAtumControl(const std::string& title_id_hex) {
+    if (!Enabled() || title_id_hex.size() != 16) {
+        return {};
+    }
+    // The shop's own edge token, as nim:shp hands it to a download task (nim.cpp ShopClientId).
+    const std::string token = DauthToken("93af0acb26258de9", "akamai");
+    if (token.empty()) {
+        return {};
+    }
+    auto atum = MakeClient(EndpointSnapshot(Get()), AtumHost);
+    const auto reply = atum->Get(fmt::format("/c1/a/d/{}", title_id_hex),
+                                 httplib::Headers{{"X-Nintendo-DenebEdgeToken", token}});
+    if (!reply || reply->status != 200) {
+        LOG_DEBUG(WebService, "[OpenPak] Control NCA request returned {}", reply ? reply->status : 0);
+        return {};
+    }
+    // A control NCA is a few hundred KiB; anything else is not one.
+    if (reply->body.size() < 0x4000 || reply->body.size() > (4u << 20)) {
+        return {};
+    }
+    return {reply->body.begin(), reply->body.end()};
+}
+
+bool UpdateNickname(const std::string& uid, const std::string& nickname) {
+    if (!Enabled() || nickname.empty()) {
+        return false;
+    }
+
+    State& state = Get();
+    std::string token;
+    std::string user_id;
+    if (!LinkedCredentials(uid, token, user_id)) {
+        return false;
+    }
+
+    // One replace op, as the account module sends a nickname change. The server keeps it on the
+    // OpenPak account, so the next sign-in (and the website) read the same name back.
+    const std::string body =
+        nlohmann::json::array({{{"op", "replace"}, {"path", "/nickname"}, {"value", nickname}}})
+            .dump();
+    auto baas = MakeClient(EndpointSnapshot(state), BaasHost);
+    if (!Parsed(baas->Patch(fmt::format("/1.0.0/users/{}", user_id), Bearer(token), body,
+                            "application/json-patch+json"),
+                "nickname update")) {
+        return false;
+    }
+
+    {
+        std::lock_guard lock{state.mutex};
+        if (const auto it = state.identities.find(Resolve(uid)); it != state.identities.end()) {
+            it->second->nickname = nickname;
+        }
+    }
+    LOG_INFO(WebService, "[OpenPak] Nickname sent");
+    return true;
 }
 
 std::string DauthToken(const std::string& client_id, const std::string& vendor) {

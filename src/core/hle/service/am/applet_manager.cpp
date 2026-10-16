@@ -4,12 +4,15 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <string_view>
 
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/core_timing.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/applet_data_broker.h"
@@ -20,6 +23,8 @@
 #include "core/hle/service/am/frontend/applet_software_keyboard_types.h"
 #include "core/hle/service/am/service/storage.h"
 #include "core/hle/service/am/window_system.h"
+#include "core/openpak/guest_client.h"
+#include "core/openpak/real_firmware.h"
 #include "hid_core/hid_types.h"
 #include "core/hle/service/am/process_creation.h"
 #include "common/harbor_crash.h"
@@ -386,6 +391,40 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     if (home_session) {
         LOG_INFO(Service_AM, "HOME session: firmware library applets, overlay applet on");
         ::Common::HarborCrash::LogSignalHandlers("at the HOME session start");
+    }
+
+    // The starter also needs the firmware system programs: it initializes News through
+    // SetPassphrase, and real-firmware service ownership already suppresses the HLE ports.
+    // Keep HOME lifecycle/overlay behavior separate from this system-service bootstrap.
+    const bool firmware_session = home_session || m_pending_parameters.applet_id == AppletId::Starter;
+    if (firmware_session && m_real_firmware.empty()) {
+        for (const u64 program_id : OpenPak::RealFirmware::Programs(m_system)) {
+            auto process = CreateProcess(m_system, program_id, 0, 0);
+            if (!process) {
+                LOG_WARNING(Service_AM, "am: real firmware program {:016x} not found", program_id);
+                continue;
+            }
+            process->Run();
+            LOG_INFO(Service_AM, "am: real firmware program {:016x} started, code at {:#x}",
+                     program_id, GetInteger(process->GetHandle()->GetEntryPoint()));
+            m_real_firmware.push_back(std::move(process));
+        }
+        // What the am program tells the firmware's own modules once they are up.
+        std::thread{[this] {
+            OpenPak::GuestClient::NotifyOperationMode(m_system);
+            OpenPak::GuestClient::PublishDigitalTwin(m_system);
+            OpenPak::GuestClient::SetNewsPassphrase(m_system);
+            OpenPak::GuestClient::SubscribeDefaultNews(m_system);
+        }}.detach();
+        // OPENPAK_DUMP_THREADS_AFTER=<s>: every guest thread to the log after that many seconds
+        // (a hang shows where each thread waits).
+        if (const char* after = std::getenv("OPENPAK_DUMP_THREADS_AFTER"); after != nullptr) {
+            const int seconds = std::atoi(after);
+            std::thread{[this, seconds] {
+                std::this_thread::sleep_for(std::chrono::seconds{seconds});
+                m_system.LogGuestThreads();
+            }}.detach();
+        }
     }
 
     const auto launch_overlay = [&] {

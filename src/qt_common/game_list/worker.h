@@ -46,7 +46,7 @@ public:
                             FileSys::ManualContentProvider* provider_,
                             QVector<UISettings::GameDir>& game_dirs_,
                             const PlayTime::PlayTimeManager& play_time_manager_,
-                            Core::System& system_);
+                            Core::System& system_, bool content_only_ = false);
     ~GameListWorker() override;
 
     /// Starts the processing of directory tree information.
@@ -94,4 +94,5 @@ private:
     Common::Event processing_completed;
 
     Core::System& system;
+    const bool content_only;
 };

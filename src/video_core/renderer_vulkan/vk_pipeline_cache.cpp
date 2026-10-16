@@ -65,7 +65,7 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 18;
+constexpr u32 CACHE_VERSION = 19;
 constexpr size_t VULKAN_CACHE_FLUSH_PIPELINES = 128;
 constexpr size_t VULKAN_CACHE_FLUSH_MIN_SECONDS = 30;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
@@ -470,13 +470,16 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
 
     host_info = Shader::HostTranslateInfo{
         .min_ssbo_alignment = device.GetStorageBufferAlignment(),
+        .max_per_stage_descriptor_samplers = device.GetMaxPerStageDescriptorSamplers(),
         .max_per_stage_descriptor_sampled_images = device.GetMaxPerStageDescriptorSampledImages(),
         .max_per_stage_resources = device.GetMaxPerStageResources(),
         .max_descriptor_set_samplers = device.GetMaxDescriptorSetSamplers(),
         .max_descriptor_set_uniform_buffers = device.GetMaxDescriptorSetUniformBuffers(),
-        .max_descriptor_set_uniform_buffers_dynamic = device.GetMaxDescriptorSetUniformBuffersDynamic(),
+        .max_descriptor_set_uniform_buffers_dynamic =
+            device.GetMaxDescriptorSetUniformBuffersDynamic(),
         .max_descriptor_set_storage_buffers = device.GetMaxDescriptorSetStorageBuffers(),
-        .max_descriptor_set_storage_buffers_dynamic = device.GetMaxDescriptorSetStorageBuffersDynamic(),
+        .max_descriptor_set_storage_buffers_dynamic =
+            device.GetMaxDescriptorSetStorageBuffersDynamic(),
         .max_descriptor_set_sampled_images = device.GetMaxDescriptorSetSampledImages(),
         .max_descriptor_set_storage_images = device.GetMaxDescriptorSetStorageImages(),
         .max_descriptor_set_input_attachements = device.GetMaxDescriptorSetInputAttachments(),

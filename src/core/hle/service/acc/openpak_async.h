@@ -18,8 +18,11 @@ namespace Service::Account {
 class OpenPakAsyncContext final : public ServiceFramework<OpenPakAsyncContext> {
 public:
     /// `license_kind` adds IAsyncNetworkServiceLicenseKindContext 100, which answers Subscribed.
+    /// `dauth_result` lays the commands out as nn::dauth's IAsyncResult (0 GetResult, 1 Cancel,
+    /// 2 IsAvailable, 3 GetSystemEvent) instead of account's IAsyncContext.
     OpenPakAsyncContext(Core::System& system_, std::shared_ptr<OpenPak::AsyncWorker> worker_,
-                        OpenPak::AsyncWorker::Work work, bool license_kind = false);
+                        OpenPak::AsyncWorker::Work work, bool license_kind = false,
+                        bool dauth_result = false);
     ~OpenPakAsyncContext() override;
 
     /// Work that is done the moment it starts (nothing to wait on).

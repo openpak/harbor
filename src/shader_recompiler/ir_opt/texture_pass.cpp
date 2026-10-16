@@ -6,11 +6,12 @@
 
 #include <algorithm>
 #include <bit>
-#include <optional>
-#include "common/container/unordered_map.h"
-#include <tuple>
 #include <limits>
+#include <numeric>
+#include <optional>
+#include <tuple>
 #include <boost/container/small_vector.hpp>
+#include "common/container/unordered_map.h"
 
 #include "common/settings.h"
 #include "shader_recompiler/environment.h"
@@ -70,15 +71,18 @@ template <typename T>
     });
 }
 
-u32 DynamicSampledTextureCap(const Info& info, const HostTranslateInfo& host_info, u32 dynamic_arrays) {
-    auto const sampled_limit = (std::max)(1U, std::min(host_info.max_per_stage_descriptor_sampled_images,
-                                                       host_info.max_descriptor_set_sampled_images));
+u32 DynamicSampledTextureCap(const Info& info, const HostTranslateInfo& host_info, u32 dynamic_arrays,
+                            u32 uniform_buffers) {
+    auto const sampled_limit =
+        (std::max)(1U, std::min({host_info.max_per_stage_descriptor_sampled_images,
+                                 host_info.max_descriptor_set_sampled_images,
+                                 host_info.max_per_stage_descriptor_samplers,
+                                 host_info.max_descriptor_set_samplers}));
     auto const resource_limit = (std::max)(1U, host_info.max_per_stage_resources);
     if (dynamic_arrays > 0) {
         auto const sampled_static_count = StaticDescriptorCount(info.texture_buffer_descriptors) + StaticDescriptorCount(info.texture_descriptors);
         auto const resource_static_count =
-            NumDescriptors(info.constant_buffer_descriptors)
-            + NumDescriptors(info.storage_buffers_descriptors)
+            uniform_buffers + NumDescriptors(info.storage_buffers_descriptors)
             + sampled_static_count + NumDescriptors(info.image_buffer_descriptors)
             + NumDescriptors(info.image_descriptors);
         auto const sampled_budget = SaturatingSub(sampled_limit, sampled_static_count);
@@ -269,6 +273,9 @@ static inline u32 ReadCbufCached(Environment& env, u32 index, u32 offset) {
 }
 
 static inline u32 GetTextureHandleCached(Environment& env, const ConstBufferAddr& cbuf) {
+    if (cbuf.storage_stride != 0) {
+        return env.ReadStorageBufferValue(cbuf.index, cbuf.offset, cbuf.storage_offset);
+    }
     // Must all be uniquely different variables
     // If has secondary, then it will be cbuf.secondary_{index|offset}, else its 0.
     // So we can just hand it out the raw variable without using sec_idx or sec_off
@@ -466,10 +473,116 @@ std::optional<ConstBufferAddr> TryGetConstBuffer(const IR::Inst* inst, Environme
     };
 }
 
-TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const HostTranslateInfo& host_info) {
+// Describe a byte offset as a constant plus a multiple of a record stride. Unknown
+// values have stride one; XMAD's low/high products retain their common multiplier.
+// The storage-buffer base is uniform and is removed when choosing the array index.
+struct StorageTextureLayout {
+    u32 stride;
+    u32 offset;
+    bool has_base;
+};
+
+StorageTextureLayout StorageLayout(const IR::Value& value, const StorageBufferDescriptor& buffer,
+                                   u32 depth = 0) {
+    if (value.IsImmediate()) {
+        return {0, value.U32(), false};
+    }
+    if (depth >= 64) {
+        return {1, 0, false};
+    }
+    const IR::Inst* const inst = value.InstRecursive();
+    const auto recurse = [&](const IR::Value& arg) {
+        return StorageLayout(arg, buffer, depth + 1);
+    };
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::GetCbufU32:
+        if (inst->Arg(0).IsImmediate() && inst->Arg(1).IsImmediate() &&
+            inst->Arg(0).U32() == buffer.cbuf_index && inst->Arg(1).U32() == buffer.cbuf_offset) {
+            return {0, 0, true};
+        }
+        break;
+    case IR::Opcode::BitwiseAnd32: {
+        // The global-memory pass aligns the buffer base before subtracting it.
+        if (inst->Arg(1).IsImmediate()) {
+            const auto lhs = recurse(inst->Arg(0));
+            if (lhs.has_base && lhs.stride == 0 && lhs.offset == 0) {
+                return lhs;
+            }
+        }
+        break;
+    }
+    case IR::Opcode::IAdd32:
+    case IR::Opcode::ISub32: {
+        const auto lhs = recurse(inst->Arg(0));
+        const auto rhs = recurse(inst->Arg(1));
+        const u32 offset = inst->GetOpcode() == IR::Opcode::IAdd32 ? lhs.offset + rhs.offset
+                                                                   : lhs.offset - rhs.offset;
+        return {std::gcd(lhs.stride, rhs.stride), offset, lhs.has_base || rhs.has_base};
+    }
+    case IR::Opcode::IMul32:
+    case IR::Opcode::ShiftLeftLogical32: {
+        if (!inst->Arg(1).IsImmediate()) {
+            break;
+        }
+        const u32 rhs = inst->Arg(1).U32();
+        if (inst->GetOpcode() == IR::Opcode::ShiftLeftLogical32 && rhs >= 32) {
+            break;
+        }
+        const u32 factor = inst->GetOpcode() == IR::Opcode::IMul32 ? rhs : 1U << rhs;
+        const auto lhs = recurse(inst->Arg(0));
+        const u64 stride = static_cast<u64>(lhs.stride) * factor;
+        if (stride > (std::numeric_limits<u32>::max)()) {
+            break;
+        }
+        return {static_cast<u32>(stride), lhs.offset * factor, lhs.has_base};
+    }
+    default:
+        break;
+    }
+    return {1, 0, false};
+}
+
+std::optional<ConstBufferAddr> TrackStorageTexture(const IR::Value& handle,
+                                                   const IR::Program& program) {
+    if (handle.IsImmediate()) {
+        return std::nullopt;
+    }
+    const IR::Inst* const load = handle.InstRecursive();
+    if (load->GetOpcode() != IR::Opcode::LoadStorage32) {
+        return std::nullopt;
+    }
+    if (!load->Arg(0).IsImmediate() ||
+        load->Arg(0).U32() >= program.info.storage_buffers_descriptors.size()) {
+        throw NotImplementedException("Untracked storage-buffer texture handle");
+    }
+    const auto& buffer = program.info.storage_buffers_descriptors[load->Arg(0).U32()];
+    const auto layout = StorageLayout(load->Arg(1), buffer);
+    if (!layout.has_base || (layout.stride != 0 && layout.stride < sizeof(u32))) {
+        throw NotImplementedException("Unsupported storage-buffer texture handle layout");
+    }
+    return ConstBufferAddr{
+        .index = buffer.cbuf_index,
+        .offset = buffer.cbuf_offset,
+        .shift_left = 0,
+        .secondary_index = 0,
+        .secondary_offset = 0,
+        .secondary_shift_left = 0,
+        .dynamic_offset = IR::U32{load->Arg(1)},
+        .count = layout.stride == 0 ? 1 : DESCRIPTOR_MAX_COUNT,
+        .has_secondary = false,
+        .storage_stride = layout.stride == 0 ? static_cast<u32>(sizeof(u32)) : layout.stride,
+        .storage_offset = layout.offset,
+    };
+}
+
+TextureInst MakeInst(Environment& env, IR::Block* block, IR::Inst& inst, const IR::Program& program,
+                     const HostTranslateInfo& host_info) {
     ConstBufferAddr addr;
     if (IsBindless(inst)) {
-        const std::optional<ConstBufferAddr> track_addr{TrackCached(inst.Arg(0), env, host_info)};
+        auto track_addr = TrackStorageTexture(inst.Arg(0), program);
+        if (!track_addr) {
+            track_addr = TrackCached(inst.Arg(0), env, host_info);
+        }
 
         if (!track_addr) {
             throw NotImplementedException("Failed to track bindless texture constant buffer");
@@ -536,6 +649,8 @@ public:
                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
                    desc.secondary_shift_left == existing.secondary_shift_left &&
                    desc.count == existing.count && desc.size_shift == existing.size_shift &&
+                   desc.storage_stride == existing.storage_stride &&
+                   desc.storage_offset == existing.storage_offset &&
                    desc.has_secondary == existing.has_secondary;
         });
     }
@@ -562,7 +677,9 @@ public:
                    desc.secondary_cbuf_index == existing.secondary_cbuf_index &&
                    desc.secondary_cbuf_offset == existing.secondary_cbuf_offset &&
                    desc.secondary_shift_left == existing.secondary_shift_left &&
-                   desc.count == existing.count && desc.size_shift == existing.size_shift;
+                   desc.count == existing.count && desc.size_shift == existing.size_shift &&
+                   desc.storage_stride == existing.storage_stride &&
+                   desc.storage_offset == existing.storage_offset;
         })};
         // TODO: Read this from TIC
         texture_descriptors[index].is_multisample |= desc.is_multisample;
@@ -664,6 +781,34 @@ void PatchTexelFetch(IR::Block& block, IR::Inst& inst, TexturePixelFormat pixel_
 }
 } // Anonymous namespace
 
+// Storage-backed texture arrays still use the pointer's uniform buffer in the shader.
+// Shader info is collected after this pass, so include the referenced uniform buffers
+// when reserving descriptors for the new arrays.
+static u32 ReferencedUniformBuffers(const IR::Program& program) {
+    u32 mask{};
+    for (const IR::Block* block : program.post_order_blocks) {
+        for (const IR::Inst& inst : block->Instructions()) {
+            switch (inst.GetOpcode()) {
+            case IR::Opcode::GetCbufU8:
+            case IR::Opcode::GetCbufS8:
+            case IR::Opcode::GetCbufU16:
+            case IR::Opcode::GetCbufS16:
+            case IR::Opcode::GetCbufU32:
+            case IR::Opcode::GetCbufF32:
+            case IR::Opcode::GetCbufU32x2:
+                if (!inst.Arg(0).IsImmediate() || inst.Arg(0).U32() >= 32) {
+                    return Info::MAX_CBUFS;
+                }
+                mask |= 1U << inst.Arg(0).U32();
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    return static_cast<u32>(std::popcount(mask));
+}
+
 void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo& host_info) {
     // reset per-pass caches
     env.cbuf_word_cache.clear();
@@ -675,7 +820,7 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
             if (!IsTextureInstruction(inst)) {
                 continue;
             }
-            to_replace.push_back(MakeInst(env, block, inst, host_info));
+            to_replace.push_back(MakeInst(env, block, inst, program, host_info));
         }
     }
     // Sort instructions to visit textures by constant buffer index, then by offset
@@ -689,20 +834,27 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
         program.info.texture_descriptors,
         program.info.image_descriptors,
     };
-    const u32 sampled_dynamic_cap = DynamicSampledTextureCap(program.info, host_info, DynamicSampledTextureArrayCount(to_replace));
+    u32 uniform_buffers = NumDescriptors(program.info.constant_buffer_descriptors);
+    if (std::ranges::any_of(to_replace, [](const TextureInst& texture) {
+            return texture.cbuf.storage_stride != 0 && texture.cbuf.count > 1;
+        })) {
+        uniform_buffers = std::max(uniform_buffers, ReferencedUniformBuffers(program));
+    }
+    const u32 sampled_dynamic_cap = DynamicSampledTextureCap(
+        program.info, host_info, DynamicSampledTextureArrayCount(to_replace), uniform_buffers);
     bool has_last_is_integer{false};
     u32 last_cbuf_index{};
     u32 last_cbuf_offset{};
     bool last_is_integer{false};
     const auto is_texture_pixel_format_integer{[&](const ConstBufferAddr& cbuf_addr) {
-        if (has_last_is_integer && last_cbuf_index == cbuf_addr.index &&
-            last_cbuf_offset == cbuf_addr.offset) {
+        if (cbuf_addr.storage_stride == 0 && has_last_is_integer &&
+            last_cbuf_index == cbuf_addr.index && last_cbuf_offset == cbuf_addr.offset) {
             return last_is_integer;
         }
         last_is_integer = IsTexturePixelFormatIntegerCached(env, cbuf_addr);
         last_cbuf_index = cbuf_addr.index;
         last_cbuf_offset = cbuf_addr.offset;
-        has_last_is_integer = true;
+        has_last_is_integer = cbuf_addr.storage_stride == 0;
         return last_is_integer;
     }};
     for (TextureInst& texture_inst : to_replace) {
@@ -712,6 +864,9 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
 
         const auto& cbuf{texture_inst.cbuf};
         auto flags{inst->Flags<IR::TextureInstInfo>()};
+        if (cbuf.storage_stride != 0 && IsStorageImageOpcode(inst->GetOpcode())) {
+            throw NotImplementedException("Storage-buffer handles for storage images");
+        }
         bool is_multisample{false};
         switch (inst->GetOpcode()) {
         case IR::Opcode::ImageQueryDimensions:
@@ -808,6 +963,8 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                     .secondary_shift_left = cbuf.secondary_shift_left,
                     .count = count,
                     .size_shift = size_shift,
+                    .storage_stride = cbuf.storage_stride,
+                    .storage_offset = cbuf.storage_offset,
                 });
             } else {
                 count = std::min(count, sampled_dynamic_cap);
@@ -826,6 +983,8 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
                     .secondary_shift_left = cbuf.secondary_shift_left,
                     .count = count,
                     .size_shift = size_shift,
+                    .storage_stride = cbuf.storage_stride,
+                    .storage_offset = cbuf.storage_offset,
                 });
                 flags.is_integer.Assign(is_integer ? 1 : 0);
             }
@@ -837,8 +996,18 @@ void TexturePass(Environment& env, IR::Program& program, const HostTranslateInfo
         if (count > 1) {
             const auto insert_point{IR::Block::InstructionList::s_iterator_to(*inst)};
             IR::IREmitter ir{*texture_inst.block, insert_point};
-            const IR::U32 shift{ir.Imm32(size_shift)};
-            inst->SetArg(0, ir.UMin(ir.ShiftRightLogical(cbuf.dynamic_offset, shift), ir.Imm32(count - 1)));
+            IR::U32 array_index;
+            if (cbuf.storage_stride != 0) {
+                const u32 alignment = static_cast<u32>(host_info.min_ssbo_alignment);
+                const IR::U32 base = ir.GetCbuf(ir.Imm32(cbuf.index), ir.Imm32(cbuf.offset));
+                const IR::U32 padding = ir.BitwiseAnd(base, ir.Imm32(alignment - 1));
+                const IR::U32 relative = ir.ISub(cbuf.dynamic_offset, padding);
+                array_index = ir.IDiv(ir.ISub(relative, ir.Imm32(cbuf.storage_offset)),
+                                      ir.Imm32(cbuf.storage_stride));
+            } else {
+                array_index = ir.ShiftRightLogical(cbuf.dynamic_offset, ir.Imm32(size_shift));
+            }
+            inst->SetArg(0, ir.UMin(array_index, ir.Imm32(count - 1)));
         } else {
             inst->SetArg(0, IR::Value{});
         }

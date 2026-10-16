@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <mutex>
 #include <cstring>
 #include <fstream>
 
@@ -24,6 +25,8 @@
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/system_archive/system_archive.h"
 #include "core/harbor_calibration/calibration.h"
+#include "core/hle/kernel/k_event.h"
+#include "core/hle/kernel/k_readable_event.h"
 #include "core/hle/service/cmif_serialization.h"
 #include "core/hle/service/filesystem/filesystem.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -121,7 +124,7 @@ Result GetFirmwareVersionImpl(FirmwareVersionFormat& out_firmware, Core::System&
 }
 
 ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
-    : ServiceFramework{system_, "set:sys"}, m_system{system} {
+    : ServiceFramework{system_, "set:sys"}, m_service_context{system_, "set:sys"}, m_system{system} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, C<&ISystemSettingsServer::SetLanguageCode>, "SetLanguageCode"},
@@ -236,7 +239,7 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {112, nullptr, "SetBluetoothAfhEnableFlag"},
         {113, nullptr, "GetBluetoothBoostEnableFlag"},
         {114, nullptr, "SetBluetoothBoostEnableFlag"},
-        {115, nullptr, "GetInRepairProcessEnableFlag"},
+        {115, C<&ISystemSettingsServer::GetInRepairProcessEnableFlag>, "GetInRepairProcessEnableFlag"},
         {116, nullptr, "SetInRepairProcessEnableFlag"},
         {117, nullptr, "GetHeadphoneVolumeUpdateFlag"},
         {118, nullptr, "SetHeadphoneVolumeUpdateFlag"},
@@ -262,7 +265,7 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {138, nullptr, "GetWebInspectorFlag"},
         {139, nullptr, "GetAllowedSslHosts"},
         {140, nullptr, "GetHostFsMountPoint"},
-        {141, nullptr, "GetRequiresRunRepairTimeReviser"},
+        {141, C<&ISystemSettingsServer::GetRequiresRunRepairTimeReviser>, "GetRequiresRunRepairTimeReviser"},
         {142, nullptr, "SetRequiresRunRepairTimeReviser"},
         {143, nullptr, "SetBlePairingSettings"},
         {144, nullptr, "GetBlePairingSettings"},
@@ -341,8 +344,8 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
         {282, nullptr, "ConvertToProductModel"}, //20.0.0+
         {283, nullptr, "ConvertToProductModelName"}, //20.0.0+
         {289, nullptr, "GetDefaultAccountIdentificationFlagSet"}, //20.0.0+
-        {300, nullptr, "AcquirePushNotificationDirtyFlagEventHandle"}, //20.0.0+
-        {301, nullptr, "GetPushNotificationDirtyFlags"}, //20.0.0+
+        {300, C<&ISystemSettingsServer::AcquirePushNotificationDirtyFlagEventHandle>, "AcquirePushNotificationDirtyFlagEventHandle"}, //20.0.0+
+        {301, C<&ISystemSettingsServer::GetPushNotificationDirtyFlags>, "GetPushNotificationDirtyFlags"}, //20.0.0+
         {306, nullptr, "GetPinCodeReregistrationGuideAccounts"}, //20.0.0+
         {307, nullptr, "SetPinCodeReregistrationGuideAccounts"}, //20.0.0+
         {315, C<&ISystemSettingsServer::GetHttpAuthConfigs>, "GetHttpAuthConfigs"}, //21.0.0+
@@ -354,6 +357,8 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
 
     RegisterHandlers(functions);
 
+    m_push_notification_event = m_service_context.CreateEvent("set:sys:PushNotificationDirtyFlag");
+
     SetupSettings();
 
     // The stored settings own the region and the EULA; the host's region setting only seeds a new NAND's
@@ -364,7 +369,21 @@ ISystemSettingsServer::ISystemSettingsServer(Core::System& system_)
 }
 
 ISystemSettingsServer::~ISystemSettingsServer() {
+    m_service_context.CloseEvent(m_push_notification_event);
     SetSaveNeeded();
+}
+
+Result ISystemSettingsServer::AcquirePushNotificationDirtyFlagEventHandle(
+    OutCopyHandle<Kernel::KReadableEvent> out_event) {
+    LOG_DEBUG(Service_SET, "called");
+    *out_event = &m_push_notification_event->GetReadableEvent();
+    R_SUCCEED();
+}
+
+Result ISystemSettingsServer::GetPushNotificationDirtyFlags(Out<u64> out_flags) {
+    LOG_DEBUG(Service_SET, "called");
+    *out_flags = 0;
+    R_SUCCEED();
 }
 
 bool ISystemSettingsServer::LoadSettingsFile(std::filesystem::path& path, auto&& default_func) {
@@ -585,6 +604,21 @@ Result ISystemSettingsServer::GetEulaVersions(
     R_SUCCEED();
 }
 
+// [OpenPak] set:sys 115 (migration asks at start, and aborts on an error): not in a repair process.
+Result ISystemSettingsServer::GetInRepairProcessEnableFlag(Out<bool> out_enabled) {
+    LOG_DEBUG(Service_SET, "called");
+    *out_enabled = false;
+    R_SUCCEED();
+}
+
+// [OpenPak] set:sys 141 (nim asks at start, and aborts on an error): the time repair reviser is not
+// pending here.
+Result ISystemSettingsServer::GetRequiresRunRepairTimeReviser(Out<bool> out_requires) {
+    LOG_DEBUG(Service_SET, "called");
+    *out_requires = false;
+    R_SUCCEED();
+}
+
 Result ISystemSettingsServer::SetEulaVersions(
     InArray<EulaVersion, BufferAttr_HipcMapAlias> eula_versions) {
     LOG_INFO(Service_SET, "called, elements={}", eula_versions.size());
@@ -701,7 +735,58 @@ static std::vector<u8> ToBytes(const T& value) {
 using Settings =
     std::map<std::string, std::map<std::string, std::vector<u8>, std::less<>>, std::less<>>;
 
-static Settings GetSettings() {
+// [OpenPak] The firmware's own default item values: system data 0100000000000818
+// (FirmwareDebugSettings), one file of {u32 key_len, "category!name\0", u8 type, u32 value_len,
+// value} records after a u32 size. Harbor's entries below stay in front; every other item comes from
+// here, so the firmware's modules find what they read at start (an absent item is a guest abort).
+static const Settings& FirmwareDefaultSettings(Core::System& system) {
+    static std::once_flag once;
+    static Settings items;
+    std::call_once(once, [&system] {
+        constexpr u64 FirmwareDebugSettingsId = 0x0100000000000818;
+        const auto* bis_system = system.GetFileSystemController().GetSystemNANDContents();
+        const auto nca = bis_system != nullptr
+                             ? bis_system->GetEntry(FirmwareDebugSettingsId, FileSys::ContentRecordType::Data)
+                             : nullptr;
+        const auto nca_romfs = nca ? nca->GetRomFS() : nullptr;
+        const auto romfs = nca_romfs ? FileSys::ExtractRomFS(nca_romfs) : nullptr;
+        const auto file = romfs ? romfs->GetFile("file") : nullptr;
+        if (!file) {
+            LOG_WARNING(Service_SET, "firmware default settings (0100000000000818) not installed; only Harbor's table answers");
+            return;
+        }
+        const auto data = file->ReadAllBytes();
+        std::size_t pos = 4;
+        std::size_t count = 0;
+        while (pos + 4 <= data.size()) {
+            u32 key_len{};
+            std::memcpy(&key_len, data.data() + pos, 4);
+            pos += 4;
+            if (pos + key_len + 5 > data.size()) {
+                break;
+            }
+            std::string key(reinterpret_cast<const char*>(data.data() + pos), key_len);
+            key.resize(std::strlen(key.c_str()));
+            pos += key_len + 1; // the key and its type byte
+            u32 value_len{};
+            std::memcpy(&value_len, data.data() + pos, 4);
+            pos += 4;
+            if (pos + value_len > data.size()) {
+                break;
+            }
+            if (const auto bang = key.find('!'); bang != std::string::npos) {
+                items[key.substr(0, bang)][key.substr(bang + 1)] =
+                    std::vector<u8>(data.begin() + pos, data.begin() + pos + value_len);
+                ++count;
+            }
+            pos += value_len;
+        }
+        LOG_INFO(Service_SET, "firmware default settings: {} items from 0100000000000818", count);
+    });
+    return items;
+}
+
+static Settings GetSettings(Core::System* system = nullptr) {
     Settings ret;
 
     // AM
@@ -733,6 +818,11 @@ static Settings GetSettings() {
     ret["hid_debug"]["disabled_features_per_id"] = std::vector<u8>(0xa8);
     ret["hid_debug"]["touch_firmware_auto_update_disabled"] = ToBytes(bool{false});
 
+    // npns: the firmware's own program reads it at start-up and throws a fatal error without it.
+    ret["npns"]["background_processing"] = ToBytes(bool{true});
+    // [OpenPak] Not in the firmware's archive; the modules read it at start.
+    ret["pl.authorization"]["function_blacklist_system_data_debug_mode"] = ToBytes(bool{false});
+
     // Mii
     ret["mii"]["is_db_test_mode_enabled"] = ToBytes(bool{false});
 
@@ -742,6 +832,15 @@ static Settings GetSettings() {
     // Error
     ret["err"]["applet_auto_close"] = ToBytes(bool{false});
 
+    // [OpenPak] Everything the firmware defines and Harbor does not override.
+    if (system != nullptr) {
+        for (const auto& [category, names] : FirmwareDefaultSettings(*system)) {
+            auto& into = ret[category];
+            for (const auto& [name, value] : names) {
+                into.try_emplace(name, value);
+            }
+        }
+    }
     return ret;
 }
 
@@ -755,7 +854,7 @@ Result ISystemSettingsServer::GetSettingsItemValueSize(
 
     *out_size = 0;
 
-    auto settings{GetSettings()};
+    auto settings{GetSettings(&system)};
     if (settings.contains(setting_category) && settings[setting_category].contains(setting_name)) {
         *out_size = settings[setting_category][setting_name].size();
     } else {
@@ -777,7 +876,7 @@ Result ISystemSettingsServer::GetSettingsItemValue(
 
     LOG_INFO(Service_SET, "called, category={}, name={}", setting_category, setting_name);
 
-    const auto settings{GetSettings()};
+    const auto settings{GetSettings(&system)};
     if (!settings.contains(setting_category) ||
         !settings.at(setting_category).contains(setting_name)) {
         // As GetSettingsItemValueSize: success, nothing written, size 0.
@@ -1629,7 +1728,7 @@ void ISystemSettingsServer::SetSaveNeeded() {
 Result ISystemSettingsServer::GetSettingsItemValueImpl(std::span<u8> out_value, u64& out_size,
                                                        const std::string& category,
                                                        const std::string& name) {
-    auto settings{GetSettings()};
+    auto settings{GetSettings(&system)};
     R_UNLESS(settings.contains(category) && settings[category].contains(name), ResultUnknown);
 
     // A guest buffer smaller than the value gets what fits, and the size copied.

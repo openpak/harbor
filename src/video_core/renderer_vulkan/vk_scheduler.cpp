@@ -75,10 +75,18 @@ bool Scheduler::CommandChunk::ExecuteAll(vk::CommandBuffer cmdbuf,
             command->Execute(cmdbuf, upload_cmdbuf);
         } catch (const vk::Exception& exception) {
             // Harbor: a lost GPU stops the console instead of aborting the process; anything
-            // else is still fatal. The remaining commands still run (and are destroyed), so the
-            // chunk is reusable.
-            if (exception.GetResult() != VK_ERROR_DEVICE_LOST) {
+            // else is still fatal. Running out of device memory while recording or submitting
+            // (Adreno, Mario Golf and Mario Party on the ROG 3) cannot be recovered mid-chunk
+            // either, so it is handled as a loss rather than an uncaught-exception abort. The
+            // remaining commands still run (and are destroyed), so the chunk is reusable.
+            const VkResult result = exception.GetResult();
+            if (result != VK_ERROR_DEVICE_LOST && result != VK_ERROR_OUT_OF_DEVICE_MEMORY &&
+                result != VK_ERROR_OUT_OF_HOST_MEMORY) {
                 throw;
+            }
+            if (result != VK_ERROR_DEVICE_LOST) {
+                LOG_ERROR(Render_Vulkan, "harbor: {} in a queued GPU command; stopping the console",
+                          static_cast<int>(result));
             }
             device_ok = false;
         }
@@ -542,6 +550,12 @@ u64 Scheduler::SubmitExecution(VkSemaphore signal_semaphore, VkSemaphore wait_se
         case VK_ERROR_DEVICE_LOST:
             // Harbor: no exception (it would leave this thread and abort the process). The loss
             // handlers stop the console; nothing submitted from now on will signal.
+            OnDeviceLost();
+            break;
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+        case VK_ERROR_OUT_OF_HOST_MEMORY:
+            LOG_ERROR(Render_Vulkan, "harbor: vkQueueSubmit ran out of memory ({}); stopping the console",
+                      static_cast<int>(result));
             OnDeviceLost();
             break;
         default:

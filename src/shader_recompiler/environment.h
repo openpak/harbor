@@ -66,6 +66,9 @@ struct ConstBufferAddr {
     IR::U32 dynamic_offset;
     u32 count;
     bool has_secondary;
+    // Nonzero when the constant buffer holds a pointer to an array of texture handles.
+    u32 storage_stride{};
+    u32 storage_offset{};
 };
 
 class Environment {
@@ -75,6 +78,9 @@ public:
     [[nodiscard]] virtual u64 ReadInstruction(u32 address) = 0;
 
     [[nodiscard]] virtual u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) = 0;
+
+    [[nodiscard]] virtual u32 ReadStorageBufferValue(u32 cbuf_index, u32 cbuf_offset,
+                                                     u32 byte_offset) = 0;
 
     [[nodiscard]] virtual TextureType ReadTextureType(u32 raw_handle) = 0;
 

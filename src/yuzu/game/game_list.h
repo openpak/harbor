@@ -75,7 +75,7 @@ public:
     void SetFilterVisible(bool visibility);
     bool IsEmpty() const;
 
-    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs, bool content_only = false);
 
     void SaveInterfaceLayout();
     void LoadInterfaceLayout();

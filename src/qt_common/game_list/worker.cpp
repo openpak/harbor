@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -21,6 +22,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
+#include "common/string_util.h"
 #include "core/core.h"
 #include "core/file_sys/card_image.h"
 #include "core/file_sys/content_archive.h"
@@ -241,10 +243,10 @@ GameListWorker::GameListWorker(FileSys::VirtualFilesystem vfs_,
                                FileSys::ManualContentProvider* provider_,
                                QVector<UISettings::GameDir>& game_dirs_,
                                const PlayTime::PlayTimeManager& play_time_manager_,
-                               Core::System& system_)
+                               Core::System& system_, bool content_only_)
     : vfs{std::move(vfs_)}, provider{provider_}, game_dirs{game_dirs_},
       play_time_manager{play_time_manager_},
-      system{system_} {
+      system{system_}, content_only{content_only_} {
     // We want the game list to manage our lifetime.
     setAutoDelete(false);
 }
@@ -377,6 +379,21 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
                 return skip("not readable");
             }
 
+            // Registration does not need a loader's icon/title/program pass. NSP/XCI
+            // containers already carry all the provider metadata, and NSPs are cached.
+            const auto extension = Common::ToLower(file->GetExtension());
+            if (target == ScanTarget::FillManualContentProvider &&
+                Settings::values.ext_content_from_game_dirs.GetValue() &&
+                (extension == "nsp" || extension == "xci")) {
+                if (!provider->AddEntriesFromContainer(
+                        file, false, std::nullopt,
+                        split_part ? Common::FS::PathToUTF8String(path.parent_path())
+                                   : std::string{})) {
+                    return skip("not a readable content container");
+                }
+                return true;
+            }
+
             auto loader = Loader::GetLoader(system, file);
             if (!loader) {
                 return skip("not a known game format");
@@ -467,6 +484,7 @@ void GameListWorker::ScanFileSystem(ScanTarget target, const std::string& dir_pa
 }
 
 void GameListWorker::run() {
+    const auto scan_started = std::chrono::steady_clock::now();
     watch_list.clear();
     provider->ClearAllEntries();
 
@@ -501,17 +519,27 @@ void GameListWorker::run() {
             scan = true;
         }
 
-        DirEntryReady(game_list_dir);
+        if (!content_only) {
+            DirEntryReady(game_list_dir);
+        }
         if (scan) {
             ScanFileSystem(ScanTarget::FillManualContentProvider, game_dir.path, game_dir.deep_scan,
                            game_list_dir);
-            ScanFileSystem(ScanTarget::PopulateGameList, game_dir.path, game_dir.deep_scan,
-                           game_list_dir);
-        } else {
+            if (!content_only) {
+                ScanFileSystem(ScanTarget::PopulateGameList, game_dir.path, game_dir.deep_scan,
+                               game_list_dir);
+            }
+        } else if (!content_only) {
             AddTitlesToGameList(game_list_dir);
+        }
+        if (content_only) {
+            delete game_list_dir;
         }
     }
 
+    LOG_INFO(Frontend, "Harbor library registration completed in {:.3f} seconds ({})",
+             std::chrono::duration<double>(std::chrono::steady_clock::now() - scan_started).count(),
+             content_only ? "console content only" : "desktop game list");
     RecordEvent([this](GameListModel* model) { model->DonePopulating(watch_list); });
     processing_completed.Set();
 }

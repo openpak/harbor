@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <iterator>
 #include <utility>
@@ -18,6 +19,9 @@
 
 // For FileTimeStampRaw
 #include <sys/stat.h>
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <sys/xattr.h>
+#endif
 
 #ifdef _MSC_VER
 #define stat _stat64
@@ -221,8 +225,32 @@ std::unique_lock<std::mutex> RealVfsFilesystem::RefreshReference(const std::stri
     if (!reference.file) {
         this->EvictSingleReferenceLocked();
 
-        reference.file =
-            FS::FileOpen(path, ModeFlagsToFileAccessMode(perms), FS::FileType::BinaryFile);
+#if defined(__linux__) && !defined(__ANDROID__)
+        // mergerfs exposes the backing file selected by its own lookup policy. Reading
+        // immutable packages directly avoids a FUSE round trip for every small seek/read.
+        // Keep the logical path for library identity, and route writes through the mount.
+        if (perms == OpenMode::Read) {
+            std::array<char, 4096> backing{};
+            const auto length = getxattr(path.c_str(), "user.mergerfs.fullpath", backing.data(),
+                                        backing.size() - 1);
+            if (length > 0 && static_cast<std::size_t>(length) < backing.size()) {
+                struct stat logical_stat{}, backing_stat{};
+                if (stat(path.c_str(), &logical_stat) == 0 &&
+                    stat(backing.data(), &backing_stat) == 0 &&
+                    S_ISREG(backing_stat.st_mode) &&
+                    logical_stat.st_size == backing_stat.st_size &&
+                    logical_stat.st_mtim.tv_sec == backing_stat.st_mtim.tv_sec &&
+                    logical_stat.st_mtim.tv_nsec == backing_stat.st_mtim.tv_nsec) {
+                    reference.file = FS::FileOpen(backing.data(), FS::FileAccessMode::Read,
+                                                   FS::FileType::BinaryFile);
+                }
+            }
+        }
+#endif
+        if (!reference.file) {
+            reference.file =
+                FS::FileOpen(path, ModeFlagsToFileAccessMode(perms), FS::FileType::BinaryFile);
+        }
         if (reference.file) {
             num_open_files++;
         }

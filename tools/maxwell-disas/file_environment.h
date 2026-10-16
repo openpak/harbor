@@ -24,6 +24,9 @@ public:
         return code[(address - read_lowest) / sizeof(u64)];
     }
     [[nodiscard]] u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) override { return 0; }
+    [[nodiscard]] u32 ReadStorageBufferValue(u32, u32, u32) override {
+      return 0;
+    }
     [[nodiscard]] Shader::TextureType ReadTextureType(u32 handle) override {
         auto const it{texture_types.find(handle)};
         return it->second;

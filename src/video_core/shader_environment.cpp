@@ -39,6 +39,10 @@ static u64 MakeCbufKey(u32 index, u32 offset) {
     return (static_cast<u64>(index) << 32) | offset;
 }
 
+static u64 MakeStorageKey(u32 index, u32 cbuf_offset, u32 byte_offset) {
+    return (static_cast<u64>(index) << 48) | (static_cast<u64>(cbuf_offset) << 32) | byte_offset;
+}
+
 static Shader::TextureType ConvertTextureType(const Tegra::Texture::TICEntry& entry) {
     switch (entry.texture_type) {
     case Tegra::Texture::TextureType::Texture1D:
@@ -126,6 +130,14 @@ GenericEnvironment::GenericEnvironment(Tegra::MemoryManager& gpu_memory_, GPUVAd
 
 GenericEnvironment::~GenericEnvironment() = default;
 
+u32 GenericEnvironment::ReadStorageBufferValue(u32 cbuf_index, u32 cbuf_offset, u32 byte_offset) {
+    const u64 address = static_cast<u64>(ReadCbufValue(cbuf_index, cbuf_offset)) |
+                        (static_cast<u64>(ReadCbufValue(cbuf_index, cbuf_offset + 4)) << 32);
+    const u32 value = address != 0 ? gpu_memory->Read<u32>(address + byte_offset) : 0;
+    storage_values.emplace(MakeStorageKey(cbuf_index, cbuf_offset, byte_offset), value);
+    return value;
+}
+
 u32 GenericEnvironment::TextureBoundBuffer() const {
     return texture_bound;
 }
@@ -203,6 +215,7 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
     const u64 num_texture_pixel_formats{static_cast<u64>(texture_pixel_formats.size())};
     const u64 num_cbuf_values{static_cast<u64>(cbuf_values.size())};
     const u64 num_cbuf_replacement_values{static_cast<u64>(cbuf_replacements.size())};
+    const u64 num_storage_values{static_cast<u64>(storage_values.size())};
 
     file.write(reinterpret_cast<const char*>(&code_size), sizeof(code_size))
         .write(reinterpret_cast<const char*>(&num_texture_types), sizeof(num_texture_types))
@@ -211,6 +224,7 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
         .write(reinterpret_cast<const char*>(&num_cbuf_values), sizeof(num_cbuf_values))
         .write(reinterpret_cast<const char*>(&num_cbuf_replacement_values),
                sizeof(num_cbuf_replacement_values))
+        .write(reinterpret_cast<const char*>(&num_storage_values), sizeof(num_storage_values))
         .write(reinterpret_cast<const char*>(&local_memory_size), sizeof(local_memory_size))
         .write(reinterpret_cast<const char*>(&texture_bound), sizeof(texture_bound))
         .write(reinterpret_cast<const char*>(&start_address), sizeof(start_address))
@@ -235,6 +249,10 @@ void GenericEnvironment::Serialize(std::ofstream& file) const {
     for (const auto& [key, type] : cbuf_replacements) {
         file.write(reinterpret_cast<const char*>(&key), sizeof(key))
             .write(reinterpret_cast<const char*>(&type), sizeof(type));
+    }
+    for (const auto& [key, value] : storage_values) {
+        file.write(reinterpret_cast<const char*>(&key), sizeof(key))
+            .write(reinterpret_cast<const char*>(&value), sizeof(value));
     }
     if (stage == Shader::Stage::Compute) {
         file.write(reinterpret_cast<const char*>(&workgroup_size), sizeof(workgroup_size))
@@ -464,6 +482,7 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
     u64 num_texture_pixel_formats{};
     u64 num_cbuf_values{};
     u64 num_cbuf_replacement_values{};
+    u64 num_storage_values{};
     file.read(reinterpret_cast<char*>(&code_size), sizeof(code_size))
         .read(reinterpret_cast<char*>(&num_texture_types), sizeof(num_texture_types))
         .read(reinterpret_cast<char*>(&num_texture_pixel_formats),
@@ -471,6 +490,7 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
         .read(reinterpret_cast<char*>(&num_cbuf_values), sizeof(num_cbuf_values))
         .read(reinterpret_cast<char*>(&num_cbuf_replacement_values),
               sizeof(num_cbuf_replacement_values))
+        .read(reinterpret_cast<char*>(&num_storage_values), sizeof(num_storage_values))
         .read(reinterpret_cast<char*>(&local_memory_size), sizeof(local_memory_size))
         .read(reinterpret_cast<char*>(&texture_bound), sizeof(texture_bound))
         .read(reinterpret_cast<char*>(&start_address), sizeof(start_address))
@@ -508,6 +528,13 @@ void FileEnvironment::Deserialize(std::ifstream& file) {
             .read(reinterpret_cast<char*>(&value), sizeof(value));
         cbuf_replacements.emplace(key, value);
     }
+    for (size_t i = 0; i < num_storage_values; ++i) {
+        u64 key;
+        u32 value;
+        file.read(reinterpret_cast<char*>(&key), sizeof(key))
+            .read(reinterpret_cast<char*>(&value), sizeof(value));
+        storage_values.emplace(key, value);
+    }
     if (stage == Shader::Stage::Compute) {
         file.read(reinterpret_cast<char*>(&workgroup_size), sizeof(workgroup_size))
             .read(reinterpret_cast<char*>(&shared_memory_size), sizeof(shared_memory_size));
@@ -537,6 +564,14 @@ u32 FileEnvironment::ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) {
     const auto it{cbuf_values.find(MakeCbufKey(cbuf_index, cbuf_offset))};
     if (it == cbuf_values.end()) {
         throw Shader::LogicError("Uncached read texture type");
+    }
+    return it->second;
+}
+
+u32 FileEnvironment::ReadStorageBufferValue(u32 cbuf_index, u32 cbuf_offset, u32 byte_offset) {
+    const auto it = storage_values.find(MakeStorageKey(cbuf_index, cbuf_offset, byte_offset));
+    if (it == storage_values.end()) {
+        throw Shader::LogicError("Uncached storage buffer texture handle");
     }
     return it->second;
 }

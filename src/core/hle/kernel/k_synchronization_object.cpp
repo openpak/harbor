@@ -7,6 +7,8 @@
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/scratch_buffer.h"
+#include "common/logging.h"
+#include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_scheduler_lock_and_sleep.h"
 #include "core/hle/kernel/k_synchronization_object.h"
@@ -82,6 +84,19 @@ Result KSynchronizationObject::Wait(KernelCore& kernel, s32* out_index,
     // Prepare for wait.
     KThread* thread = GetCurrentThreadPointer(kernel);
     KHardwareTimer* timer{};
+
+    // [OpenPak] A null object is a host-side bug (an HLE wait list with an empty slot); name the
+    // caller instead of taking the whole emulator down with it.
+    for (auto i = 0; i < num_objects; ++i) {
+        if (objects[i] == nullptr) {
+            const auto* process = thread != nullptr ? thread->GetOwnerProcess() : nullptr;
+            LOG_CRITICAL(Kernel, "wait on a null object (index {} of {}) by thread {} of {} ({:016x})",
+                         i, num_objects, thread != nullptr ? thread->GetThreadId() : 0,
+                         process != nullptr ? process->GetName() : "host",
+                         process != nullptr ? process->GetProgramId() : 0);
+            R_THROW(ResultInvalidHandle);
+        }
+    }
     ThreadQueueImplForKSynchronizationObjectWait wait_queue(kernel, objects, thread_nodes.data(),
                                                             num_objects);
 

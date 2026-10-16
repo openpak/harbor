@@ -25,6 +25,7 @@
 #include <ranges>
 #include "common/settings.h"
 #include "common/settings_enums.h"
+#include "video_core/memory_budget.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -1628,6 +1629,22 @@ void Device::ReleaseCustomBorderColorSamplers(size_t count) const {
     custom_border_color_samplers_used.fetch_sub(count, std::memory_order_relaxed);
 }
 
+u64 Device::GetDeviceLocalMemory() const {
+    if (!is_integrated || !extensions.memory_budget) {
+        return device_access_memory;
+    }
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    physical.GetMemoryProperties(&budget);
+    u64 current_budget{};
+    for (const size_t heap : valid_heap_memory) {
+        current_budget += budget.heapBudget[heap];
+    }
+    // Usage is already compared with the cleanup limits by the caches. Do not
+    // subtract it again here: follow changes in the driver's total budget.
+    return VideoCommon::IntegratedMemoryBudget(current_budget, 0, device_access_memory);
+}
+
 u64 Device::GetDeviceMemoryUsage() const {
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budget;
     budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
@@ -1650,7 +1667,6 @@ void Device::CollectPhysicalMemoryInfo() {
     const size_t num_properties = mem_properties.memoryHeapCount;
     device_access_memory = 0;
     u64 device_initial_usage = 0;
-    u64 local_memory = 0;
     for (size_t element = 0; element < num_properties; ++element) {
         const bool is_heap_local =
             (mem_properties.memoryHeaps[element].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
@@ -1658,9 +1674,6 @@ void Device::CollectPhysicalMemoryInfo() {
             continue;
         }
         valid_heap_memory.push_back(element);
-        if (is_heap_local) {
-            local_memory += mem_properties.memoryHeaps[element].size;
-        }
         if (extensions.memory_budget) {
             device_initial_usage += budget.heapUsage[element];
             device_access_memory += budget.heapBudget[element];
@@ -1669,9 +1682,9 @@ void Device::CollectPhysicalMemoryInfo() {
         device_access_memory += mem_properties.memoryHeaps[element].size;
     }
     if (is_integrated) {
-        const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);
         const u64 memory_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Aggressive ? 6_GiB : 4_GiB;
-        device_access_memory = static_cast<u64>(std::max<s64>(std::min<s64>(available_memory - 8_GiB, memory_size), std::min<s64>(local_memory, memory_size)));
+        device_access_memory = VideoCommon::IntegratedMemoryBudget(
+            device_access_memory, device_initial_usage, memory_size);
     } else {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
         device_access_memory -= reserve_memory;

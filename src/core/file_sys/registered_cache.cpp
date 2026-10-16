@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <regex>
 #include <openssl/evp.h>
@@ -21,10 +23,13 @@
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/partition_filesystem.h"
+#include "core/file_sys/partition_filesystem.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs.h"
 #include "core/file_sys/submission_package.h"
 #include "core/file_sys/vfs/vfs_concat.h"
+#include "core/file_sys/vfs/vfs_offset.h"
 #include "core/loader/loader.h"
 
 namespace FileSys {
@@ -1291,17 +1296,179 @@ void ManualContentProvider::AddEntryWithVersion(TitleType title_type, ContentRec
     }
 }
 
+// Cache only container metadata, never keys, tickets or game bytes. Source size and
+// modification time invalidate it; unreadable or malformed caches take the normal parser path.
+template <typename Callback>
+static bool ForEachCachedNSP(const VirtualFile& file, bool only_content,
+                             std::optional<u64> base_program_id, Callback&& add_entry) {
+    using Json = nlohmann::json;
+    auto& keys = Core::Crypto::KeyManager::Instance();
+    const auto host_path = HostPathOf(file);
+    std::filesystem::path cache_path;
+    Json cache;
+    std::error_code error;
+    const auto stamp = std::filesystem::last_write_time(host_path, error);
+    const auto source_size = file->GetSize();
+    if (!host_path.empty() && !error) {
+        Core::Crypto::SHA256Hash hash{};
+        u32 hash_length{};
+        EVP_Digest(host_path.data(), host_path.size(), hash.data(), &hash_length,
+                   EVP_sha256(), nullptr);
+        cache_path = Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
+                     "container-metadata-v1" /
+                     fmt::format("{}-{}-{:016X}.json", Common::HexToString(hash),
+                                 only_content ? "content" : "all", base_program_id.value_or(0));
+        try {
+            std::ifstream input(cache_path);
+            if (input) {
+                cache = Json::parse(input);
+            }
+            if (!cache.is_object() || cache.at("schema") != 1 ||
+                cache.at("path") != host_path || cache.at("size") != source_size ||
+                cache.at("mtime") != stamp.time_since_epoch().count()) {
+                cache = nullptr;
+            }
+        } catch (const std::exception&) {
+            cache = nullptr;
+        }
+    }
+
+    const auto decode_file = [&](const Json& row) -> VirtualFile {
+        const auto offset = row.at("offset").get<u64>();
+        const auto size = row.at("size").get<u64>();
+        if (offset > source_size || size > source_size - offset) {
+            throw std::runtime_error("Invalid cached container range");
+        }
+        return std::make_shared<OffsetVfsFile>(file, size, offset,
+                                               row.at("name").get<std::string>());
+    };
+    if (!cache.is_null()) {
+        try {
+            // Validate every row before changing the provider. A damaged cache must not
+            // leave a partial library behind when parsing falls back to the real NSP.
+            const auto& rows = cache.at("entries");
+            const auto& tickets = cache.at("tickets");
+            if (!rows.is_array() || rows.empty() || rows.size() > 4096 ||
+                !tickets.is_array() || tickets.size() > 4096) {
+                throw std::runtime_error("Invalid cached container rows");
+            }
+            struct Entry {
+                TitleType title_type;
+                ContentRecordType content_type;
+                u64 title_id;
+                VirtualFile file;
+                u32 version;
+                std::string version_string;
+            };
+            std::vector<Entry> decoded;
+            for (const auto& row : rows) {
+                const auto title_type = row.at("title_type").get<u32>();
+                const auto content_type = row.at("content_type").get<u32>();
+                if (!((title_type >= 1 && title_type <= 5) ||
+                      (title_type >= 0x80 && title_type <= 0x84)) ||
+                    content_type >= static_cast<u32>(ContentRecordType::Count)) {
+                    throw std::runtime_error("Invalid cached content type");
+                }
+                decoded.push_back({static_cast<TitleType>(title_type),
+                                   static_cast<ContentRecordType>(content_type),
+                                   row.at("title_id").get<u64>(), decode_file(row),
+                                   row.at("version").get<u32>(),
+                                   row.at("version_string").get<std::string>()});
+            }
+            std::vector<VirtualFile> ticket_files;
+            for (const auto& row : tickets) {
+                ticket_files.push_back(decode_file(row));
+            }
+            // Ticket keys still come from the original container, as on a cold scan.
+            for (const auto& ticket_file : ticket_files) {
+                if (!keys.AddTicket(Core::Crypto::Ticket::Read(ticket_file))) {
+                    throw std::runtime_error("Cached container ticket could not be loaded");
+                }
+            }
+            for (const auto& entry : decoded) {
+                add_entry(entry.title_type, entry.content_type, entry.title_id, entry.file,
+                          entry.version, entry.version_string);
+            }
+            LOG_DEBUG(Service_FS, "Container metadata cache hit: {}", file->GetName());
+            return true;
+        } catch (const std::exception&) {
+            // A changed key set, corrupt cache or stale entry is recoverable.
+        }
+    }
+
+    const auto nsp = OpenContainerAsNsp(file, Loader::FileType::NSP);
+    if (!nsp) {
+        LOG_WARNING(Service_FS, "External content: skipped {}: not a readable NSP",
+                    file->GetName());
+        return false;
+    }
+    cache = {{"schema", 1}, {"path", host_path}, {"size", source_size},
+             {"mtime", stamp.time_since_epoch().count()},
+             {"entries", Json::array()}, {"tickets", Json::array()}};
+    bool cacheable = !cache_path.empty();
+    const PartitionFilesystem partition(file);
+    const auto offsets = partition.GetFileOffsets();
+    const auto sizes = partition.GetFileSizes();
+    const auto encode_file = [&](const VirtualFile& entry) -> Json {
+        const auto offset = offsets.find(entry->GetName());
+        const auto size = sizes.find(entry->GetName());
+        if (offset == offsets.end() || size == sizes.end() || size->second != entry->GetSize()) {
+            cacheable = false;
+            return nullptr;
+        }
+        return {{"offset", offset->second}, {"size", size->second},
+                {"name", entry->GetName()}};
+    };
+    const bool added = ForEachContainerEntry(nsp, only_content, base_program_id,
+        [&](TitleType title_type, ContentRecordType content_type, u64 title_id,
+            const VirtualFile& entry, u32 version, const std::string& version_string) {
+            add_entry(title_type, content_type, title_id, entry, version, version_string);
+            auto row = encode_file(entry);
+            if (!row.is_null()) {
+                row["title_type"] = static_cast<u32>(title_type);
+                row["content_type"] = static_cast<u32>(content_type);
+                row["title_id"] = title_id;
+                row["version"] = version;
+                row["version_string"] = version_string;
+                cache["entries"].push_back(std::move(row));
+            }
+        });
+    for (const auto& entry : nsp->GetFiles()) {
+        if (entry->GetExtension() == "tik") {
+            auto row = encode_file(entry);
+            if (!row.is_null()) {
+                cache["tickets"].push_back(std::move(row));
+            }
+        }
+    }
+    // Do not persist failures or an empty result, and never let a read-only/full cache
+    // directory stop a library scan. Replace atomically so interruption is recoverable.
+    if (cacheable && !cache["entries"].empty()) {
+        std::filesystem::create_directories(cache_path.parent_path(), error);
+        if (!error) {
+            const auto temporary = cache_path.string() + ".tmp";
+            std::ofstream output(temporary, std::ios::trunc);
+            output << cache.dump();
+            output.close();
+            if (output) {
+                std::filesystem::rename(temporary, cache_path, error);
+            }
+        }
+    }
+    return added;
+}
+
 bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_content,
                                                     std::optional<u64> base_program_id,
                                                     std::string source_path) {
-    const auto nsp = OpenContainerAsNsp(file, Loader::FileType::Unknown);
-    if (!nsp) {
+    const bool is_nsp = file && Common::ToLower(file->GetExtension()) == "nsp";
+    const auto nsp = is_nsp ? nullptr : OpenContainerAsNsp(file, Loader::FileType::Unknown);
+    if (!is_nsp && !nsp) {
         return false;
     }
 
     std::set<u64> title_ids;
-    const bool added = ForEachContainerEntry(
-        nsp, only_content, base_program_id,
+    const auto on_entry =
         [this, &title_ids, &file](TitleType title_type, ContentRecordType content_type, u64 title_id,
                            const VirtualFile& entry_file, u32 version,
                            const std::string& version_string) {
@@ -1319,7 +1486,10 @@ bool ManualContentProvider::AddEntriesFromContainer(VirtualFile file, bool only_
             } else {
                 AddEntry(title_type, content_type, title_id, entry_file);
             }
-        });
+        };
+    const bool added = is_nsp
+        ? ForEachCachedNSP(file, only_content, base_program_id, on_entry)
+        : ForEachContainerEntry(nsp, only_content, base_program_id, on_entry);
     if (auto path = source_path.empty() ? HostPathOf(file) : std::move(source_path);
         added && !path.empty()) {
         sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
@@ -1497,20 +1667,20 @@ void ExternalContentProvider::ScanDirectory(const VirtualDir& dir) {
 }
 
 void ExternalContentProvider::ProcessNSP(const VirtualFile& file) {
-    const auto nsp = OpenContainerAsNsp(file, Loader::FileType::NSP);
-    if (!nsp) {
-        // A broken or unreadable file is left out; the rest of the folder still loads.
-        LOG_WARNING(Service_FS, "External content: skipped {}: not a readable NSP",
-                    file->GetName());
-        return;
-    }
-
-    LOG_DEBUG(Service_FS, "Processing NSP file: {}", file->GetName());
-    std::set<u64> title_ids;
-    AddExternalEntriesFromContainer(nsp, entries, versions, multi_version_entries, &title_ids);
-    if (auto path = HostPathOf(file); !path.empty() && !title_ids.empty()) {
-        sources[std::move(path)].insert(title_ids.begin(), title_ids.end());
-    }
+    const auto host_path = HostPathOf(file);
+    ForEachCachedNSP(file, true, std::nullopt,
+        [&](TitleType title_type, ContentRecordType content_type, u64 title_id,
+            const VirtualFile& entry, u32 version, const std::string& version_string) {
+            entries[{title_id, content_type, title_type}] = entry;
+            if (title_type == TitleType::Update) {
+                versions[title_id] = version;
+                UpsertExternalVersionEntry(multi_version_entries, title_id, version,
+                                           version_string, content_type, entry);
+            }
+            if (!host_path.empty()) {
+                sources[host_path].insert(title_id);
+            }
+        });
 }
 
 void ExternalContentProvider::ProcessXCI(const VirtualFile& file) {

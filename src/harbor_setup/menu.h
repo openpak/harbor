@@ -248,11 +248,21 @@ enum class MenuPage {
 /// "Harbor stopped" (with its reason, Start again, Graphics driver on Adreno, Set up again, Exit),
 /// "Harbor cannot start" and the driver that did not load. The menu draws them into the frontend's
 /// own surface instead of the console's screen.
-enum class HostPageKind { Status, Stopped, CannotStart, DriverFailed };
+///
+/// Dialog is a system dialog (the console's confirmations and errors) stood on its own: `title`,
+/// `text` and its `buttons` along the bottom, the first one being B's (Cancel, Close) and the last
+/// one in the accent colour. What was chosen goes to `answered` (the menu's thread) once, as the
+/// button's index. While a dialog is up the console's controllers belong to it.
+enum class HostPageKind { Status, Stopped, CannotStart, DriverFailed, Dialog };
 
 struct HostPage {
     HostPageKind kind = HostPageKind::Status;
-    std::string text; ///< the status line, the stop reason or the driver problem
+    std::string text; ///< the status line, the stop reason or the driver problem; a dialog's body
+    // Dialog only.
+    std::string title;
+    std::vector<std::string> buttons;
+    int default_button = 0; ///< the button that has the focus first
+    std::function<void(int)> answered;
 };
 
 /// Receives each drawn picture of a host page (on the menu's thread).
@@ -292,6 +302,8 @@ void MenuShowHostPage(HostPage page, HostFrameSink sink);
 /// The surface goes away: the page closes and no picture is sent any more.
 void MenuEndHostPage();
 bool MenuHostPageShown();
+/// Whether a frontend host is set, that is whether host pages can be drawn at all.
+bool MenuHostReady();
 void MenuHostButton(HostButton button, bool pressed);
 /// A finger (or the mouse) on the surface: `x` and `y` from 0 to 1 across the picture.
 void MenuHostTouch(int id, float x, float y, bool down);

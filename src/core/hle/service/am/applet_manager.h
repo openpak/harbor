@@ -9,7 +9,9 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
+#include <vector>
 
 #include "core/hle/service/am/am_types.h"
 
@@ -125,6 +127,8 @@ private:
 
     FrontendAppletParameters m_pending_parameters{};
     std::unique_ptr<Process> m_pending_process{};
+    /// [OpenPak] The firmware's own friends and npns programs, when they run instead of the HLE modules.
+    std::vector<std::unique_ptr<Process>> m_real_firmware{};
 };
 
 } // namespace Service::AM

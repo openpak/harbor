@@ -500,7 +500,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
                 this, [this] { HarborConsoleStep(HarborConsoleConnected); }, Qt::QueuedConnection);
         });
     }
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
 
     // Set up game list mode checkboxes.
     SetGameListMode(UISettings::values.game_list_mode.GetValue());
@@ -520,7 +520,7 @@ MainWindow::MainWindow(bool has_broken_vulkan)
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
 
-        QMessageBox::warning(this, tr("Broken Vulkan Installation Detected"),
+        HarborDesktop::Warning(this, tr("Broken Vulkan Installation Detected"),
                              tr("Vulkan initialization failed during boot."));
 #ifdef HAS_OPENGL
         Settings::values.renderer_backend = Settings::RendererBackend::OpenGL_GLSL;
@@ -861,7 +861,7 @@ void MainWindow::HarborRestartConsole() {
     connect(
         game_list, &GameList::PopulatingCompleted, this,
         [this] { HarborConsoleStep(HarborConsoleScanned); }, Qt::SingleShotConnection);
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
 }
 
 /// Console mode: Eden's rooms and lobby are hidden (the Harbor menu is drawn on the console's screen).
@@ -1142,13 +1142,11 @@ void MainWindow::WebBrowserOpenWebPage(const std::string& main_url,
     ui->action_Stop->setEnabled(false);
 
     {
-        QProgressDialog loading_progress(this);
-        loading_progress.setLabelText(tr("Loading Web Applet..."));
-        loading_progress.setRange(0, 3);
-        loading_progress.setValue(0);
+        HarborDesktop::ProgressPage loading_progress(this, tr("Loading Web Applet..."), {}, 0, 3);
+        loading_progress.SetValue(0);
 
         if (is_local && !Common::FS::Exists(main_url)) {
-            loading_progress.show();
+            loading_progress.Show();
 
             auto future = QtConcurrent::run([this] { emit WebBrowserExtractOfflineRomFS(); });
 
@@ -1159,7 +1157,7 @@ void MainWindow::WebBrowserOpenWebPage(const std::string& main_url,
             }
         }
 
-        loading_progress.setValue(1);
+        loading_progress.SetValue(1);
 
         if (is_local) {
             web_applet->LoadLocalWebPage(main_url, additional_args);
@@ -1183,11 +1181,11 @@ void MainWindow::WebBrowserOpenWebPage(const std::string& main_url,
         web_applet->setFocus();
         web_applet->show();
 
-        loading_progress.setValue(2);
+        loading_progress.SetValue(2);
 
         QCoreApplication::processEvents();
 
-        loading_progress.setValue(3);
+        loading_progress.SetValue(3);
     }
 
     bool exit_check = false;
@@ -1195,7 +1193,7 @@ void MainWindow::WebBrowserOpenWebPage(const std::string& main_url,
     // TODO (Morph): Remove this
     QAction* exit_action = new QAction(tr("Disable Web Applet"), this);
     connect(exit_action, &QAction::triggered, this, [this] {
-        const auto result = QMessageBox::warning(
+        const auto result = HarborDesktop::Warning(
             this, tr("Disable Web Applet"),
             tr("Disabling the web applet can lead to undefined behavior and should only be used "
                "with Super Mario 3D All-Stars. Are you sure you want to disable the web "
@@ -2196,7 +2194,7 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         drd_callout) {
         UISettings::values.callout_flags = UISettings::values.callout_flags.GetValue() |
                                            static_cast<u32>(CalloutFlag::DRDDeprecation);
-        QMessageBox::warning(
+        HarborDesktop::Warning(
             this, tr("Warning: Outdated Game Format"),
             tr("You are using the deconstructed ROM directory format for this game, which is an "
                "outdated format that has been superseded by others such as NCA, NAX, XCI, or "
@@ -2209,11 +2207,11 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
         switch (result) {
         case Core::SystemResultStatus::ErrorGetLoader:
             LOG_CRITICAL(Frontend, "Failed to obtain loader for {}!", filename.toStdString());
-            QMessageBox::critical(this, tr("Error while loading ROM!"),
+            HarborDesktop::Critical(this, tr("Error while loading ROM!"),
                                   tr("The ROM format is not supported."));
             break;
         case Core::SystemResultStatus::ErrorVideoCore:
-            QMessageBox::critical(
+            HarborDesktop::Critical(
                 this, tr("An error occurred initializing the video core."),
                 tr("This is usually caused by outdated GPU drivers. "
                    "Please see the log for more details. See: "
@@ -2236,9 +2234,9 @@ bool MainWindow::LoadROM(const QString& filename, Service::AM::FrontendAppletPar
                         .arg(QString::fromStdString(
                             GetResultStatusString(static_cast<Loader::ResultStatus>(error_id))));
 
-                QMessageBox::critical(this, title, description);
+                HarborDesktop::Critical(this, title, description);
             } else {
-                QMessageBox::critical(
+                HarborDesktop::Critical(
                     this, tr("Error while loading ROM!"),
                     tr("An unknown error occurred. Please see the log for more details."));
             }
@@ -2501,10 +2499,9 @@ bool MainWindow::OnShutdownBegin() {
 }
 
 void MainWindow::OnShutdownBeginDialog() {
-    shutdown_dialog =
-        new OverlayDialog(this, *QtCommon::system, QString{}, tr("Closing software..."), QString{},
-                          QString{}, Qt::AlignHCenter | Qt::AlignVCenter);
-    shutdown_dialog->open();
+    // Harbor: the status page of Borealis over the window, as the other Harbor screens.
+    shutdown_page = std::make_unique<HarborDesktop::ProgressPage>(this, tr("Closing software..."));
+    shutdown_page->Show();
 }
 
 void MainWindow::OnEmulationStopTimeExpired() {
@@ -2521,10 +2518,7 @@ void MainWindow::OnEmulationStopped() {
         QtCommon::emu_thread.reset();
     }
 
-    if (shutdown_dialog) {
-        shutdown_dialog->deleteLater();
-        shutdown_dialog = nullptr;
-    }
+    shutdown_page.reset();
 
     emulation_running = false;
 
@@ -2745,7 +2739,7 @@ void MainWindow::OnGameListOpenFolder(u64 program_id, GameListOpenTarget target,
     const QString qpath = QString::fromStdString(Common::FS::PathToUTF8String(path));
     const QDir dir(qpath);
     if (!dir.exists()) {
-        QMessageBox::warning(this, tr("Error Opening %1 Folder").arg(open_target),
+        HarborDesktop::Warning(this, tr("Error Opening %1 Folder").arg(open_target),
                              tr("Folder does not exist!"));
         return;
     }
@@ -2856,7 +2850,7 @@ void MainWindow::OnGameListRemoveInstalledEntry(u64 program_id,
     }
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
 }
 
 void MainWindow::OnGameListRemoveFile(u64 program_id, QtCommon::Game::GameListRemoveTarget target,
@@ -2910,25 +2904,25 @@ void MainWindow::OnGameListSetPlayTime(u64 program_id) {
     if (dialog.exec() == QDialog::Accepted) {
         const u64 total_seconds = dialog.GetTotalSeconds();
         play_time_manager->SetPlayTime(program_id, total_seconds);
-        game_list->PopulateAsync(UISettings::values.game_dirs);
+        game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
     }
 }
 
 void MainWindow::OnGameListRemovePlayTimeData(u64 program_id) {
-    if (QMessageBox::question(this, tr("Remove Play Time Data"), tr("Reset play time?"),
+    if (HarborDesktop::Question(this, tr("Remove Play Time Data"), tr("Reset play time?"),
                               QMessageBox::Yes | QMessageBox::No,
                               QMessageBox::No) != QMessageBox::Yes) {
         return;
     }
 
     play_time_manager->ResetProgramPlayTime(program_id);
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
 }
 
 void MainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_path,
                                      DumpRomFSTarget target) {
     const auto failed = [this] {
-        QMessageBox::warning(this, tr("RomFS Extraction Failed!"),
+        HarborDesktop::Warning(this, tr("RomFS Extraction Failed!"),
                              tr("There was an error copying the RomFS files or the user "
                                 "cancelled the operation."));
     };
@@ -3013,7 +3007,7 @@ void MainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pat
     const auto minimum_free_space = romfs->GetSize() + 0x40000000;
 
     if (full && Common::FS::GetFreeSpaceSize(path) < minimum_free_space) {
-        QMessageBox::warning(this, tr("RomFS Extraction Failed!"),
+        HarborDesktop::Warning(this, tr("RomFS Extraction Failed!"),
                              tr("There is not enough free space at %1 to extract the RomFS. Please "
                                 "free up space or select a different dump directory at "
                                 "Emulation > Configure > System > Filesystem > Dump Root")
@@ -3031,7 +3025,7 @@ void MainWindow::OnGameListDumpRomFS(u64 program_id, const std::string& game_pat
 
     if (RomFSRawCopy(romfs->GetSize(), read_size, progress, extracted, out, full)) {
         progress.close();
-        QMessageBox::information(this, tr("RomFS Extraction Succeeded!"),
+        HarborDesktop::Information(this, tr("RomFS Extraction Succeeded!"),
                                  tr("The operation completed successfully."));
         QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(path)));
     } else {
@@ -3078,7 +3072,7 @@ void MainWindow::OnGameListOpenDirectory(const QString& directory) {
     const auto qt_path = QString::fromStdString(Common::FS::PathToUTF8String(fs_path));
 
     if (!Common::FS::IsDir(fs_path)) {
-        QMessageBox::critical(this, tr("Error Opening %1").arg(qt_path),
+        HarborDesktop::Critical(this, tr("Error Opening %1").arg(qt_path),
                               tr("Folder does not exist!"));
         return;
     }
@@ -3095,7 +3089,7 @@ void MainWindow::OnGameListAddDirectory() {
     UISettings::GameDir game_dir{dir_path.toStdString(), false, true};
     if (!UISettings::values.game_dirs.contains(game_dir)) {
         UISettings::values.game_dirs.append(game_dir);
-        game_list->PopulateAsync(UISettings::values.game_dirs);
+        game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
     } else {
         LOG_WARNING(Frontend, "Selected directory is already in the game list");
     }
@@ -3116,7 +3110,7 @@ void MainWindow::OnGameListOpenPerGameProperties(const std::string& file) {
     const auto loader = Loader::GetLoader(*QtCommon::system, v_file);
 
     if (loader == nullptr || loader->ReadProgramId(title_id) != Loader::ResultStatus::Success) {
-        QMessageBox::information(this, tr("Properties"),
+        HarborDesktop::Information(this, tr("Properties"),
                                  tr("The game properties could not be loaded."));
         return;
     }
@@ -3207,7 +3201,7 @@ void MainWindow::OnMenuLoadFolder() {
     if (matching_main.size() == 1) {
         BootGame(dir.path() + QDir::separator() + matching_main[0], ApplicationAppletParameters());
     } else {
-        QMessageBox::warning(this, tr("Invalid Directory Selected"),
+        HarborDesktop::Warning(this, tr("Invalid Directory Selected"),
                              tr("The directory you have selected does not contain a 'main' file."));
     }
 }
@@ -3325,7 +3319,7 @@ void MainWindow::OnMenuInstallToNAND() {
     install_progress->close();
 
     if (detected_base_install) {
-        QMessageBox::warning(
+        HarborDesktop::Warning(
             this, tr("Install Results"),
             tr("To avoid possible conflicts, we discourage users from installing base games to the "
                "NAND.\nPlease, only use this feature to install updates and DLC."));
@@ -3340,10 +3334,10 @@ void MainWindow::OnMenuInstallToNAND() {
         (failed_files.isEmpty() ? QString{}
                                 : tr("%n file(s) failed to install\n", "", failed_files.size()));
 
-    QMessageBox::information(this, tr("Install Results"), install_results);
+    HarborDesktop::Information(this, tr("Install Results"), install_results);
     Common::FS::RemoveDirRecursively(Common::FS::GetEdenPath(Common::FS::EdenPath::CacheDir) /
                                      "game_list");
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
     ui->action_Install_File_NAND->setEnabled(true);
 }
 
@@ -3366,7 +3360,7 @@ ContentManager::InstallResult MainWindow::InstallNCA(const QString& filename) {
 
     auto index = tt_options.indexOf(item);
     if (!ok || index == -1) {
-        QMessageBox::warning(this, tr("Failed to Install"),
+        HarborDesktop::Warning(this, tr("Failed to Install"),
                              tr("The title type you selected for the NCA is invalid."));
         return ContentManager::InstallResult::Failure;
     }
@@ -3402,7 +3396,7 @@ void MainWindow::OnMenuRecentFile() {
         BootGame(filename, ApplicationAppletParameters());
     } else {
         // Display an error message and remove the file from the list.
-        QMessageBox::information(this, tr("File not found"),
+        HarborDesktop::Information(this, tr("File not found"),
                                  tr("File \"%1\" not found").arg(filename));
 
         UISettings::values.recent_files.removeOne(filename);
@@ -3460,7 +3454,7 @@ void MainWindow::OnStopGame() {
     if (ConfirmShutdownGame()) {
         play_time_manager->Stop();
         // Update game list to show new play time
-        game_list->PopulateAsync(UISettings::values.game_dirs);
+        game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
         if (OnShutdownBegin()) {
             OnShutdownBeginDialog();
         } else {
@@ -3540,6 +3534,12 @@ void MainWindow::OnSaveConfig() {
 }
 
 void MainWindow::ErrorDisplayDisplayError(QString error_code, QString error_text) {
+    // Harbor: the console's error layout in Borealis (the code as the title, one OK); Eden's
+    // overlay only when Borealis cannot be drawn.
+    if (HarborDesktop::Ask(this, error_code, error_text, {tr("OK")}) >= 0) {
+        emit ErrorDisplayFinished();
+        return;
+    }
     error_applet = new OverlayDialog(render_window, *QtCommon::system, error_code, error_text,
                                      QString{}, tr("OK"), Qt::AlignLeft | Qt::AlignVCenter);
     SCOPE_EXIT {
@@ -3552,6 +3552,7 @@ void MainWindow::ErrorDisplayDisplayError(QString error_code, QString error_text
 }
 
 void MainWindow::ErrorDisplayRequestExit() {
+    HarborDesktop::CloseAsk();
     if (error_applet) {
         error_applet->reject();
     }
@@ -3602,7 +3603,7 @@ void MainWindow::OnMenuReportCompatibility() {
 void MainWindow::OpenURL(const QUrl& url) {
     const bool open = QDesktopServices::openUrl(url);
     if (!open) {
-        QMessageBox::warning(this, tr("Error opening URL"),
+        HarborDesktop::Warning(this, tr("Error opening URL"),
                              tr("Unable to open the URL \"%1\".").arg(url.toString()));
     }
 }
@@ -3899,7 +3900,7 @@ void MainWindow::OnConfigure() {
 
     const auto reload = UISettings::values.is_game_list_reload_pending.exchange(false);
     if (reload || Settings::values.language_index.GetValue() != old_language_index) {
-        game_list->PopulateAsync(UISettings::values.game_dirs);
+        game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
     }
 
     UISettings::values.configuration_applied = false;
@@ -4005,7 +4006,7 @@ void MainWindow::OnToggleDockedMode() {
         // Harbor console mode (and the scripted test harness) switch silently, as the Ryujinx
         // Harbor does: a modal dialog would block the harness.
         if (!harbor_console && !harbor_control) {
-            QMessageBox::warning(this, tr("Invalid config detected"),
+            HarborDesktop::Warning(this, tr("Invalid config detected"),
                                  tr("Handheld controller can't be used on docked mode. Pro "
                                     "controller will be selected."));
         }
@@ -4158,12 +4159,12 @@ void MainWindow::OnLoadAmiibo() {
     // Remove amiibo if one is connected
     if (virtual_amiibo->GetCurrentState() == InputCommon::VirtualAmiibo::State::TagNearby) {
         virtual_amiibo->CloseAmiibo();
-        QMessageBox::warning(this, tr("Amiibo"), tr("The current amiibo has been removed"));
+        HarborDesktop::Warning(this, tr("Amiibo"), tr("The current amiibo has been removed"));
         return;
     }
 
     if (virtual_amiibo->GetCurrentState() != InputCommon::VirtualAmiibo::State::WaitingForAmiibo) {
-        QMessageBox::warning(this, tr("Error"), tr("The current game is not looking for amiibos"));
+        HarborDesktop::Warning(this, tr("Error"), tr("The current game is not looking for amiibos"));
         return;
     }
 
@@ -4180,27 +4181,13 @@ void MainWindow::OnLoadAmiibo() {
     LoadAmiibo(filename);
 }
 
-// TODO(crueter): does this need to be ported to QML?
+// Harbor: a Borealis dialog (harbor_desktop.h), driven by the keyboard, the mouse and the
+// console's controllers like every Harbor screen.
 bool MainWindow::question(QWidget* parent, const QString& title, const QString& text,
                           QMessageBox::StandardButtons buttons,
                           QMessageBox::StandardButton defaultButton) {
-    QMessageBox* box_dialog = new QMessageBox(parent);
-    box_dialog->setWindowTitle(title);
-    box_dialog->setText(text);
-    box_dialog->setStandardButtons(buttons);
-    box_dialog->setDefaultButton(defaultButton);
-
-    ControllerNavigation* controller_navigation =
-        new ControllerNavigation(QtCommon::system->HIDCore(), box_dialog);
-    connect(controller_navigation, &ControllerNavigation::TriggerKeyboardEvent,
-            [box_dialog](Qt::Key key) {
-                QKeyEvent* event = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
-                QCoreApplication::postEvent(box_dialog, event);
-            });
-    int res = box_dialog->exec();
-
-    controller_navigation->UnloadController();
-    return res == QMessageBox::Yes;
+    return HarborDesktop::Message(parent, QMessageBox::Question, title, text, buttons,
+                                  defaultButton) == QMessageBox::Yes;
 }
 
 void MainWindow::LoadAmiibo(const QString& filename) {
@@ -4209,22 +4196,22 @@ void MainWindow::LoadAmiibo(const QString& filename) {
     // Remove amiibo if one is connected
     if (virtual_amiibo->GetCurrentState() == InputCommon::VirtualAmiibo::State::TagNearby) {
         virtual_amiibo->CloseAmiibo();
-        QMessageBox::warning(this, tr("Amiibo"), tr("The current amiibo has been removed"));
+        HarborDesktop::Warning(this, tr("Amiibo"), tr("The current amiibo has been removed"));
         return;
     }
 
     switch (virtual_amiibo->LoadAmiibo(filename.toStdString())) {
     case InputCommon::VirtualAmiibo::Info::NotAnAmiibo:
-        QMessageBox::warning(this, title, tr("The selected file is not a valid amiibo"));
+        HarborDesktop::Warning(this, title, tr("The selected file is not a valid amiibo"));
         break;
     case InputCommon::VirtualAmiibo::Info::UnableToLoad:
-        QMessageBox::warning(this, title, tr("The selected file is already on use"));
+        HarborDesktop::Warning(this, title, tr("The selected file is already on use"));
         break;
     case InputCommon::VirtualAmiibo::Info::WrongDeviceState:
-        QMessageBox::warning(this, title, tr("The current game is not looking for amiibos"));
+        HarborDesktop::Warning(this, title, tr("The current game is not looking for amiibos"));
         break;
     case InputCommon::VirtualAmiibo::Info::Unknown:
-        QMessageBox::warning(this, title, tr("An unknown error occurred"));
+        HarborDesktop::Warning(this, title, tr("An unknown error occurred"));
         break;
     default:
         break;
@@ -4273,7 +4260,7 @@ void MainWindow::OnInstallDecryptionKeys() {
 
     QtCommon::Content::InstallKeys();
 
-    game_list->PopulateAsync(UISettings::values.game_dirs);
+    game_list->PopulateAsync(UISettings::values.game_dirs, harbor_console);
     OnCheckFirmwareDecryption();
 }
 
@@ -4344,11 +4331,11 @@ void MainWindow::LaunchFirmwareApplet(u64 raw_program_id,
     using namespace QtCommon::StringLookup;
     switch (result) {
     case FirmwareManager::ErrorFirmwareMissing:
-        QMessageBox::warning(this, tr("No firmware available"),
+        HarborDesktop::Warning(this, tr("No firmware available"),
                              Lookup(FwCheckErrorFirmwareMissing));
         return;
     case FirmwareManager::ErrorFirmwareCorrupted:
-        QMessageBox::warning(this, tr("Firmware Corrupted"), Lookup(FwCheckErrorFirmwareCorrupted));
+        HarborDesktop::Warning(this, tr("Firmware Corrupted"), Lookup(FwCheckErrorFirmwareCorrupted));
         return;
     default:
         break;
@@ -4414,11 +4401,11 @@ void MainWindow::LaunchFirmwareApplet(u64 raw_program_id,
             UISettings::values.roms_path = QFileInfo(filename).path().toStdString();
             BootGame(filename, LibraryAppletParameters(u64(program_id), applet_id));
         } else {
-            QMessageBox::warning(this, tr("Unknown applet"),
+            HarborDesktop::Warning(this, tr("Unknown applet"),
                                  tr("Applet doesn't map to a known value."));
         }
     } else {
-        QMessageBox::warning(this, tr("Record not found"),
+        HarborDesktop::Warning(this, tr("Record not found"),
                              tr("Applet not found. Please reinstall firmware."));
     }
 }
@@ -4796,34 +4783,25 @@ void MainWindow::OnCheckGraphicsBackend() {
     if (currently_hidden)
         return;
 
-    QMessageBox msgbox(this);
-    msgbox.setWindowTitle(tr("Wayland Detected!"));
-    msgbox.setText(
+    // Cancel first (B), the choice that changes something last.
+    const int choice = HarborDesktop::Ask(
+        this, tr("Wayland Detected!"),
         tr("Wayland is known to have significant performance issues and mysterious bugs.\n"
            "It's recommended to use X11 instead.\n\n"
-           "Would you like to force it for future launches?"));
-    msgbox.setIcon(QMessageBox::Warning);
-
-    QPushButton* okButton = msgbox.addButton(tr("Use X11"), QMessageBox::AcceptRole);
-    msgbox.addButton(tr("Continue with Wayland"), QMessageBox::RejectRole);
-    msgbox.setDefaultButton(okButton);
-
-    QCheckBox* cb = new QCheckBox(tr("Don't show again"), &msgbox);
-    cb->setChecked(currently_hidden);
-    msgbox.setCheckBox(cb);
-
-    msgbox.exec();
-
-    const bool hide = cb->isChecked();
+           "Would you like to force it for future launches?"),
+        {tr("Continue with Wayland"), tr("Continue and don't ask again"), tr("Use X11")}, 2);
+    const bool use_x11 = choice == 2;
+    // "Don't ask again" is its own button; Use X11 also ends the question.
+    const bool hide = choice == 1 || use_x11;
     if (hide != currently_hidden) {
         UISettings::values.gui_hide_backend_warning.SetValue(hide);
     }
 
-    if (msgbox.clickedButton() == okButton) {
+    if (use_x11) {
         UISettings::values.gui_force_x11.SetValue(true);
         GraphicsBackend::SetForceX11(true);
-        QMessageBox::information(this, tr("Restart Required"),
-                                 tr("Restart Harbor to apply the X11 backend."));
+        HarborDesktop::Information(this, tr("Restart Required"),
+                                   tr("Restart Harbor to apply the X11 backend."));
     }
 }
 #endif

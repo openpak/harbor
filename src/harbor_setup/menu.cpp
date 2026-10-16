@@ -332,6 +332,7 @@ bool host_page_pending = false;   ///< guarded by mutex
 HostPage host_page;               ///< guarded by mutex
 HostFrameSink host_sink;          ///< guarded by mutex
 std::atomic_bool open_standalone{false}; ///< the open page is a host page (menu thread)
+bool host_took_input = false; ///< the open host page is a dialog: the console's input is the menu's
 std::mutex host_input_mutex;
 std::array<bool, 8> host_buttons{};
 std::map<int, std::pair<float, float>> host_touches;
@@ -547,6 +548,9 @@ void CloseNow() {
     open = false;
     if (open_standalone.exchange(false)) {
         LOG_INFO(Frontend, "harbor: host page closed");
+        if (std::exchange(host_took_input, false)) {
+            TakeConsoleInput(false);
+        }
         std::scoped_lock lk{host_input_mutex};
         host_buttons.fill(false);
         host_touches.clear();
@@ -583,6 +587,12 @@ void OpenHostNow(const HostPage& page) {
         open_standalone = true;
     }
     LOG_INFO(Frontend, "harbor: host page {}", static_cast<int>(page.kind));
+    // A dialog over a running console: the console gets no input while it is answered.
+    const bool take = page.kind == HostPageKind::Dialog;
+    if (take != host_took_input) {
+        TakeConsoleInput(take);
+        host_took_input = take;
+    }
     activity->ShowHost(page);
 }
 
@@ -983,6 +993,11 @@ void MenuEndHostPage() {
 bool MenuHostPageShown() {
     std::scoped_lock lk{mutex};
     return standalone;
+}
+
+bool MenuHostReady() {
+    std::scoped_lock lk{mutex};
+    return menu_host != nullptr && !failed;
 }
 
 void MenuHostButton(HostButton button, bool pressed) {

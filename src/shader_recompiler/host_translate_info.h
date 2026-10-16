@@ -18,6 +18,7 @@ struct HostTranslateInfo {
     static constexpr u32 DEFAULT_DESCRIPTOR_LIMIT = 1024;
 
     u64 min_ssbo_alignment{};            ///< Minimum alignment supported by the device for SSBOs
+    u32 max_per_stage_descriptor_samplers{};
     u32 max_per_stage_descriptor_sampled_images{}; ///< maximum sampled descriptors per stage
     u32 max_per_stage_resources{};                 ///< maximum resources per stage
     u32 max_descriptor_set_samplers{};
@@ -43,6 +44,7 @@ struct HostTranslateInfo {
         if (min_ssbo_alignment == 0) {
             min_ssbo_alignment = 1;
         }
+        ApplyDescriptorLimitFallback(max_per_stage_descriptor_samplers);
         ApplyDescriptorLimitFallback(max_per_stage_descriptor_sampled_images);
         ApplyDescriptorLimitFallback(max_per_stage_resources);
         ApplyDescriptorLimitFallback(max_descriptor_set_samplers);

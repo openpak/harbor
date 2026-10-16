@@ -11,6 +11,7 @@
 #include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "common/settings.h"
+#include "yuzu/harbor_desktop.h" // before the Vulkan headers: X11 defines Status
 #include "video_core/frame_gen/lossless_dll.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
 #include "video_core/vulkan_common/vulkan_library.h"
@@ -102,7 +103,7 @@ void ChooseDll(QWidget* parent, std::function<void(std::function<void()>)> chang
     const std::filesystem::path source = picked.toStdU16String();
     const auto valid = VideoCore::FrameGen::ValidateLosslessDll(source);
     if (valid != LosslessStatus::Ok) {
-        QMessageBox::warning(parent, QObject::tr("Frame generation"), StatusText(valid));
+        HarborDesktop::Warning(parent, QObject::tr("Frame generation"), StatusText(valid));
         return;
     }
     LosslessStatus result = LosslessStatus::Ok;
@@ -119,7 +120,7 @@ void ChooseDll(QWidget* parent, std::function<void(std::function<void()>)> chang
         LOG_INFO(Frontend, "harbor: Lossless.dll {}", result == LosslessStatus::Ok ? "installed" : "rejected");
     });
     if (result != LosslessStatus::Ok) {
-        QMessageBox::warning(parent, QObject::tr("Frame generation"), StatusText(result));
+        HarborDesktop::Warning(parent, QObject::tr("Frame generation"), StatusText(result));
     }
 }
 

@@ -102,8 +102,13 @@ Result IFileSystem::OpenFile(OutInterface<IFile> out_interface,
     LOG_DEBUG(Service_FS, "called. file={}, mode={}", path->str, mode);
 
     FileSys::VirtualFile vfs_file{};
-    R_TRY(backend->OpenFile(&vfs_file, FileSys::Path(path->str),
-                            static_cast<FileSys::OpenMode>(mode)));
+    const Result result = backend->OpenFile(&vfs_file, FileSys::Path(path->str),
+                                            static_cast<FileSys::OpenMode>(mode));
+    if (result.IsError()) {
+        // [OpenPak] A firmware module's missing file names the state it expects to exist.
+        LOG_INFO(Service_FS, "OpenFile {} mode {} -> {:#x}", path->str, mode, result.raw);
+        R_RETURN(result);
+    }
 
     *out_interface = std::make_shared<IFile>(system, vfs_file);
     R_SUCCEED();

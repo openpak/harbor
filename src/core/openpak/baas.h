@@ -110,6 +110,9 @@ void SetTransportForTest(Transport transport);
 /// guest's notification queue carries as a friend-list update.
 void SetFriendListChangedHook(std::function<void()> hook);
 
+/// Tell the friend list that what it draws changed (a title it asked the server to name arrived).
+void NotifyFriendListChanged();
+
 /// A request arrived that was not in the box before: the unread count went up, which is what the
 /// module's inbox parse signals and what the guest's notification queue carries as a
 /// new-friend-request event.

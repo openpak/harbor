@@ -240,6 +240,12 @@ public:
         return m_tls_address;
     }
 
+    // [OpenPak] A dummy thread that sends a request on a guest process's behalf gets a thread
+    // local region of that process as its message buffer (core/openpak/guest_client.cpp).
+    void SetTlsAddressForHostClient(KProcessAddress address) {
+        m_tls_address = address;
+    }
+
     /*
      * Returns the value of the TPIDR_EL0 Read/Write system register for this thread.
      * @returns The value of the TPIDR_EL0 register.

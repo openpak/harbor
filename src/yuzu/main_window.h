@@ -52,6 +52,7 @@ class HarborControl;
 class HarborMenu;
 namespace HarborDesktop {
 class HostPages;
+class ProgressPage;
 }
 class LoadingScreen;
 class OverlayDialog;
@@ -510,7 +511,7 @@ private:
     GameList* game_list = nullptr;
     LoadingScreen* loading_screen = nullptr;
     QTimer shutdown_timer;
-    OverlayDialog* shutdown_dialog{};
+    std::unique_ptr<HarborDesktop::ProgressPage> shutdown_page; ///< "Closing software..."
     PerformanceOverlay* perf_overlay = nullptr;
 #ifdef HAS_RESHADE
     ConfigurePostProcessing* post_processing_dialog = nullptr;

@@ -31,6 +31,7 @@
 #include "core/hle/service/erpt/report_builder.h"
 #include "core/hle/service/erpt/report_store.h"
 #include "core/hle/service/glue/time/static.h"
+#include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/psc/time/system_clock.h"
 #include "core/hle/service/server_manager.h"
@@ -708,6 +709,113 @@ private:
     }
 };
 
+// [OpenPak] sprof:bg / sprof:sp, the system profile services the erpt program hosts on a console.
+// olsc blocks at start until sprof:bg exists and qlaunch blocks on olsc:s, so HOME never shows
+// without them. The named port is nn::sprofile::srv::IServiceGetter (0 GetServiceForSystemProcess,
+// 1 GetServiceForBgAgent); the service opens a profile reader (100) and an update observer (101).
+// No profile is served: every reader value is zero and the observer's event never fires.
+class ISprofileReader final : public ServiceFramework<ISprofileReader> {
+public:
+    explicit ISprofileReader(Core::System& system_) : ServiceFramework{system_, "ISprofileReader"} {
+        std::vector<FunctionInfo> functions;
+        for (u32 id = 0; id < 16; ++id) {
+            functions.push_back({id, &ISprofileReader::Zero, "Get"});
+        }
+        RegisterHandlers(functions.data(), functions.size());
+    }
+
+private:
+    void Zero(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<u64>(0);
+    }
+};
+
+class ISprofileUpdateObserver final : public ServiceFramework<ISprofileUpdateObserver> {
+public:
+    explicit ISprofileUpdateObserver(Core::System& system_)
+        : ServiceFramework{system_, "ISprofileUpdateObserver"}, service_context{system_, "ISprofileUpdateObserver"} {
+        static const FunctionInfo functions[] = {
+            {0, &ISprofileUpdateObserver::Succeed, "Listen"},
+            {1, &ISprofileUpdateObserver::Succeed, "Unlisten"},
+            {2, &ISprofileUpdateObserver::GetEventHandle, "GetEventHandle"},
+        };
+        RegisterHandlers(functions);
+        event = service_context.CreateEvent("ISprofileUpdateObserver:Event");
+    }
+
+    ~ISprofileUpdateObserver() override {
+        service_context.CloseEvent(event);
+    }
+
+private:
+    void Succeed(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void GetEventHandle(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 1};
+        rb.Push(ResultSuccess);
+        rb.PushCopyObjects(ctx, &event->GetReadableEvent());
+    }
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* event{};
+};
+
+class ISprofileService final : public ServiceFramework<ISprofileService> {
+public:
+    explicit ISprofileService(Core::System& system_) : ServiceFramework{system_, "ISprofileService"} {
+        static const FunctionInfo functions[] = {
+            {100, &ISprofileService::OpenProfileReader, "OpenProfileReader"},
+            {101, &ISprofileService::OpenProfileUpdateObserver, "OpenProfileUpdateObserver"},
+            {900, &ISprofileService::Succeed, "ReadMetadata"},
+            {901, &ISprofileService::Succeed, "ReadPrimaryMetadata"},
+            {902, &ISprofileService::Succeed, "ReadProfile"},
+        };
+        RegisterHandlers(functions);
+    }
+
+private:
+    void Succeed(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
+    void OpenProfileReader(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<ISprofileReader>(ctx, system);
+    }
+
+    void OpenProfileUpdateObserver(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<ISprofileUpdateObserver>(ctx, system);
+    }
+};
+
+class ISprofileServiceGetter final : public ServiceFramework<ISprofileServiceGetter> {
+public:
+    explicit ISprofileServiceGetter(Core::System& system_, const char* name)
+        : ServiceFramework{system_, name} {
+        static const FunctionInfo functions[] = {
+            {0, &ISprofileServiceGetter::GetService, "GetServiceForSystemProcess"},
+            {1, &ISprofileServiceGetter::GetService, "GetServiceForBgAgent"},
+        };
+        RegisterHandlers(functions);
+    }
+
+private:
+    void GetService(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<ISprofileService>(ctx, system);
+    }
+};
+
 void LoopProcess(Core::System& system) {
     GetManager().Initialize(system);
 
@@ -715,6 +823,8 @@ void LoopProcess(Core::System& system) {
 
     server_manager->RegisterNamedService("erpt:c", std::make_shared<ErrorReportContext>(system));
     server_manager->RegisterNamedService("erpt:r", std::make_shared<ErrorReportSession>(system));
+    server_manager->RegisterNamedService("sprof:bg", std::make_shared<ISprofileServiceGetter>(system, "sprof:bg"));
+    server_manager->RegisterNamedService("sprof:sp", std::make_shared<ISprofileServiceGetter>(system, "sprof:sp"));
 
     ServerManager::RunServer(std::move(server_manager));
 }

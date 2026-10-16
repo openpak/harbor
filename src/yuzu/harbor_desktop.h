@@ -9,11 +9,16 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <optional>
 
+#include <QMessageBox>
+#include <QString>
+#include <QStringList>
 #include <QWidget>
 
 #include "common/common_types.h"
 #include "common/settings_enums.h"
+#include "harbor_setup/menu.h"
 
 
 namespace Core {
@@ -59,8 +64,22 @@ public:
     void ShowStatus(const QString& text);
     void ShowStopped(const QString& reason);
     void ShowCannotStart(const QString& reason);
-    /// Hides the widget and ends its page.
-    void Hide();
+    /// Shows any host page (a dialog included) in this widget.
+    void ShowPage(HarborSetup::HostPage page);
+    /// Draws this widget's page again, after a dialog that stood over it went away. Does nothing
+    /// when the widget has no page.
+    void Reshow();
+    /// Hides the widget and ends its page (`end_page` false: another page takes over at once).
+    void Hide(bool end_page = true);
+    /// Whether the menu has drawn a picture of the page yet.
+    bool HasPicture() const;
+    /// A widget of a dialog window (Ask, ProgressPage): its pages are not held back while a dialog
+    /// is up, as the pages of the main window's widgets are.
+    void SetOverlay(bool is_overlay) {
+        overlay = is_overlay;
+    }
+    /// The widget that showed a page last and has not hidden it, or null.
+    static HostPages* Active();
     /// The harness's screenshot: the page's last picture as a PNG.
     bool SavePicture(const QString& path) const;
 
@@ -73,12 +92,93 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
 
 private:
-    void Show(int kind, const QString& text);
     void Touch(const QPointF& position, bool down);
     QRectF PictureRect() const;
 
     struct Shared;
     std::shared_ptr<Shared> shared;
+    std::optional<HarborSetup::HostPage> page; ///< what the widget shows, while it shows one
+    bool overlay = false;
+};
+
+/// Harbor's own system dialogs on the desktop, in Borealis like every Harbor screen: the console's
+/// confirmation and error layout (a centred panel, its buttons along the bottom, the cyan cursor,
+/// B for the first button) in a window that stands over the main window and blocks it until
+/// answered. They replace the Qt message boxes and progress dialogs; Qt remains only where the
+/// system owns the screen (file pickers) and for text input.
+///
+/// The dialog is drawn by the Harbor menu (harbor_setup/menu.h), so when that is not running (no
+/// frontend host, no GL, no picture within five seconds) the calls fall back to the Qt message box
+/// rather than leave the user without an answer.
+
+/// A dialog with `buttons` (the first is B's, Cancel or Close; the last is highlighted). Returns
+/// the chosen button's index, 0 when the window is closed, or -1 when no Borealis dialog could be
+/// shown. `default_button` takes the focus first.
+int Ask(QWidget* parent, const QString& title, const QString& text, const QStringList& buttons,
+        int default_button = 0);
+
+/// Closes the dialog Ask is showing (as if its window were closed): for a dialog whose reason goes
+/// away by itself, such as the error applet when the game asks it to leave.
+void CloseAsk();
+
+/// QMessageBox's static calls, on a Borealis dialog (the icon is not drawn: the console's error
+/// layout has none). Buttons are laid out with the cancelling ones first and the accepting ones
+/// last whatever order they were given in.
+QMessageBox::StandardButton Message(QWidget* parent, QMessageBox::Icon icon, const QString& title,
+                                    const QString& text,
+                                    QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+                                    QMessageBox::StandardButton default_button = QMessageBox::NoButton);
+
+inline QMessageBox::StandardButton Information(
+    QWidget* parent, const QString& title, const QString& text,
+    QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+    QMessageBox::StandardButton default_button = QMessageBox::NoButton) {
+    return Message(parent, QMessageBox::Information, title, text, buttons, default_button);
+}
+inline QMessageBox::StandardButton Warning(
+    QWidget* parent, const QString& title, const QString& text,
+    QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+    QMessageBox::StandardButton default_button = QMessageBox::NoButton) {
+    return Message(parent, QMessageBox::Warning, title, text, buttons, default_button);
+}
+inline QMessageBox::StandardButton Critical(
+    QWidget* parent, const QString& title, const QString& text,
+    QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+    QMessageBox::StandardButton default_button = QMessageBox::NoButton) {
+    return Message(parent, QMessageBox::Critical, title, text, buttons, default_button);
+}
+/// QMessageBox::question's default buttons are Yes and No.
+inline QMessageBox::StandardButton Question(
+    QWidget* parent, const QString& title, const QString& text,
+    QMessageBox::StandardButtons buttons = QMessageBox::Yes | QMessageBox::No,
+    QMessageBox::StandardButton default_button = QMessageBox::NoButton) {
+    return Message(parent, QMessageBox::Question, title, text, buttons, default_button);
+}
+
+/// QProgressDialog's place: the status line (or, with a cancel button, a dialog) shown over the
+/// main window while a job runs and the caller keeps the event loop going.
+class ProgressPage {
+public:
+    /// `cancel` empty: no cancel button.
+    ProgressPage(QWidget* parent, const QString& label, const QString& cancel = {}, int minimum = 0,
+                 int maximum = 0);
+    ~ProgressPage();
+    ProgressPage(const ProgressPage&) = delete;
+    ProgressPage& operator=(const ProgressPage&) = delete;
+
+    void Show();
+    void SetLabel(const QString& label);
+    void SetRange(int minimum, int maximum);
+    void SetValue(int value);
+    bool Canceled() const;
+    /// Takes the page away. Also done by the destructor.
+    void Close();
+
+private:
+    void Update(bool force);
+
+    struct State;
+    std::unique_ptr<State> state;
 };
 
 } // namespace HarborDesktop

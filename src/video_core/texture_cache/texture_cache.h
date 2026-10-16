@@ -20,6 +20,7 @@
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
+#include "video_core/memory_budget.h"
 #include "video_core/texture_cache/image_view_base.h"
 #include "video_core/texture_cache/samples_helper.h"
 #include "video_core/texture_cache/texture_cache_base.h"
@@ -58,19 +59,10 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
     void(slot_samplers.insert(runtime, sampler_descriptor));
 
     if constexpr (HAS_DEVICE_MEMORY_INFO) {
-        const s64 device_local_memory = static_cast<s64>(runtime.GetDeviceLocalMemory());
-        const s64 min_spacing_expected = device_local_memory - 1_GiB;
-        const s64 min_spacing_critical = device_local_memory - 512_MiB;
-        const s64 mem_threshold = (std::min)(device_local_memory, TARGET_THRESHOLD);
-        const s64 min_vacancy_expected = (6 * mem_threshold) / 10;
-        const s64 min_vacancy_critical = (2 * mem_threshold) / 10;
-        expected_memory = static_cast<u64>(
-            (std::max)((std::min)(device_local_memory - min_vacancy_expected, min_spacing_expected),
-                     DEFAULT_EXPECTED_MEMORY));
-        critical_memory = static_cast<u64>(
-            (std::max)((std::min)(device_local_memory - min_vacancy_critical, min_spacing_critical),
-                     DEFAULT_CRITICAL_MEMORY));
-        minimum_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
+        const auto limits = CalculateTextureMemoryLimits(runtime.GetDeviceLocalMemory(), TARGET_THRESHOLD);
+        expected_memory = limits.expected;
+        critical_memory = limits.critical;
+        minimum_memory = limits.minimum;
     } else {
         expected_memory = DEFAULT_EXPECTED_MEMORY + 512_MiB;
         critical_memory = DEFAULT_CRITICAL_MEMORY + 1_GiB;
@@ -169,6 +161,12 @@ void TextureCache<P>::RunGarbageCollector() {
 
 template <class P>
 void TextureCache<P>::TickFrame() {
+    if constexpr (HAS_DEVICE_MEMORY_INFO) {
+        const auto limits = CalculateTextureMemoryLimits(runtime.GetDeviceLocalMemory(), TARGET_THRESHOLD);
+        expected_memory = limits.expected;
+        critical_memory = limits.critical;
+        minimum_memory = limits.minimum;
+    }
     // If we can obtain the memory info, use it instead of the estimate.
     if (runtime.CanReportMemoryUsage()) {
         total_used_memory = runtime.GetDeviceMemoryUsage();

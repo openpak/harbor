@@ -21,6 +21,7 @@
 #include "core/hle/service/hle_ipc.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
+#include "core/openpak/real_firmware.h"
 #include "core/hle/service/sm/sm.h"
 
 namespace Service {
@@ -192,6 +193,12 @@ Result ServerManager::RegisterSession(Kernel::KServerSession* server_session,
 Result ServerManager::RegisterNamedService(const std::string& service_name,
                                            SessionRequestHandlerFactory&& handler_factory,
                                            u32 max_sessions) {
+    // [OpenPak] A service the firmware's own program hosts is not registered here.
+    if (OpenPak::RealFirmware::Hosts(m_system, service_name)) {
+        LOG_INFO(Service, "{}: left to the firmware program that hosts it", service_name);
+        R_SUCCEED();
+    }
+
     // Add the new server to sm: and get the moved server port.
     Kernel::KServerPort* server_port{};
     R_ASSERT(m_system.ServiceManager().RegisterService(std::addressof(server_port), service_name,

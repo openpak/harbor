@@ -645,6 +645,8 @@ add_library(core STATIC
     hle/service/caps/caps_u.h
     hle/service/cmif_serialization.h
     hle/service/cmif_types.h
+    hle/service/srepo/srepo.cpp
+    hle/service/srepo/srepo.h
     hle/service/erpt/erpt.cpp
     hle/service/erpt/erpt.h
     hle/service/erpt/erpt_fields.h
@@ -1356,3 +1358,9 @@ include(file_sys/save_image/save_image.cmake)
 include(harbor_calibration/calibration.cmake)
 
 create_target_directory_groups(core)
+
+if (NOT ANDROID)
+    add_executable(harbor_content_cache_selftest EXCLUDE_FROM_ALL
+        ../tests/core/file_sys/content_cache.cpp)
+    target_link_libraries(harbor_content_cache_selftest PRIVATE core frontend_common video_core)
+endif()

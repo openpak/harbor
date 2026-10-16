@@ -116,6 +116,15 @@ void EnsureAndAdoptInBackground(const std::string& uid);
 /// once.
 void AdoptNewUserInBackground(const std::string& uid);
 
+/// A picture the person chose in the profile editor, sent on to their OpenPak account so the
+/// website, the app and a real console show it too. Signs the user in first; does nothing for a
+/// user that is not linked. On a thread of its own: returns at once.
+void UploadProfileImageInBackground(const std::string& uid, std::vector<u8> jpeg);
+
+/// A nickname the person changed in the profile editor, sent on to their OpenPak account. The
+/// username is the profile's own 32 bytes. Same rules as UploadProfileImageInBackground.
+void UpdateNicknameInBackground(const std::string& uid, const std::array<u8, 32>& username);
+
 /// Whether the user is signed in on the console server, starting the background sign-in and
 /// waiting for it up to `max` when it is not yet. False when it is not done by then or failed.
 bool SignedInWithin(const std::string& uid, std::chrono::milliseconds max);

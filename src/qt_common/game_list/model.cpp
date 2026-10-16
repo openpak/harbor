@@ -46,14 +46,15 @@ GameListModel::GameListModel(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
 
 GameListModel::~GameListModel() = default;
 
-void GameListModel::PopulateAsync(QVector<UISettings::GameDir>& game_dirs) {
+void GameListModel::PopulateAsync(QVector<UISettings::GameDir>& game_dirs, bool content_only) {
+    content_only_mode = content_only_mode || content_only;
     emit PopulatingStarted();
 
     current_worker.reset();
     removeRows(0, rowCount());
 
     current_worker = std::make_unique<GameListWorker>(vfs, provider, game_dirs,
-                                                      play_time_manager, system);
+                                                      play_time_manager, system, content_only_mode);
 
     connect(current_worker.get(), &GameListWorker::DataAvailable, this, &GameListModel::WorkerEvent,
             Qt::QueuedConnection);

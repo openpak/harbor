@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <memory>
+
+#include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/service.h"
 
 namespace Core {
@@ -23,6 +26,27 @@ class ITaskService final : public ServiceFramework<ITaskService> {
 public:
     explicit ITaskService(Core::System& system_);
     ~ITaskService() override;
+
+private:
+    // [OpenPak] Enough of bgtc:t for the firmware's own programs (friends) to register their
+    // background tasks: nothing is ever scheduled, so the events stay unsignalled.
+    void Succeed(HLERequestContext& ctx);
+    void IsInHalfAwake(HLERequestContext& ctx);
+    void IsInFullAwake(HLERequestContext& ctx);
+    void GetTriggerEvent(HLERequestContext& ctx);
+    void GetScheduleEvent(HLERequestContext& ctx);
+    void ScheduleTask(HLERequestContext& ctx);
+    void SchedulePeriodicTask(HLERequestContext& ctx);
+    void Schedule(u32 first_seconds, u32 interval_seconds);
+
+    // [OpenPak] The schedule a firmware module asked for, fired from a host thread that outlives
+    // nothing: it checks `alive` under the lock before touching the events.
+    struct ScheduleState;
+    std::shared_ptr<ScheduleState> schedule;
+
+    KernelHelpers::ServiceContext service_context;
+    Kernel::KEvent* trigger_event;
+    Kernel::KEvent* schedule_event;
 };
 
 class BGTC_SC final : public ServiceFramework<BGTC_SC> {

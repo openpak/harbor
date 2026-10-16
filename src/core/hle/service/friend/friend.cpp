@@ -4,6 +4,9 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <string_view>
+
 #include "common/logging.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -137,6 +140,8 @@ void LoopProcess(Core::System& system) {
     server_manager->RegisterNamedService("nd:app", std::make_shared<IServiceForApplication>(system));
     server_manager->RegisterNamedService("nd:sys", std::make_shared<IServiceForSystem>(system));
 
+    // [OpenPak] With the firmware's friends program on the real-firmware list, these register
+    // nothing (server_manager leaves hosted names to it).
     server_manager->RegisterNamedService("friend:a", std::make_shared<Friend>(module, system, "friend:a"));
     server_manager->RegisterNamedService("friend:m", std::make_shared<Friend>(module, system, "friend:m"));
     server_manager->RegisterNamedService("friend:s", std::make_shared<Friend>(module, system, "friend:s"));

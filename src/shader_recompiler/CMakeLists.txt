@@ -264,3 +264,8 @@ else()
 endif()
 
 create_target_directory_groups(shader_recompiler)
+
+# Small regression runner; does not build the emulator or require Catch2.
+add_executable(harbor_shader_texture_selftest EXCLUDE_FROM_ALL
+    ../tests/shader_recompiler/texture_pass.cpp)
+target_link_libraries(harbor_shader_texture_selftest PRIVATE shader_recompiler)

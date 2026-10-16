@@ -185,6 +185,34 @@ void MenuActivity::ShowHost(const HostPage& page) {
     host_page = page;
     focus_key.clear();
     DriverStatus({}, Tone::None);
+    dialog.reset();
+    if (page.kind == HostPageKind::Dialog) {
+        // A system dialog standing on its own: each button answers the frontend that asked.
+        Dialog next;
+        next.title = page.title;
+        next.text = page.text;
+        const auto answered = page.answered;
+        for (std::size_t i = 0; i < page.buttons.size(); i++) {
+            next.buttons.emplace_back(page.buttons[i], [answered, i] {
+                if (answered) {
+                    answered(static_cast<int>(i));
+                }
+            });
+        }
+        if (next.buttons.empty()) {
+            next.buttons.emplace_back("OK", [answered] {
+                if (answered) {
+                    answered(0);
+                }
+            });
+        }
+        OpenDialog(std::move(next));
+        if (page.default_button > 0 && static_cast<std::size_t>(page.default_button) < page.buttons.size()) {
+            focus_key = "dialog:" + std::to_string(page.default_button);
+            Render();
+        }
+        return;
+    }
     Render();
 }
 
@@ -216,6 +244,9 @@ void MenuActivity::Back() {
             action();
         }
         return;
+    }
+    if (screen == Screen::Host && host_page.kind == HostPageKind::Dialog) {
+        return; // answered: the asking frontend takes the page away
     }
     if (screen == Screen::Host) {
         if (driver_busy) {
@@ -718,6 +749,9 @@ void MenuActivity::CloseDialog() {
     }
     focus_key = dialog->return_key;
     dialog.reset();
+    if (screen == Screen::Host && host_page.kind == HostPageKind::Dialog) {
+        return; // the asking frontend takes the page away; nothing is drawn behind it
+    }
     Render();
 }
 
@@ -758,6 +792,9 @@ brls::View* MenuActivity::DialogView() {
             button->setLineColor(p.line);
         }
         button->registerClickAction([this, i](brls::View*) {
+            if (!dialog || i >= dialog->buttons.size()) {
+                return true; // already answered; the page is on its way out
+            }
             auto action = dialog->buttons[i].second;
             CloseDialog();
             if (action) {
@@ -807,6 +844,8 @@ std::string MenuActivity::HostTitle() const {
         return "Harbor cannot start";
     case HostPageKind::DriverFailed:
         return "The graphics driver couldn't be loaded";
+    case HostPageKind::Dialog:
+        return "Harbor";
     }
     return "Harbor";
 }

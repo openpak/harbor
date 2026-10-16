@@ -110,6 +110,9 @@ void SetApplication(std::string application_id, std::string application_version)
 
 /// What the last sign-in of `uid` produced; empty / 0 when there is none.
 std::string IdToken(const std::string& uid);
+/// The user-scoped BAAS token (the Bearer the console's own friends module sends); empty when `uid`
+/// has no sign-in.
+std::string AccessToken(const std::string& uid);
 std::uint64_t NetworkServiceAccountId(const std::string& uid);
 std::string UserId(const std::string& uid); ///< The BAAS user id as 16 hex digits.
 std::string Nickname(const std::string& uid);
@@ -122,6 +125,21 @@ std::uint64_t NintendoAccountId(const std::string& uid); ///< links.nintendoAcco
 std::string Birthday(const std::string& uid);            ///< "YYYY-MM-DD" (may be 0000-00-00)
 std::string Country(const std::string& uid);
 std::string ThumbnailUrl(const std::string& uid);
+
+/// POST /1.0.0/image_upload with `uid`'s JPEG, as the account module sends a picture the person
+/// chose; the server passes it on to the OpenPak account. False when `uid` is not signed in and
+/// linked, or the server refused. Blocking: run it from a thread of its own, never a guest one.
+bool UploadProfileImage(const std::string& uid, const std::vector<std::uint8_t>& jpeg);
+
+/// PATCH /1.0.0/users/<id> with one `replace /nickname` op, as the account module sends a
+/// nickname the person changed; the server keeps it on the OpenPak account. False when `uid` is
+/// not signed in and linked, or the server refused. Blocking, like UploadProfileImage.
+bool UpdateNickname(const std::string& uid, const std::string& nickname);
+
+/// GET atum's /c1/a/d/<title id>: the control NCA (name and icon) of a title the server serves, as
+/// a console's NIM fetches it, with a shop edge token. Empty when there is no server, no token or
+/// no such title. Blocking: from a thread of its own only.
+std::vector<std::uint8_t> FetchAtumControl(const std::string& title_id_hex);
 
 /// aauth's refusal code from `uid`'s last sign-in for the bound title ("0111"), empty when it was
 /// not refused. Only the title's own id-token request answers it; the sign-in goes on without it.

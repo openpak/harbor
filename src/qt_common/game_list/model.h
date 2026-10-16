@@ -49,7 +49,7 @@ public:
     void AddEntry(const QList<QStandardItem*>& entry_items, GameListDir* parent);
     void DonePopulating(const QStringList& watch_list);
 
-    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs);
+    void PopulateAsync(QVector<UISettings::GameDir>& game_dirs, bool content_only = false);
     void WorkerEvent();
 
     bool IsEmpty() const;
@@ -80,6 +80,7 @@ private:
     void Repopulate();
 
     bool m_flat = false;
+    bool content_only_mode = false;
 
     std::shared_ptr<FileSys::VfsFilesystem> vfs;
     FileSys::ManualContentProvider* provider;

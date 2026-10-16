@@ -186,6 +186,8 @@ struct TextureBufferDescriptor {
     u32 secondary_shift_left;
     u32 count;
     u32 size_shift;
+    u32 storage_stride{};
+    u32 storage_offset{};
 
     auto operator<=>(const TextureBufferDescriptor&) const = default;
 };
@@ -219,6 +221,8 @@ struct TextureDescriptor {
     u32 secondary_shift_left;
     u32 count;
     u32 size_shift;
+    u32 storage_stride{};
+    u32 storage_offset{};
 
     auto operator<=>(const TextureDescriptor&) const = default;
 };

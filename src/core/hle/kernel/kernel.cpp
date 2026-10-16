@@ -1102,6 +1102,11 @@ static std::jthread RunHostThreadFunc(KernelCore& kernel, KProcess* process, std
     });
 }
 
+std::jthread KernelCore::RunOnHostThreadOfProcess(KProcess* process, std::string&& thread_name,
+                                                  std::function<void()> func) {
+    return RunHostThreadFunc(*this, process, std::move(thread_name), std::move(func));
+}
+
 std::jthread KernelCore::RunOnHostCoreProcess(std::string&& process_name,
                                               std::function<void()> func) {
     // Make a new process.

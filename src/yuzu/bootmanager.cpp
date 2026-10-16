@@ -63,6 +63,7 @@
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 #include "yuzu/bootmanager.h"
+#include "yuzu/harbor_desktop.h"
 #include "yuzu/main_window.h"
 
 #include "qt_common/render/context.h"
@@ -852,7 +853,7 @@ void GRenderWindow::OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal
 bool GRenderWindow::InitializeOpenGL() {
 #ifdef HAS_OPENGL
     if (!QOpenGLContext::supportsThreadedOpenGL()) {
-        QMessageBox::warning(this, tr("OpenGL not available!"),
+        HarborDesktop::Warning(this, tr("OpenGL not available!"),
                              tr("OpenGL shared contexts are not supported."));
         return false;
     }
@@ -869,7 +870,7 @@ bool GRenderWindow::InitializeOpenGL() {
 
     return true;
 #else
-    QMessageBox::warning(this, tr("OpenGL not available!"),
+    HarborDesktop::Warning(this, tr("OpenGL not available!"),
                          tr("Harbor has not been compiled with OpenGL support."));
     return false;
 #endif

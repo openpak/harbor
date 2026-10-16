@@ -4,7 +4,10 @@
 // Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base): Horizon.LogGuestThreads.
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -14,6 +17,7 @@
 #include "core/core.h"
 #include "core/debug/thread_dump.h"
 #include "core/hardware_properties.h"
+#include "core/hle/kernel/k_page_table_base.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_scheduler.h"
 #include "core/hle/kernel/k_scoped_lock.h"
@@ -90,6 +94,93 @@ std::string DescribeThread(Kernel::KernelCore& kernel, Kernel::KProcess& process
     return out;
 }
 
+// [OpenPak] OPENPAK_DUMP_SCAN=<program id hex>:<u64 hex>[:<bytes before>:<bytes after>][;...]:
+// with the thread dump, find every aligned copy of the value in the program's readable memory
+// and log the non-zero words around it. For looking at what a firmware module parsed, without a
+// debugger.
+void ScanGuestMemory(Kernel::KProcess& process, const char* spec) {
+    u64 program_id = 0, needle = 0, before = 0x40, after = 0x40;
+    char* end = nullptr;
+    program_id = std::strtoull(spec, &end, 16);
+    if (*end != ':' || program_id != process.GetProgramId()) {
+        return;
+    }
+    needle = std::strtoull(end + 1, &end, 16);
+    if (*end == ':') {
+        before = std::strtoull(end + 1, &end, 16);
+    }
+    if (*end == ':') {
+        after = std::strtoull(end + 1, &end, 16);
+    }
+    auto& page_table = process.GetPageTable();
+    auto& memory = process.GetMemory();
+    u64 addr = GetInteger(page_table.GetAddressSpaceStart());
+    const u64 space_end = addr + page_table.GetAddressSpaceSize();
+    std::vector<u8> buf;
+    u64 scanned = 0;
+    while (addr < space_end) {
+        Kernel::KMemoryInfo info{};
+        Kernel::Svc::PageInfo page_info{};
+        if (page_table.QueryInfo(&info, &page_info, addr).IsError()) {
+            break;
+        }
+        const auto svc = info.GetSvcMemoryInfo();
+        const u64 next = svc.base_address + svc.size;
+        if (svc.state != Kernel::Svc::MemoryState::Free &&
+            svc.state != Kernel::Svc::MemoryState::Inaccessible &&
+            True(svc.permission & Kernel::Svc::MemoryPermission::Read)) {
+            scanned += svc.size;
+            buf.resize(svc.size);
+            if (memory.ReadBlock(svc.base_address, buf.data(), svc.size)) {
+                for (u64 off = 0; off + 8 <= svc.size; off += 8) {
+                    u64 value;
+                    std::memcpy(&value, buf.data() + off, 8);
+                    if (value != needle) {
+                        continue;
+                    }
+                    const u64 hit = svc.base_address + off;
+                    const u64 lo = hit - std::min(before, off);
+                    const u64 hi = std::min(hit + after, svc.base_address + svc.size);
+                    std::string words;
+                    for (u64 a = lo; a + 8 <= hi; a += 8) {
+                        u64 w;
+                        std::memcpy(&w, buf.data() + (a - svc.base_address), 8);
+                        if (w != 0) {
+                            words += fmt::format(" {:+#x}={:#x}", static_cast<s64>(a - hit), w);
+                        }
+                    }
+                    LOG_INFO(Core, "memory scan: {:016x} {:#x} hit at {:#x}:{}", program_id, needle,
+                             hit, words);
+                }
+            }
+        }
+        if (next <= addr) {
+            break;
+        }
+        addr = next;
+    }
+    LOG_INFO(Core, "memory scan: {:016x} scanned {:#x} readable bytes for {:#x}", program_id,
+             scanned, needle);
+}
+
+void ScanGuestMemory(Kernel::KProcess& process) {
+    const char* specs = std::getenv("OPENPAK_DUMP_SCAN");
+    if (specs == nullptr) {
+        return;
+    }
+    std::string all{specs};
+    std::size_t start = 0;
+    while (start < all.size()) {
+        const auto stop = all.find(';', start);
+        const std::string one = all.substr(start, stop == std::string::npos ? std::string::npos : stop - start);
+        ScanGuestMemory(process, one.c_str());
+        if (stop == std::string::npos) {
+            break;
+        }
+        start = stop + 1;
+    }
+}
+
 } // namespace
 
 void LogGuestThreads(System& system) {
@@ -114,6 +205,7 @@ void LogGuestThreads(System& system) {
         for (auto& thread : process->GetThreadList()) {
             LOG_INFO(Core, "{}", DescribeThread(kernel, *process, thread));
         }
+        ScanGuestMemory(*process);
     }
     LOG_INFO(Core, "thread dump: end");
 }

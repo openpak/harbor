@@ -91,13 +91,32 @@ public:
         static const FunctionInfo functions[] = {
             {0, &ILogger::Log, "Log"},
             {1, &ILogger::SetDestination, "SetDestination"},
-            {2, nullptr, "TransmitHashedLog"}, //20.0.0+
+            {2, &ILogger::Accept, "TransmitHashedLog"}, //20.0.0+
+            {11, &ILogger::GetSharedMemoryAccessor, "GetSharedMemoryAccessor"},
             {3, nullptr, "DevNotify"}, //20.0.0+
         };
         RegisterHandlers(functions);
     }
 
 private:
+    void GetSharedMemoryAccessor(HLERequestContext& ctx) {
+        // Firmware 23 ILogger command 11 returns an optional ISharedMemoryAccessor.
+        // Its client explicitly accepts a null object when shared-memory logging is unavailable.
+        // A result-only reply omits the object ID and makes the client read stale TLS data.
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        if (ctx.GetManager()->IsDomain()) {
+            ctx.AddDomainObject({});
+        } else {
+            ctx.AddMoveObject(nullptr);
+        }
+    }
+
+    void Accept(HLERequestContext& ctx) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultSuccess);
+    }
+
     void Log(HLERequestContext& ctx) {
         std::size_t offset{};
         const auto data = ctx.ReadBuffer();

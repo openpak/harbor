@@ -19,6 +19,7 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/sm/sm.h"
+#include "core/openpak/guest_ipc_trace.h"
 #include "core/hle/service/sm/sm_controller.h"
 
 namespace Service::SM {
@@ -266,6 +267,7 @@ Result SM::GetServiceImpl(Kernel::KClientSession** out_client_session, HLEReques
         return result;
     }
 
+    OpenPak::GuestIpcTrace::NoteSession(session, name);
     *out_client_session = session;
     return ResultSuccess;
 }

@@ -14,6 +14,8 @@
 #include "common/scm_rev.h"
 #include "common/swap.h"
 #include "core/core.h"
+#include "core/hle/kernel/k_process.h"
+#include "core/hle/kernel/k_thread.h"
 #include "core/hle/service/erpt/erpt.h"
 #include "core/hle/service/fatal/fatal.h"
 #include "core/hle/service/fatal/fatal_p.h"
@@ -178,12 +180,27 @@ static void ThrowFatalError(Core::System& system, Result error_code, FatalType f
     }
 }
 
+// [OpenPak] A firmware system program that threw a fatal is terminated: a console halts entirely,
+// Harbor keeps HOME and the other modules running. Left alive, the aborted program's main thread
+// spins at its (higher) priority and starves every other system module on core 3.
+static void TerminateFatalFirmwareProgram(Core::System& system, HLERequestContext& ctx) {
+    auto* const process = ctx.GetThread().GetOwnerProcess();
+    if (process == nullptr || (process->GetProgramId() & ~u64{0xFFFF}) != 0x0100000000000000ULL ||
+        process->IsApplication()) {
+        return;
+    }
+    LOG_ERROR(Service_Fatal, "terminating firmware program {} ({:016x}) after its fatal",
+              process->GetName(), process->GetProgramId());
+    process->Terminate(system.Kernel());
+}
+
 void Module::Interface::ThrowFatal(HLERequestContext& ctx) {
     LOG_ERROR(Service_Fatal, "called");
     IPC::RequestParser rp{ctx};
     const auto error_code = rp.Pop<Result>();
 
     ThrowFatalError(system, error_code, FatalType::ErrorScreen, {});
+    TerminateFatalFirmwareProgram(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
@@ -196,6 +213,7 @@ void Module::Interface::ThrowFatalWithPolicy(HLERequestContext& ctx) {
 
     ThrowFatalError(system, error_code, fatal_type,
                     {}); // No info is passed with ThrowFatalWithPolicy
+    TerminateFatalFirmwareProgram(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
@@ -212,6 +230,7 @@ void Module::Interface::ThrowFatalWithCpuContext(HLERequestContext& ctx) {
     std::memcpy(&info, fatal_info.data(), sizeof(FatalInfo));
 
     ThrowFatalError(system, error_code, fatal_type, info);
+    TerminateFatalFirmwareProgram(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }

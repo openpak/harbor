@@ -21,6 +21,7 @@
 
 #include "core/openpak/baas.h"
 #include "core/openpak/baas_detail.h"
+#include "core/openpak/platform_titles.h"
 #include "common/logging.h"
 #include "core/openpak/session.h"
 
@@ -426,6 +427,10 @@ void SetFriendListChangedHook(std::function<void()> hook) {
     state.on_friend_list_changed = std::move(hook);
 }
 
+void NotifyFriendListChanged() {
+    RaiseFriendListChanged();
+}
+
 void SetFriendRequestArrivedHook(std::function<void()> hook) {
     State& state = Get();
     std::lock_guard lock{state.mutex};
@@ -494,6 +499,13 @@ int SyncFriendList(bool force) {
     }
 
     auto friends = std::make_shared<const std::vector<Friend>>(ParseFriendList(root));
+    // A friend is listed as playing a title, which may be one this machine has never heard of (a
+    // platform's own, served by the server: Pier, Harbor ...). Ask the server to name each one now,
+    // so the list that draws them has them, and tell it when they arrive. Titles installed here
+    // are named locally first; the cache is only the fallback.
+    for (const Friend& entry : *friends) {
+        PlatformTitles::Prefetch(entry.application_id, [] { RaiseFriendListChanged(); });
+    }
     std::string signature = Signature(root);
     bool changed;
     {
