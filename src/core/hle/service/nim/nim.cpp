@@ -21,7 +21,11 @@
 #include "core/hle/service/kernel_helpers.h"
 #include "core/hle/service/nim/nim.h"
 #include "core/hle/service/os/event.h"
+#include "core/hle/service/psc/time/service_manager.h"
+#include "core/hle/service/psc/time/static.h"
+#include "core/hle/service/psc/time/system_clock.h"
 #include "core/hle/service/server_manager.h"
+#include "core/hle/service/sm/sm.h"
 #include "core/hle/service/service.h"
 #include "core/openpak/async_worker.h"
 #include "core/openpak/session.h"
@@ -732,6 +736,23 @@ private:
     std::shared_ptr<OpenPak::AsyncWorker> worker;
 };
 
+void CorrectNetworkClock(Core::System& system, const char* why) {
+    auto time_m = system.ServiceManager().GetService<PSC::Time::ServiceManager>("time:m", true);
+    std::shared_ptr<PSC::Time::StaticService> time_sm;
+    std::shared_ptr<PSC::Time::SystemClock> clock;
+    if (!time_m || time_m->GetStaticServiceAsServiceManager(&time_sm) != ResultSuccess ||
+        time_sm->GetStandardNetworkSystemClock(&clock) != ResultSuccess) {
+        LOG_WARNING(Service_NIM, "ntc: no network clock to correct ({})", why);
+        return;
+    }
+    const s64 now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch())
+                        .count();
+    const Result result = clock->SetCurrentTime(now);
+    LOG_INFO(Service_NIM, "ntc: network clock set to the host's UTC ({}): result {:#x}", why,
+             result.raw);
+}
+
 class IEnsureNetworkClockAvailabilityService final
     : public ServiceFramework<IEnsureNetworkClockAvailabilityService> {
 public:
@@ -759,8 +780,11 @@ public:
 
 private:
     void StartTask(HLERequestContext& ctx) {
-        // No need to connect to the internet, just finish the task straight away.
+        // [Harbor] A console's ntc fetches the server time and sets the standard network clock
+        // to it; Harbor's server time is the host's UTC (GetServerTime below), so the task sets
+        // the clock from it and finishes at once.
         LOG_DEBUG(Service_NIM, "called");
+        CorrectNetworkClock(system, "ntc task");
         finished_event->Signal(system.Kernel());
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
