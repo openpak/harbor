@@ -46,7 +46,7 @@ Shared<T> Empty() {
 }
 
 /// Everything this module remembers, behind one lock for the lists the guest reads and one for
-/// the caches its poll fills, as the reference splits them. Lists are replaced whole and never
+/// the caches its poll fills, as the earlier port splits them. Lists are replaced whole and never
 /// changed in place, so a reader holds its copy of the pointer without holding the lock.
 struct State {
     std::mutex mutex;
@@ -94,7 +94,7 @@ void ForgetLocked(State& state) {
     state.blocks_synced = false;
     state.setting.reset();
 
-    // The request boxes are the account's in the reference and are dropped at sign-out there;
+    // The request boxes are the account's in the earlier port and are dropped at sign-out there;
     // here they live with the rest of the module's caches and go with the user they belong to.
     state.inbox_requests = Empty<Request>();
     state.outbox_requests = Empty<Request>();
@@ -843,7 +843,7 @@ int SendInvitation(const std::vector<std::string>& receiver_ids, std::uint64_t a
 
 int ReadInvitations(const std::vector<std::uint64_t>& invitation_ids) {
     if (invitation_ids.empty()) {
-        // The reference sends an empty string body with no type of its own, which its transport
+        // The earlier port sends an empty string body with no type of its own, which its transport
         // turns into an empty application/json content.
         const Reply all = detail::Send(
             "PATCH", FiveHost, fmt::format("/v1/users/{}/invitations/mark_as_read", UserId()),

@@ -117,7 +117,7 @@ bool Bracketed(const std::string& text, char open, char close) {
 
 /// The route keys. `shared` carries appInfo and the catalog id, `named` the in-app name and the
 /// NNID Mii data (§A.4.2: the inbox reads both from senderAndReceiver, the outbox the names from
-/// sender). A route with nothing in it is the default one, as the reference's null is.
+/// sender). A route with nothing in it is the default one, as the earlier port's null is.
 Route ParseRoute(const Json& shared, const Json& named) {
     Route route;
     Hex(shared, "route:appInfo:appId", route.application_id);

@@ -39,7 +39,7 @@ std::string RequestPath(std::uint64_t request_id) {
     return fmt::format("/2.0.0/friend_requests/{}", Hex16(request_id));
 }
 
-/// A GET the way the reference's session makes one for the request boxes: anything but a 2xx
+/// A GET the way the earlier port's session makes one for the request boxes: anything but a 2xx
 /// with a JSON body is a failure, and the caller keeps what it had.
 std::optional<Json> GetOrFail(const std::string& path, std::string& why) {
     const Reply reply = detail::Send("GET", BaasHost, path, {}, {});
@@ -221,7 +221,7 @@ void RefreshFriendRequests() {
 }
 
 void AnswerFriendRequest(std::uint64_t request_id, const std::string& state) {
-    // A write the guest fired is worth a sign-in, as the reference refreshes one first.
+    // A write the guest fired is worth a sign-in, as the earlier port refreshes one first.
     Session::Ensure({});
 
     if (!Ready()) {
@@ -251,7 +251,7 @@ void AnswerFriendRequest(std::uint64_t request_id, const std::string& state) {
 }
 
 void ReadFriendRequest(std::uint64_t request_id) {
-    // A write the guest fired is worth a sign-in, as the reference refreshes one first.
+    // A write the guest fired is worth a sign-in, as the earlier port refreshes one first.
     Session::Ensure({});
 
     if (!Ready()) {
@@ -273,7 +273,7 @@ void ReadFriendRequest(std::uint64_t request_id) {
 }
 
 void SendFriendRequest(const FriendRequestSend& send) {
-    // A write the guest fired is worth a sign-in, as the reference refreshes one first.
+    // A write the guest fired is worth a sign-in, as the earlier port refreshes one first.
     Session::Ensure({});
 
     const std::string user_id = UserId();

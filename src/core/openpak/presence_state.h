@@ -4,14 +4,14 @@
 
 // What the running game said about itself through friend:u, per profile: whether an online-play
 // session is declared open (10600 / 10601, or the +0x18 byte of UpdateUserPresence 10610), and
-// its app-field pairs as the JSON object the friends module publishes. Ported from the Ryujinx
-// reference's Ryujinx.OpenPak/OpenPakPresence.cs, with the presence-body rules of its session
+// its app-field pairs as the JSON object the friends module publishes. Ported from OpenPak's earlier Ryujinx
+// port's Ryujinx.OpenPak/OpenPakPresence.cs, with the presence-body rules of its session
 // (presence doc §2.3) alongside.
 //
 // The emulator's friend service writes it and the session that PATCHes presence reads it; neither
 // can see the other, so it meets here. It knows nothing of any emulator: the host tells it which
 // title runs and that title's NACP presence group, and names profiles by whatever string it
-// already uses for them (the signed-in profile's Uid as hex, in the reference).
+// already uses for them (the signed-in profile's Uid as hex, in the earlier port).
 
 #pragma once
 

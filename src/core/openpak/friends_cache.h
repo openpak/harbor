@@ -58,7 +58,7 @@ std::string GetLocalAppField();
 bool TakeLocalPresenceForPublish(s32& status, std::string& app_field);
 
 // A real-time game-session invitation waiting for this account, relayed via the account
-// server's own mailbox (see openpak-account's invitations.go) -- not a friend, just an
+// server's own mailbox (see nx-baas's invitations.go) -- not a friend, just an
 // invite. app_param is the opaque, game-defined bytes the sender's own game constructed;
 // never interpreted here, only carried through to TryPopFromFriendInvitationStorageChannel.
 struct PendingInvitation {

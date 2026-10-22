@@ -3,8 +3,8 @@
 // Derived from openpak-client 3fd9ba7 (friend_structs.h).
 
 // The guest's friends structs (friends contract §B.3, presence doc §1-3, invitations doc §2) and
-// the builders that fill them from the BAAS data in baas_models.h. Ported from the Ryujinx
-// reference: Ryujinx.Horizon/Sdk/Friends/*.cs, Friends/Detail/*.cs, OpenPakFriends.cs and
+// the builders that fill them from the BAAS data in baas_models.h. Ported from OpenPak's earlier Ryujinx
+// port: Ryujinx.Horizon/Sdk/Friends/*.cs, Friends/Detail/*.cs, OpenPakFriends.cs and
 // OpenPakFriends.Structs.cs.
 //
 // Nothing here knows about any emulator: every struct is a standard-layout POD of <cstdint>
@@ -223,7 +223,7 @@ static_assert(sizeof(PlayHistoryRegistrationKey) == 0x40);
 static_assert(offsetof(PlayHistoryRegistrationKey, uuid) == 0x10);
 static_assert(offsetof(PlayHistoryRegistrationKey, hmac_hash) == 0x20);
 
-// Shapes the reference only sizes, carried as bytes so the glue has the right stride.
+// Shapes the earlier port only sizes, carried as bytes so the glue has the right stride.
 struct ExternalApplicationCatalog {
     std::uint8_t raw[0x4B8];
 };

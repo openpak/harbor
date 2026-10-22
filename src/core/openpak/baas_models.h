@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Derived from openpak-client 3fd9ba7 (baas_models.h).
 
-// What the friends module's own BAAS and Five routes answer, as plain data. Ported from the
-// earlier Ryujinx port (Ryujinx.OpenPak/OpenPakBaasModels.cs); section numbers are the friends
+// What the friends module's own BAAS and Five routes answer, as plain data. Ported from OpenPak's earlier
+// Ryujinx port (Ryujinx.OpenPak/OpenPakBaasModels.cs); section numbers are the friends
 // contract's (docs/switch/friends-contract-22.5.0.md) and the invitations doc's.
 
 #pragma once
