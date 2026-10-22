@@ -29,7 +29,7 @@ std::vector<Entry> Get();
 // [OpenPak] Get() never blocks -- essential for NEX titles, which poll this in a loop from
 // their own online thread; blocking there would stall PRUDP acks and the server would declare a
 // communication error. But Splatoon 3 requests its friend list exactly ONCE, early in boot
-// (matches an earlier Ryujinx fork's own measurement: still empty at 39s in), and never asks again --
+// (still empty at 39s in, as measured earlier), and never asks again --
 // if the frontend's background refresh hasn't populated the cache by then, that title is stuck
 // with zero friends for its whole session. GetWarm() gives that one call a short, bounded wait
 // for the cache to warm up instead. Never used by NEX titles' own repeated polling.

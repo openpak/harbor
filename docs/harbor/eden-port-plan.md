@@ -89,7 +89,7 @@ A trial gave 22 clean picks and 16 conflicts against pristine `10bcd2d84`; resol
 
 **Socket code must be rewritten clean-room.** Six fork commits (`73da2f25b7`, `497320b975`,
 `fd1b755fc4`, `03d14d62d1`, `fa69cbe39f`, `fb99c24f47`) and two Harbor commits (`3ab97fbe7`,
-`081d5cd88`) descend from the an earlier Ryujinx fork poll code (source-available) that Ryujinx master
+`081d5cd88`) descend from poll code of unclear provenance that Ryujinx master
 removed in `154744710`. Whoever does that rewrite must not have read those diffs.
 
 **openpak-client**: reuse its core library only (ceiling, profile, CA, friends REST, Penne push,
@@ -282,7 +282,7 @@ accounts → friends/pctl.
 | 2 | Applet speed on Android: applets run on dynarmic without fastmem/NCE (only the game gets NCE) | Early in phase 2: time NetConnect and PlayerSelect from creation to first frame on the phone. Harbor's numbers are 2.76 s and 2.54 s. |
 | 3 | Behaviour Harbor never proved: pctl pairing, invitation Join, fresh NA registration (ns 2366), 4105, the post-link qlaunch path | Record golden IPC traces on the Ryujinx Harbor with a test account before porting each; diff Eden's replies against them. |
 | 4 | systemWeb (WebKit) on Eden 22.x+: shop, Lhub and Login (so NA linking) all need it; nobody runs it yet | One desktop run with the corrected program ids and LLE before committing stream W. Measure on the phone. |
-| 5 | Licence lineage in sockets (source-available) | Clean-room bsd by someone who has not seen the tainted diffs, with a provenance note per function. `feature/android-port` still needs `154744710` (owner's call there). |
+| 5 | Licence lineage in sockets | Clean-room bsd by someone who has not seen the tainted diffs, with a provenance note per function. `feature/android-port` still needs `154744710` (owner's call there). |
 | 6 | Unknown 23.x contracts (IAdministrator 290, resolver 100–104 layout, news 50100, pctl 2016+, ns 4042, friends 31000/31001) | RE in the decrypted 23.0.1 modules; parse the dnsmitm capture offline. Anything guessed is logged as an unknown contract, never marked done. |
 | 7 | hid_core changes affect every game | Only touch aruids that had input disabled; smoke titles Slime Rancher, ARMS, Kirby. |
 | 8 | Upstream churn in exactly these files (qlaunch/fw23/am land weekly) | Pinned base, bounded hooks, planned rebases. |

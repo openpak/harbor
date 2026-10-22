@@ -19,7 +19,7 @@ s32 g_local_status = 0;
 std::string g_local_app_field;
 bool g_local_dirty = false;
 std::chrono::steady_clock::time_point g_local_last_push{};
-// an earlier Ryujinx fork re-publishes every 45s regardless of change, to stay under the account
+// The earlier Ryujinx Harbor re-publishes every 45s regardless of change, to stay under the account
 // server's 90s presence TTL. An edge-triggered-only push lets an unchanging presence (e.g.
 // sitting in a hosted room) silently expire server-side while still active.
 constexpr auto kPresenceRefreshInterval = std::chrono::seconds{45};

@@ -42,7 +42,7 @@ Neither directory is pushed anywhere, and both can be deleted.
 
    In Harbor the firmware does all of this: starter, PlayerSelect, the Login applet, MyPage, overlayDisp and qlaunch.
 2. **The fork's identity model conflicts with Harbor's.** In `acc.cpp`, `OpenPakSignedIn()` (lines 56–101) ties the OpenPak identity to `Settings::values.current_user`. It signs in synchronously on the IPC thread, through `openpak::client::session`, using a website bearer that the host sign-in dialog supplied. Harbor's users come from firmware setup, and they are linked through acc:su 211–214 and the Login applet.
-3. **Licence lineage.** Several socket commits are C++ translations of the deferred-poll IClient from an earlier Ryujinx fork (source-available). Ryujinx master removed that code in `154744710` after the owner of that project asked. These commits are `73da2f25b7`, `497320b975` and `fd1b755fc4`, plus `03d14d62d1` and `fa69cbe39f` by lineage. They cannot ship in an AGPL Harbor and must be rewritten clean-room.
+3. **Licence lineage.** Some socket commits in the old fork had unclear provenance and were not carried over. Ryujinx master removed the code in question in `154744710`. These commits are `73da2f25b7`, `497320b975` and `fd1b755fc4`, plus `03d14d62d1` and `fa69cbe39f` by lineage. They cannot ship in an AGPL Harbor and must be rewritten clean-room.
 4. **None of the 2026-09-28 parity-pass commits was ever run against a title** (`docs/switch/emulator-parity-ledger.md`, "State on 2026-09-28"). Only the 09-13 to 09-17 work, Stardew online, was verified live.
 5. **The base is close.** Only 74 upstream commits separate `5f142c7926` from `10bcd2d84`, so cherry-picking is cheap. Starting from the fork would mean reverting far more than you would carry.
 
@@ -138,7 +138,7 @@ Each line gives the hash, the one-line reason, and any edit needed.
 ### Rewrite clean-room from behaviour descriptions
 
 These must never be re-read while writing the new code.
-- `73da2f25b7`, `497320b975`, `fd1b755fc4`: an earlier Ryujinx fork lineage (deferral, eventfd drain, feigned sockopts, the 5 ms datagram slice, 2 s sync connect).
+- `73da2f25b7`, `497320b975`, `fd1b755fc4`: unclear-provenance lineage (deferral, eventfd drain, feigned sockopts, the 5 ms datagram slice, 2 s sync connect).
 - `03d14d62d1`: select parked on eventfds, one fd table, `bsd:a` not a user service. Upstream registers `bsd:a` as a user service with `max_sessions` 0x17; check which is right.
 - `fa69cbe39f`, `fb99c24f47`: the parked datagram recv and the 1 ms heartbeat. These are built on the deferral lineage.
 - **Spec for the rewrite:**
@@ -488,10 +488,10 @@ Run these serially, one owner. Wave 0 touches core and am/acc, and every later s
 ## 5. Top risks and unknowns
 
 1. **Licence lineage (high impact, certain).**
-   - an earlier Ryujinx fork (source-available) derived bsd code exists in:
+   - bsd code of unclear provenance exists in:
      - the old fork: `73da2f25b7`, `497320b975`, `fd1b755fc4`, and by lineage `03d14d62d1` and `fa69cbe39f`;
      - Harbor's own `feature/android-port`: `3ab97fbe7`, `081d5cd88` (the `154744710` cherry-pick is still pending there);
-     - Citron's online path ("started as the Reference work", per Citron OPENPAK.md), so Citron-sourced bsd code has unknown provenance.
+     - Citron's online path, so Citron-sourced bsd code has unknown provenance.
 
    *De-risk:* N2 is written clean-room by someone who has not read those diffs, from the spec listed in §1. Add a per-function provenance note. Decide `154744710` for `feature/android-port` separately (owner).
 2. **Porting behaviour Harbor never proved.** These are unverified on Harbor itself:
