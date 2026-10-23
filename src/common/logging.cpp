@@ -240,7 +240,7 @@ struct ColorConsoleBackend final : public Backend {
 #ifndef __OPENORBIS__
 /// @brief Backend that writes to a file passed into the constructor
 struct FileBackend final : public Backend {
-    explicit FileBackend(const std::filesystem::path filename) noexcept {
+    explicit FileBackend(const std::filesystem::path filename) noexcept : path{filename} {
         auto old_filename = filename;
         old_filename += ".old.txt";
         // Existence checks are done within the functions themselves.
@@ -280,14 +280,19 @@ struct FileBackend final : public Backend {
             file->Flush();
 
         using namespace Common::Literals;
-        // Prevent logs from exceeding a set maximum size in the event that log entries are spammed.
+        // Rotate instead of going blind: at the limit the file becomes eden_log.1.txt (the
+        // previous one is dropped) and a fresh eden_log.txt takes the newest output.
         const auto write_limit = Settings::values.extended_logging.GetValue() ? 1_GiB : 100_MiB;
-        const bool write_limit_exceeded = bytes_written > write_limit;
-        if (entry.log_level >= Level::Error || write_limit_exceeded) {
-            // Stop writing after the write limit is exceeded.
-            // Don't close the file so we can print a stacktrace if necessary
-            if (write_limit_exceeded)
-                enabled = false;
+        if (bytes_written > write_limit) {
+            file->Flush();
+            file.reset();
+            auto rotated = path;
+            rotated.replace_extension(".1.txt");
+            void(FS::RemoveFile(rotated));
+            void(FS::RenameFile(path, rotated));
+            file.emplace(path, FS::FileAccessMode::Write, FS::FileType::TextFile);
+            bytes_written = 0;
+        } else if (entry.log_level >= Level::Error) {
             file->Flush();
         }
     }
@@ -296,6 +301,7 @@ struct FileBackend final : public Backend {
         file->Flush();
     }
 private:
+    std::filesystem::path path;
     std::optional<FS::IOFile> file;
     std::size_t bytes_written = 0;
     bool enabled = true;
