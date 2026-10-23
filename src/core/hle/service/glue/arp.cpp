@@ -123,7 +123,7 @@ void ARP_R::GetApplicationControlProperty(HLERequestContext& ctx) {
     const auto res = manager.GetControlProperty(&nacp_data, *title_id);
 
     if (res != ResultSuccess) {
-        LOG_ERROR(Service_ARP, "Failed to get control property!");
+        LOG_ERROR(Service_ARP, "Failed to get control property for {:016X}: {:#x}", *title_id, res.raw);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(res);
         return;
@@ -145,7 +145,7 @@ void ARP_R::GetApplicationControlPropertyWithApplicationId(HLERequestContext& ct
     const auto res = manager.GetControlProperty(&nacp_data, title_id);
 
     if (res != ResultSuccess) {
-        LOG_ERROR(Service_ARP, "Failed to get control property!");
+        LOG_ERROR(Service_ARP, "Failed to get control property for {:016X}: {:#x}", title_id, res.raw);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(res);
         return;
