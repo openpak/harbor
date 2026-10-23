@@ -201,8 +201,8 @@ jobs:
           fi
 
       # The Android Gradle plugin runs ninja without -j, so compile and link are limited with CMake
-      # job pools, as scripts/harbor/build-android.sh does. -Pnightly stays false: a nightly APK
-      # keeps the release's application id and installs over it.
+      # job pools, as scripts/harbor/build-android.sh does. A nightly APK is built with -Pnightly=true:
+      # it installs as the separate "Harbor Nightly" app (id suffix .nightly) next to the release.
       - name: Build the ${{ matrix.flavor }} APK
         env:
           FLAVOR: ${{ matrix.flavor }}
@@ -214,7 +214,7 @@ jobs:
             -Dorg.gradle.daemon=false \
             -Dorg.gradle.workers.max=$JOBS \
             -PYUZU_ANDROID_ARGS="-DYUZU_DOWNLOAD_ANDROID_VVL=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_JOB_POOLS=compile=$JOBS;link=2 -DCMAKE_JOB_POOL_COMPILE=compile -DCMAKE_JOB_POOL_LINK=link" \
-            -Pnightly=false
+            -Pnightly=${{ inputs.nightly }}
           ccache -s
           out="harbor-$TAG-android-$FLAVOR.apk"
           cp "app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk" "$GITHUB_WORKSPACE/$out"

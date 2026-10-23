@@ -64,7 +64,8 @@ jobs:
           tag_name: ${{ env.TAG }}
           name: Harbor ${{ env.TAG }}
           draft: false
-          prerelease: true
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
 
   build-hosted:
