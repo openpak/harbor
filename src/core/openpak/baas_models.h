@@ -4,7 +4,7 @@
 
 // What the friends module's own BAAS and Five routes answer, as plain data. Ported from OpenPak's earlier
 // Ryujinx port (Ryujinx.OpenPak/OpenPakBaasModels.cs); section numbers are the friends
-// contract's (docs/switch/friends-contract-22.5.0.md) and the invitations doc's.
+// contract's (internal research notes) and the invitations doc's.
 
 #pragma once
 

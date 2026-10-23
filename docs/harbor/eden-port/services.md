@@ -43,7 +43,7 @@ Neither directory is pushed anywhere, and both can be deleted.
    In Harbor the firmware does all of this: starter, PlayerSelect, the Login applet, MyPage, overlayDisp and qlaunch.
 2. **The fork's identity model conflicts with Harbor's.** In `acc.cpp`, `OpenPakSignedIn()` (lines 56–101) ties the OpenPak identity to `Settings::values.current_user`. It signs in synchronously on the IPC thread, through `openpak::client::session`, using a website bearer that the host sign-in dialog supplied. Harbor's users come from firmware setup, and they are linked through acc:su 211–214 and the Login applet.
 3. **Licence lineage.** Some socket commits in the old fork had unclear provenance and were not carried over. Ryujinx master removed the code in question in `154744710`. These commits are `73da2f25b7`, `497320b975` and `fd1b755fc4`, plus `03d14d62d1` and `fa69cbe39f` by lineage. They cannot ship in an AGPL Harbor and must be rewritten clean-room.
-4. **None of the 2026-09-28 parity-pass commits was ever run against a title** (`docs/switch/emulator-parity-ledger.md`, "State on 2026-09-28"). Only the 09-13 to 09-17 work, Stardew online, was verified live.
+4. **None of the 2026-09-28 parity-pass commits was ever run against a title** (internal research notes, "State on 2026-09-28"). Only the 09-13 to 09-17 work, Stardew online, was verified live.
 5. **The base is close.** Only 74 upstream commits separate `5f142c7926` from `10bcd2d84`, so cherry-picking is cheap. Starting from the fork would mean reverting far more than you would carry.
 
 ### Trial results against 10bcd2d84
@@ -144,7 +144,7 @@ These must never be re-read while writing the new code.
 - **Spec for the rewrite:**
   - the `154744710` commit message;
   - `emulators/ryujinx/OPENPAK.md` (bsd paragraphs);
-  - `docs/switch/emulator-parity-ledger.md` §2 "Sockets" and §3;
+  - internal research notes §2 "Sockets" and §3;
   - Ryujinx master's `IClient.cs`, `ManagedSocketPollManager.cs` and `ServerBase.cs` deferral (`cd462aa69`, which is OpenPak's own).
 
   **Never use `feature/android-port`'s IClient.** It still carries `3ab97fbe7` and `081d5cd88`.

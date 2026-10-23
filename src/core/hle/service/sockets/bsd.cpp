@@ -8,7 +8,7 @@
 // poll, select, recv, accept or connect (Eden's deferral, re-run by the server's heartbeat) instead
 // of holding an IPC thread inside a host wait. Written from: Ryujinx master (OpenPak's own rewrite,
 // 154744710) IClient.cs, ManagedSocketPollManager.cs, BsdContext.cs, InterfaceList.cs and the
-// ServerBase.cs deferral (cd462aa69); its OPENPAK.md; docs/switch/emulator-parity-ledger.md §2
+// ServerBase.cs deferral (cd462aa69); its OPENPAK.md; internal research notes §2
 // Sockets and §3; POSIX/Linux/FreeBSD man pages. Each function names the item it follows.
 
 #include <algorithm>

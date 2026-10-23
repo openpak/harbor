@@ -22,7 +22,7 @@ No acceptance box is checked from these tests. See [save-cloud-interop.md](save-
   - **unverified**: implemented, designed or unit-tested only; no recorded run.
   - **NEVER PROVED**: Harbor itself never showed it working end to end. Record a golden IPC trace on the Ryujinx Harbor with a test account before porting (plan §6, risk 3), then diff Eden against it.
 - `[D]` desktop Linux, `[P]` ROG Phone 3 (legacy flavour), `[M]` the API 33+ device (mainline flavour). An item tagged `[D P M]` runs on all three.
-- Doc refs are file names under `emulators/ryujinx-android/docs/android-port/` or `docs/harbor/`, plus `checklist` (`prds/android-port/checklist.md`), `HANDOVER`, `acceptance` and `ledger` (OpenPak `docs/switch/emulator-console-acceptance-checklist.md`, `emulator-parity-ledger.md`).
+- Doc refs are file names under `emulators/ryujinx-android/docs/android-port/` or `docs/harbor/`, plus `checklist` (`prds/android-port/checklist.md`), `HANDOVER`, `acceptance` and `ledger` (internal research notes).
 - Rules for every run: isolated data directory, never tobagin's live data; no build or restart while tobagin is playing; one build at a time; the phone only with tobagin's say-so; evidence (logs, captures, traces) stays outside the repository.
 - Privacy applies to every item: evidence must not contain account ids, tokens, names, nicknames, PINs, pairing codes or typed text.
 
