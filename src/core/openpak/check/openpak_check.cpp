@@ -35,6 +35,7 @@
 #include "common/redact.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_archive.h"
 #include "core/hle/service/filesystem/fsp/save_transfer/transfer_crypto.h"
+#include "core/openpak/bcat_key_patch.h"
 #include "core/openpak/boot_connection.h"
 #include "core/openpak/network_profile.h"
 #include "core/openpak/olsc.h"
@@ -1392,6 +1393,28 @@ void AauthChecks() {
           "a success or a body without errors is no refusal");
 }
 
+void BcatKeyPatchChecks(const std::filesystem::path& dir) {
+    namespace fs = std::filesystem;
+    const fs::path load = dir / "bcat-load";
+    const fs::path other = load / "0100000000000000" / "some_mod" / "exefs" / "x.ips";
+    OpenPak::Platform::WriteFile(other, "OTHER");
+    Check(OpenPak::BcatKeyPatch::Install(load), "the bcat key patch installs into a fresh load dir");
+    const fs::path ips = load / "010000000000000C" / "openpak_bcat_key" / "exefs" /
+                         "84EF6747BB15A01707B883B29A2A1CE5FC1734C2000000000000000000000000.ips";
+    const std::string first = OpenPak::Platform::ReadFile(ips);
+    Check(first.size() == 270 && first.compare(0, 5, "PATCH") == 0 &&
+              first.compare(first.size() - 3, 3, "EOF") == 0,
+          "the installed patch is the 270-byte IPS");
+    const auto stamp = fs::last_write_time(ips);
+    Check(OpenPak::BcatKeyPatch::Install(load) && fs::last_write_time(ips) == stamp &&
+              OpenPak::Platform::ReadFile(ips) == first,
+          "a second install leaves the patch alone");
+    OpenPak::Platform::WriteFile(ips, "stale");
+    Check(OpenPak::BcatKeyPatch::Install(load) && OpenPak::Platform::ReadFile(ips) == first,
+          "a different file is replaced");
+    Check(OpenPak::Platform::ReadFile(other) == "OTHER", "another mod is untouched");
+}
+
 int SelfTest(bool online) {
     const auto dir = std::filesystem::current_path() / "user" / "openpak-selftest";
     std::error_code ec;
@@ -1419,6 +1442,7 @@ int SelfTest(bool online) {
     TransferFlowChecks();
     SecretChecks();
     AauthChecks();
+    BcatKeyPatchChecks(dir);
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {

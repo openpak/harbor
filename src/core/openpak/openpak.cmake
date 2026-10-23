@@ -40,6 +40,8 @@ set(HARBOR_OPENPAK_SOURCES
     openpak/guest_client.h
     openpak/guest_ipc_trace.cpp
     openpak/guest_ipc_trace.h
+    openpak/bcat_key_patch.cpp
+    openpak/bcat_key_patch.h
     openpak/real_firmware.cpp
     openpak/real_firmware.h
     openpak/platform_titles.cpp
@@ -63,6 +65,8 @@ target_sources(core PRIVATE
 # families, the CA pin) and a boot connection against a data directory. Off by default.
 option(HARBOR_OPENPAK_CHECK "Build harbor-openpak-check" OFF)
 if (HARBOR_OPENPAK_CHECK)
+    # Guest-process code needs the whole core; the self-check links common only.
+    list(REMOVE_ITEM HARBOR_OPENPAK_SOURCES openpak/guest_client.cpp openpak/real_firmware.cpp)
     list(TRANSFORM HARBOR_OPENPAK_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
     add_executable(harbor-openpak-check openpak/check/openpak_check.cpp ${HARBOR_OPENPAK_SOURCES}
                    ${CMAKE_CURRENT_SOURCE_DIR}/hle/service/filesystem/fsp/save_transfer/transfer_crypto.cpp
