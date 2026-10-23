@@ -985,6 +985,28 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
     }
 #endif
 
+    // [OpenPak] A write fault handled as "invalidated" but whose page stays read-only on the host
+    // (a cache still counts it, or the protection outlived the cache) re-faults on the same
+    // instruction forever: Duck Game's packet compressor froze core 0 that way on Android. After
+    // enough faults in a row on one page, the page is made writable so the guest moves on.
+    // ponytail: per-thread consecutive counter, not per-page cache bookkeeping; the GPU can miss
+    // that one CPU write. Trace the cache that keeps the page if this line ever shows up.
+    if (mapped && ptr != nullptr && impl->current_page_table->fastmem_arena) {
+        thread_local u64 last_page = ~0ULL;
+        thread_local u32 repeats = 0;
+        const u64 page = GetInteger(vaddr) & ~YUZU_PAGEMASK;
+        repeats = page == last_page ? repeats + 1 : 0;
+        last_page = page;
+        if (repeats == 64) {
+            LOG_WARNING(HW_Memory, "NCE: page {:#x} faulted 64 times in a row (gpu cached {}); "
+                        "making it writable", page, rasterizer);
+            impl->host_buffer->Protect(page, YUZU_PAGESIZE,
+                                       Common::MemoryPermission::Read |
+                                           Common::MemoryPermission::Write);
+            repeats = 0;
+        }
+    }
+
     return mapped && ptr != nullptr;
 }
 

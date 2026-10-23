@@ -165,7 +165,35 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
     // TODO: handle accesses which split a page?
     const Common::ProcessAddress addr =
         (reinterpret_cast<u64>(info->si_addr) & ~Memory::YUZU_PAGEMASK);
-    auto& memory = guest_ctx->parent->m_running_thread->GetOwnerProcess()->GetMemory();
+    auto* process = guest_ctx->parent->m_running_thread->GetOwnerProcess();
+    auto& memory = process->GetMemory();
+
+    // [OpenPak] The kernel's view of a page that keeps faulting (Duck Game wrote to read-only BSS
+    // on Android and on a real Switch alike): its state, permission, attribute and IPC lock count
+    // tell whether a request in flight holds it. Logged once per page, with the guest threads.
+    {
+        thread_local u64 last_page = ~0ULL;
+        thread_local u32 repeats = 0;
+        const u64 page = GetInteger(addr);
+        repeats = page == last_page ? repeats + 1 : 0;
+        last_page = page;
+        if (repeats == 8) {
+            Kernel::KMemoryInfo mi{};
+            Kernel::Svc::PageInfo pi{};
+            process->GetPageTable().QueryInfo(std::addressof(mi), std::addressof(pi), addr);
+            LOG_WARNING(Core_ARM,
+                        "NCE: page {:#x} keeps faulting (fault {:#x}, pc {:#x}): block {:#x}+{:#x} "
+                        "state {:#x} perm {:#x} attr {:#x} ipc_lock {} device_use {} orig_perm "
+                        "{:#x}",
+                        page, reinterpret_cast<u64>(info->si_addr),
+                        static_cast<u64>(static_cast<ucontext_t*>(raw_context)->uc_mcontext.pc),
+                        mi.m_address,
+                        mi.m_size, static_cast<u32>(mi.m_state), static_cast<u32>(mi.m_permission),
+                        static_cast<u32>(mi.m_attribute), mi.m_ipc_lock_count,
+                        mi.m_device_use_count, static_cast<u32>(mi.m_original_permission));
+        }
+    }
+
     if (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
         // We handled the access successfully and are returning to guest code.
         return true;
