@@ -142,7 +142,9 @@ android {
             }
 
             isMinifyEnabled = true
-            isDebuggable = false
+            // -PharborDebuggable (or ORG_GRADLE_PROJECT_harborDebuggable=1) for a hang-debugging test
+            // build: same package and data, so debuggerd can read native stacks.
+            isDebuggable = project.hasProperty("harborDebuggable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
