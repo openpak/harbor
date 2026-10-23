@@ -1,0 +1,238 @@
+# SPDX-FileCopyrightText: 2026 tobagin
+# SPDX-License-Identifier: AGPL-3.0-only
+
+# Harbor's build: the Linux desktop tarball and the legacy and mainline APKs, each attached to an
+# existing GitHub release. Called by release.yml (a vX.Y.Z tag) and nightly.yml (the rolling
+# `nightly` pre-release); neither of them is changed here, the caller creates the release.
+#
+# - GitHub-hosted runners: the repository is going public, and the self-hosted runner group does
+#   not serve public repositories.
+# - Linux builds in an Arch Linux container against Arch's system Qt and libraries, the way the
+#   tarball was built on the owner's workstation before.
+# - Nothing goes through workflow artifacts (the organisation's artifact quota): each job attaches
+#   its file to the release itself.
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Release to attach to (vX.Y.Z or nightly)'
+        required: true
+        type: string
+      ref:
+        description: 'Commit or tag to build'
+        required: true
+        type: string
+      version:
+        description: 'Version string inside the build'
+        required: true
+        type: string
+      nightly:
+        description: 'Nightly build (version files from the version input)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag }}
+  GIT_TAG_NAME: ${{ inputs.version }}
+  VERSION: ${{ inputs.version }}
+
+jobs:
+  linux:
+    name: Build linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    container:
+      image: archlinux:base-devel
+      # The host's preinstalled SDKs, mounted only to delete them: the build needs the disk space.
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+    env:
+      CCACHE_MAXSIZE: 2G
+    steps:
+      # In a container job github.workspace is the host's path; the runtime variable is the
+      # container's.
+      - name: Free disk space
+        run: |
+          rm -rf /host/android/* /host/dotnet/* /host/ghc/*
+          echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
+
+      # The package set of docs/Deps.md (Arch Linux), plus Wayland, git, ccache and the GitHub CLI.
+      - name: Install the build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed base-devel boost catch2 cmake enet ffmpeg fmt git glslang \
+            libzip lz4 ninja nlohmann-json openssl opus qt6-base qt6-multimedia qt6-charts qt6-wayland \
+            sdl3 zlib zstd zip unzip vulkan-headers libusb spirv-tools spirv-headers ccache github-cli
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      # GetSCMRev reads these files before asking git: the build reports the nightly version.
+      - name: Version files
+        if: inputs.nightly
+        run: |
+          printf '%s' "$VERSION" > GIT-TAG
+          printf '%s' "$VERSION" > GIT-RELEASE
+
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: harbor-linux-ccache-${{ github.run_id }}
+          restore-keys: harbor-linux-ccache-
+
+      - name: Build the Linux desktop
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DYUZU_TESTS=OFF \
+            -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
+            -DYUZU_USE_BUNDLED_QT=OFF -DENABLE_QT_TRANSLATION=OFF \
+            -DVulkanHeaders_FORCE_BUNDLED=ON
+          cmake --build build -j"$(nproc)"
+          ccache -s
+          rm -rf staging
+          DESTDIR="$PWD/staging" cmake --install build
+          out="harbor-$TAG-linux-x86_64.tar.zst"
+          tar -C staging -cf - . | zstd -19 -T0 -o "$out"
+          echo "ASSET=$out" >> "$GITHUB_ENV"
+
+      - name: Save the ccache
+        if: always() && steps.ccache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" "$ASSET" --clobber
+
+  android:
+    name: Build ${{ matrix.flavor }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [legacy, mainline]
+    env:
+      JOBS: 4
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      # Keeps the Android SDK; drops what this build never uses.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Version files
+        if: inputs.nightly
+        run: |
+          printf '%s' "$VERSION" > GIT-TAG
+          printf '%s' "$VERSION" > GIT-RELEASE
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # The NDK and CMake that src/android/app/build.gradle.kts asks for.
+      - name: Android SDK packages
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          ndk=$(sed -n 's/.*ndkVersion = "\(.*\)".*/\1/p' src/android/app/build.gradle.kts)
+          "$sdkmanager" "ndk;$ndk" "cmake;3.31.6" >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ccache
+
+      - name: Restore the ccache
+        id: ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: harbor-android-${{ matrix.flavor }}-ccache-${{ github.run_id }}
+          restore-keys: harbor-android-${{ matrix.flavor }}-ccache-
+
+      # Signing: the committed debug keystore until the owner decides on the release key.
+      # TODO(release key): store the release keystore as the ANDROID_KEYSTORE_B64 secret (base64)
+      # with ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS; this step then signs with it.
+      - name: Signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ] && [ -n "$KEY_ALIAS" ]; then
+            keystore="$RUNNER_TEMP/harbor-release.keystore"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$keystore"
+            {
+              echo "ANDROID_KEYSTORE_FILE=$keystore"
+              echo "ANDROID_KEYSTORE_PASS=$KEYSTORE_PASS"
+              echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
+            } >> "$GITHUB_ENV"
+            echo "Signing with the release keystore from the repository secrets."
+          else
+            echo "::warning::No release keystore in the secrets: the APK is signed with the committed debug keystore."
+          fi
+
+      # The Android Gradle plugin runs ninja without -j, so compile and link are limited with CMake
+      # job pools, as scripts/harbor/build-android.sh does. -Pnightly stays false: a nightly APK
+      # keeps the release's application id and installs over it.
+      - name: Build the ${{ matrix.flavor }} APK
+        env:
+          FLAVOR: ${{ matrix.flavor }}
+        run: |
+          set -euo pipefail
+          task="assemble${FLAVOR^}Release"
+          cd src/android
+          ./gradlew "$task" \
+            -Dorg.gradle.daemon=false \
+            -Dorg.gradle.workers.max=$JOBS \
+            -PYUZU_ANDROID_ARGS="-DYUZU_DOWNLOAD_ANDROID_VVL=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_JOB_POOLS=compile=$JOBS;link=2 -DCMAKE_JOB_POOL_COMPILE=compile -DCMAKE_JOB_POOL_LINK=link" \
+            -Pnightly=false
+          ccache -s
+          out="harbor-$TAG-android-$FLAVOR.apk"
+          cp "app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk" "$GITHUB_WORKSPACE/$out"
+          echo "ASSET=$out" >> "$GITHUB_ENV"
+
+      - name: Save the ccache
+        if: always() && steps.ccache.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" "$ASSET" --clobber
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/harbor-release.keystore"

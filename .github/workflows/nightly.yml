@@ -1,0 +1,210 @@
+name: Nightly
+
+# A nightly pre-release of Harbor, built only when the source changed.
+#
+# - Once a day (02:00 UTC) and by hand. Builds the default branch (harbor).
+# - The check job compares the commit the rolling `nightly` tag points at with the branch head:
+#   no change, or a change to documentation only (*.md, docs/, LICENSE, issue templates), means no
+#   build and no release change. A scheduled run of a private repository is skipped too (hosted
+#   runners cost organisation minutes there); a manual run still builds.
+# - One rolling pre-release, tag `nightly`. Only the prepare job creates or edits it (removing the
+#   previous build's files first); the build jobs attach to it; the publish job moves the tag to the
+#   built commit and writes the notes once every build succeeded. A failed run leaves the tag where
+#   it was, so the next night tries again. Never marked latest: /releases/latest stays on the last
+#   vX.Y.Z release.
+# - The tag moves through the API with GITHUB_TOKEN, which starts no other workflow.
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only run the change check (no build, no release change)'
+        type: boolean
+        default: false
+      force:
+        description: 'Build even if nothing changed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  PRODUCT: Harbor
+
+jobs:
+  check:
+    name: Check for source changes
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      sha: ${{ steps.check.outputs.sha }}
+      short: ${{ steps.check.outputs.short }}
+      date: ${{ steps.check.outputs.date }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Compare the branch head with the last nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PRIVATE: ${{ github.event.repository.private }}
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          if [ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Nightlies build $DEFAULT_BRANCH; start this workflow from that branch."
+            exit 1
+          fi
+          head="$GITHUB_SHA"
+          short="${head:0:7}"
+          {
+            echo "sha=$head"
+            echo "short=$short"
+            echo "date=$(date -u +%Y-%m-%d)"
+            echo "version=nightly-$(date -u +%Y%m%d)-$short"
+          } >> "$GITHUB_OUTPUT"
+
+          decide() {
+            local build="$1" reason="$2"
+            if [ "$build" = true ] && [ "$DRY_RUN" = true ]; then
+              build=false
+              reason="Dry run, no build. A real run would build: $reason"
+            fi
+            echo "build=$build" >> "$GITHUB_OUTPUT"
+            echo "$reason" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          if [ "$PRIVATE" = true ] && [ "$EVENT" = schedule ]; then
+            decide false "The repository is private: scheduled nightlies wait until it is public (start one by hand to build anyway)."
+          fi
+          if [ "$FORCE" = true ]; then
+            decide true "Forced build of $short."
+          fi
+          if ! prev=$(gh api "repos/$repo/git/ref/tags/nightly" --jq .object.sha 2>/dev/null) || [ -z "$prev" ]; then
+            decide true "No nightly yet: building $short."
+          fi
+          if ! body=$(gh release view nightly --repo "$repo" --json body --jq .body 2>/dev/null); then
+            body=""
+          fi
+          if ! grep -qF "nightly-complete: $prev" <<<"$body"; then
+            decide true "The nightly at ${prev:0:7} did not finish: building $short."
+          fi
+          if [ "$prev" = "$head" ]; then
+            decide false "Nothing changed since the last nightly (${prev:0:7}): no build."
+          fi
+          if ! cmp=$(gh api "repos/$repo/compare/$prev...$head" 2>/dev/null); then
+            decide true "The last nightly's commit ${prev:0:7} is no longer in the history: building $short."
+          fi
+          if [ "$(jq -r .status <<<"$cmp")" != ahead ]; then
+            decide true "$DEFAULT_BRANCH is not ahead of the last nightly (${prev:0:7}; history rewritten): building $short."
+          fi
+          files=$(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$cmp")
+          if [ "$(jq '.files | length' <<<"$cmp")" -ge 300 ]; then
+            decide true "300 or more files changed since ${prev:0:7}: building $short."
+          fi
+          code=$(grep -Ev '(^|/)[^/]*\.md$|^docs/|^LICENSE[^/]*$|^\.github/ISSUE_TEMPLATE/' <<<"$files" || true)
+          if [ -z "$code" ]; then
+            decide false "Only documentation changed since ${prev:0:7}: no build."
+          fi
+          decide true "$(grep -c . <<<"$code") changed source files since ${prev:0:7}: building $short."
+
+  prepare:
+    name: Prepare the nightly release
+    needs: [check]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release or clear the previous build's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ needs.check.outputs.sha }}
+          TITLE: ${{ env.PRODUCT }} nightly ${{ needs.check.outputs.date }} (${{ needs.check.outputs.short }})
+        run: |
+          set -euo pipefail
+          notes="Building $SHA. These notes are replaced once every build has finished."
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release view nightly --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+              if [ -n "$asset" ]; then gh release delete-asset nightly "$asset" --yes; fi
+            done
+            gh release edit nightly --prerelease --latest=false --title "$TITLE (building)" --notes "$notes"
+          else
+            gh release create nightly --target "$SHA" --prerelease --latest=false \
+              --title "$TITLE (building)" --notes "$notes"
+          fi
+
+  # The same Linux tarball and legacy/mainline APKs as the vX.Y.Z release (release.yml).
+  build:
+    name: Build
+    needs: [check, prepare]
+    uses: ./.github/workflows/harbor-build.yml
+    secrets: inherit
+    with:
+      tag: nightly
+      ref: ${{ needs.check.outputs.sha }}
+      version: ${{ needs.check.outputs.version }}
+      nightly: true
+
+  publish:
+    name: Publish the nightly
+    needs: [check, build]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move the nightly tag and write the notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ needs.check.outputs.sha }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+          TITLE: ${{ env.PRODUCT }} nightly ${{ needs.check.outputs.date }} (${{ needs.check.outputs.short }})
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          # gh api prints the error body on stdout when it fails, so only a success counts.
+          if ! prev=$(gh api "repos/$GH_REPO/git/ref/tags/nightly" --jq .object.sha 2>/dev/null); then
+            prev=""
+          fi
+          if [ -n "$prev" ] && [ "$prev" != "$SHA" ] && cmp=$(gh api "repos/$GH_REPO/compare/$prev...$SHA" 2>/dev/null) \
+            && [ "$(jq -r .status <<<"$cmp")" = ahead ]; then
+            range="${prev:0:7}..${SHA:0:7}"
+            total=$(jq -r .total_commits <<<"$cmp")
+            log=$(jq -r '.commits | reverse | .[] | "\(.sha[0:7]) \(.commit.message | split("\n")[0])"' <<<"$cmp")
+          else
+            range="${SHA:0:7}"
+            total=1
+            log=$(gh api "repos/$GH_REPO/commits/$SHA" --jq '"\(.sha[0:7]) \(.commit.message | split("\n")[0])"')
+          fi
+          {
+            echo "Automatic build of \`$BRANCH\` at $SHA (version \`$VERSION\`)."
+            echo "A development build, not a release: for the current release see the latest vX.Y.Z release."
+            echo
+            echo "### Changes since the previous nightly ($range, $total commits)"
+            echo
+            echo '```'
+            head -n 30 <<<"$log"
+            echo '```'
+            if [ "$total" -gt 30 ]; then
+              echo
+              echo "And $((total - 30)) more: https://github.com/$GH_REPO/compare/$range"
+            fi
+            echo
+            echo "<!-- nightly-complete: $SHA -->"
+          } > notes.md
+          if [ -n "$prev" ]; then
+            gh api -X PATCH "repos/$GH_REPO/git/refs/tags/nightly" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$SHA" >/dev/null
+          fi
+          gh release edit nightly --prerelease --latest=false --title "$TITLE" --notes-file notes.md
+          cat notes.md >> "$GITHUB_STEP_SUMMARY"
