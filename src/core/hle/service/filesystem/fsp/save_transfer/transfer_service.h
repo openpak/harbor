@@ -71,6 +71,9 @@ private:
 class Importer {
 public:
     const FileSys::SaveDataExtraData& ExtraData() const;
+    /// Extra data of the save the import replaces (ReadSaveDataExtraData): fs answers for the
+    /// local save, not the archive, and TargetNotFound when the console has none yet.
+    Result ReadLocalExtraData(FileSys::SaveDataExtraData* out) const;
     std::array<u8, 0x20> Aad() const;
     std::vector<u16> ChunkIds() const;
     /// Bytes of a data chunk; a chunk may arrive in several pushes.

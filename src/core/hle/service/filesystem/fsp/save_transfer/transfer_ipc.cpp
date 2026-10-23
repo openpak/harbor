@@ -8,6 +8,7 @@
 
 #include "core/file_sys/errors.h"
 #include "core/hle/service/cmif_serialization.h"
+#include "core/hle/service/ipc_helpers.h"
 
 namespace Service::FileSystem::SaveTransfer {
 
@@ -179,7 +180,8 @@ IDivisionImporter::IDivisionImporter(Core::System& system_, std::shared_ptr<Impo
 }
 
 Result IDivisionImporter::ReadSaveDataExtraData(OutBuffer<BufferAttr_HipcMapAlias> out_buffer) {
-    const auto& extra_data = importer->ExtraData();
+    FileSys::SaveDataExtraData extra_data{};
+    R_TRY(importer->ReadLocalExtraData(&extra_data));
     std::memset(out_buffer.data(), 0, out_buffer.size());
     std::memcpy(out_buffer.data(), &extra_data, std::min(out_buffer.size(), sizeof(extra_data)));
     R_SUCCEED();
@@ -226,7 +228,7 @@ ISaveDataTransferManagerVersion2::ISaveDataTransferManagerVersion2(Core::System&
         {32, D<&ISaveDataTransferManagerVersion2::OpenSaveDataFullExporter>, "OpenSaveDataFullExporter"},
         {33, D<&ISaveDataTransferManagerVersion2::OpenSaveDataDiffExporter>, "OpenSaveDataDiffExporter"},
         {34, nullptr, "OpenSaveDataExporterByContext"},
-        {63, D<&ISaveDataTransferManagerVersion2::OpenSaveDataImporter>, "OpenSaveDataImporter"},
+        {63, &ISaveDataTransferManagerVersion2::OpenSaveDataImporter, "OpenSaveDataImporter"},
         {68, nullptr, "OpenSaveDataImporterByContext"},
         {69, nullptr, "CancelSuspendingImport"},
         {70, nullptr, "CancelSuspendingImportByAttribute"},
@@ -267,19 +269,31 @@ Result ISaveDataTransferManagerVersion2::OpenSaveDataDiffExporter(
     R_SUCCEED();
 }
 
-Result ISaveDataTransferManagerVersion2::OpenSaveDataImporter(
-    Out<SharedPointer<IDivisionImporter>> out_importer,
-    InBuffer<BufferAttr_HipcMapAlias> initial_data, InBuffer<BufferAttr_HipcMapAlias> creation_info,
-    FileSys::SaveDataSpaceId space) {
-    // SaveDataCreationInfo2 as olsc fills it: the user at +0x10 (olsc-transfer.md §3.1).
+void ISaveDataTransferManagerVersion2::OpenSaveDataImporter(HLERequestContext& ctx) {
+    // olsc sends the initial data as a map-alias buffer (type 5) and SaveDataCreationInfo2 as
+    // a pointer buffer (type 0x19, its stub 0x1168c0), so the two live in different descriptor
+    // lists; a single in-buffer index cannot name both. The user is at +0x10 of the creation
+    // info (olsc-transfer.md §3.1); without it the save would land under a zero user.
+    IPC::RequestParser rp{ctx};
+    const auto space = rp.PopEnum<FileSys::SaveDataSpaceId>();
+    const auto initial_data = ctx.ReadBufferA(0);
     FileSys::UserId user_id{};
-    if (creation_info.size() >= 0x20) {
-        std::memcpy(user_id.data(), creation_info.data() + 0x10, sizeof(user_id));
+    if (!ctx.BufferDescriptorX().empty()) {
+        const auto creation_info = ctx.ReadBufferX(0);
+        if (creation_info.size() >= 0x20) {
+            std::memcpy(user_id.data(), creation_info.data() + 0x10, sizeof(user_id));
+        }
     }
     std::shared_ptr<Importer> importer;
-    R_TRY(manager.OpenImporter(&importer, initial_data, user_id, space));
-    *out_importer = std::make_shared<IDivisionImporter>(system, std::move(importer));
-    R_SUCCEED();
+    const Result result = manager.OpenImporter(&importer, initial_data, user_id, space);
+    if (result.IsError()) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
+        return;
+    }
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IDivisionImporter>(ctx, system, std::move(importer));
 }
 
 } // namespace Service::FileSystem::SaveTransfer

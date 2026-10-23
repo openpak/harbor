@@ -170,6 +170,14 @@ const FileSys::SaveDataExtraData& Importer::ExtraData() const {
     return extra_data;
 }
 
+Result Importer::ReadLocalExtraData(FileSys::SaveDataExtraData* out) const {
+    // olsc reads the local commit id through this (GetSaveDataCommitId, 0x126320) and compares
+    // it with what it recorded when the download was registered; a console without the save
+    // must get TargetNotFound (2-1002), or olsc's local-state guard (0x20dbe0) ends the
+    // download with 2179-2020 before the first data chunk.
+    R_RETURN(controller->ReadSaveDataExtraData(out, space, attribute));
+}
+
 std::array<u8, 0x20> Importer::Aad() const {
     return reader.Content().aad;
 }
@@ -373,6 +381,9 @@ Result TransferManager::OpenImporter(std::shared_ptr<Importer>* out,
     importer->system = &system;
     importer->controller = controller;
     importer->space = space;
+    LOG_INFO(Service_FS, "save transfer: importing the save of {:016X} ({} chunks, local save {})",
+             source.program_id, importer->reader.Content().division_count,
+             controller->SaveDataExists(space, importer->attribute) ? "present" : "absent");
     *out = std::move(importer);
     R_SUCCEED();
 }
