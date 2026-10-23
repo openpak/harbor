@@ -2751,11 +2751,14 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         private val socUpdateHandler = Handler(Looper.myLooper()!!)
     }
 
+    /** The pending auto-hide of the touch controls; the handler also carries the boot watch. */
+    private var overlayAutoHideRunnable: Runnable? = null
+
     private fun startOverlayAutoHideTimer(seconds: Int) {
-        handler.removeCallbacksAndMessages(null)
+        overlayAutoHideRunnable?.let { handler.removeCallbacks(it) }
         val showInputOverlay = BooleanSetting.SHOW_INPUT_OVERLAY.getBoolean()
 
-        handler.postDelayed({
+        overlayAutoHideRunnable = Runnable {
             if (showInputOverlay && isAdded && _binding != null) {
                 if (overlayTouchActive) {
                     startOverlayAutoHideTimer(seconds)
@@ -2763,7 +2766,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                     autoHideOverlay()
                 }
             }
-        }, seconds * 1000L)
+        }.also { handler.postDelayed(it, seconds * 1000L) }
     }
 
     fun handleScreenTap(isLongTap: Boolean) {
@@ -2810,7 +2813,9 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                     overlayTouchActive = true
-                    handler.removeCallbacksAndMessages(null)
+                    // Only the auto-hide: a touch while the boot page is up must not take
+                    // harborLoadingWatch with it, or the page never goes away.
+                    overlayAutoHideRunnable?.let { handler.removeCallbacks(it) }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                     overlayTouchActive = event.pointerCount > 1
