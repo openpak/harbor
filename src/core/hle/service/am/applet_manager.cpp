@@ -25,6 +25,8 @@
 #include "core/hle/service/am/frontend/applet_software_keyboard_types.h"
 #include "core/hle/service/am/service/storage.h"
 #include "core/hle/service/am/window_system.h"
+#include "common/fs/path_util.h"
+#include "core/openpak/bcat_key_patch.h"
 #include "core/openpak/guest_client.h"
 #include "core/openpak/real_firmware.h"
 #include "hid_core/hid_types.h"
@@ -400,6 +402,9 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
     // Keep HOME lifecycle/overlay behavior separate from this system-service bootstrap.
     const bool firmware_session = home_session || m_pending_parameters.applet_id == AppletId::Starter;
     if (firmware_session && m_real_firmware.empty()) {
+        // bcat only accepts OpenPak's articles with its key patch in the load directory, which
+        // the loader reads when the process is created.
+        OpenPak::BcatKeyPatch::Install(Common::FS::GetEdenPath(Common::FS::EdenPath::LoadDir));
         for (const u64 program_id : OpenPak::RealFirmware::Programs(m_system)) {
             auto process = CreateProcess(m_system, program_id, 0, 0);
             if (!process) {
