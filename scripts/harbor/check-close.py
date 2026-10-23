@@ -20,7 +20,7 @@ import subprocess
 import sys
 import time
 
-SCR = '~/REPOS/Openpak/scratch/harbor-eden'
+SCR = os.path.expanduser('~/REPOS/Openpak/scratch/harbor-eden')
 DRIVE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'drive.sh')
 HOME_ID = '0100000000001000'
 
