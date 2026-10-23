@@ -4,6 +4,8 @@
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vector>
+
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/scratch_buffer.h"
@@ -79,7 +81,15 @@ Result KSynchronizationObject::Wait(KernelCore& kernel, s32* out_index,
                                     KSynchronizationObject** objects, const s32 num_objects,
                                     s64 timeout) {
     // Allocate space on stack for thread nodes.
-    std::array<ThreadListNode, Svc::ArgumentHandleCountMax> thread_nodes;
+    // [OpenPak] Guest waits are capped at 64 by svc; HLE server threads (bsdsocket with the
+    // firmware modules and a game all connected) can hold more, so those spill to the heap.
+    std::array<ThreadListNode, Svc::ArgumentHandleCountMax> stack_nodes;
+    std::vector<ThreadListNode> heap_nodes;
+    ThreadListNode* thread_nodes = stack_nodes.data();
+    if (num_objects > Svc::ArgumentHandleCountMax) {
+        heap_nodes.resize(num_objects);
+        thread_nodes = heap_nodes.data();
+    }
 
     // Prepare for wait.
     KThread* thread = GetCurrentThreadPointer(kernel);
@@ -97,7 +107,7 @@ Result KSynchronizationObject::Wait(KernelCore& kernel, s32* out_index,
             R_THROW(ResultInvalidHandle);
         }
     }
-    ThreadQueueImplForKSynchronizationObjectWait wait_queue(kernel, objects, thread_nodes.data(),
+    ThreadQueueImplForKSynchronizationObjectWait wait_queue(kernel, objects, thread_nodes,
                                                             num_objects);
 
     {

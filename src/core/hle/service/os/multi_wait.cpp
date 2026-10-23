@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vector>
+
 #include "core/hle/kernel/k_hardware_timer.h"
 #include "core/hle/kernel/k_synchronization_object.h"
 #include "core/hle/kernel/kernel.h"
@@ -25,18 +27,20 @@ MultiWaitHolder* MultiWait::TimedWaitAny(Kernel::KernelCore& kernel, s64 timeout
 }
 
 MultiWaitHolder* MultiWait::TimedWaitImpl(Kernel::KernelCore& kernel, s64 timeout_tick) {
-    std::array<MultiWaitHolder*, Kernel::Svc::ArgumentHandleCountMax> holders{};
-    std::array<Kernel::KSynchronizationObject*, Kernel::Svc::ArgumentHandleCountMax> objects{};
+    // [OpenPak] Not capped at 64: a host server thread (bsdsocket) can hold more ports and
+    // sessions than a guest wait allows, and the kernel wait takes any count from HLE.
+    std::vector<MultiWaitHolder*> holders;
+    std::vector<Kernel::KSynchronizationObject*> objects;
+    holders.reserve(Kernel::Svc::ArgumentHandleCountMax);
+    objects.reserve(Kernel::Svc::ArgumentHandleCountMax);
 
     s32 out_index = -1;
-    s32 num_objects = 0;
 
     for (auto it = m_wait_list.begin(); it != m_wait_list.end(); it++) {
-        ASSERT(num_objects < Kernel::Svc::ArgumentHandleCountMax);
-        holders[num_objects] = std::addressof(*it);
-        objects[num_objects] = it->GetNativeHandle();
-        num_objects++;
+        holders.push_back(std::addressof(*it));
+        objects.push_back(it->GetNativeHandle());
     }
+    const s32 num_objects = static_cast<s32>(objects.size());
 
     Kernel::KSynchronizationObject::Wait(kernel, std::addressof(out_index), objects.data(),
                                          num_objects, timeout_tick);
