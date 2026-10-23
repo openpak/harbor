@@ -5,10 +5,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <filesystem>
 #include <cstdlib>
 #include <thread>
 #include <string_view>
 
+#include "common/fs/path_util.h"
 #include "common/settings.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -418,6 +420,19 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
         }}.detach();
         // OPENPAK_DUMP_THREADS_AFTER=<s>: every guest thread to the log after that many seconds
         // (a hang shows where each thread waits).
+        // <user dir>/openpak/dump-threads: dump every guest thread when the file appears, then
+        // delete it (adb on Android, where the variable below cannot be set).
+        std::thread{[this] {
+            const auto trigger =
+                Common::FS::GetEdenPath(Common::FS::EdenPath::EdenDir) / "openpak" / "dump-threads";
+            while (m_system.IsPoweredOn()) {
+                std::this_thread::sleep_for(std::chrono::seconds{1});
+                std::error_code ec;
+                if (std::filesystem::remove(trigger, ec)) {
+                    m_system.LogGuestThreads();
+                }
+            }
+        }}.detach();
         if (const char* after = std::getenv("OPENPAK_DUMP_THREADS_AFTER"); after != nullptr) {
             const int seconds = std::atoi(after);
             std::thread{[this, seconds] {
