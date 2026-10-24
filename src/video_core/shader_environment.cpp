@@ -302,7 +302,24 @@ std::optional<u64> GenericEnvironment::TryFindSize() {
 Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, u32 tic_limit,
                                                              bool via_header_index, u32 raw) {
     const auto handle{Tegra::Texture::TexturePair(raw, via_header_index)};
-    ASSERT(handle.first <= tic_limit);
+    if (handle.first > tic_limit) {
+        // A handle past the TIC pool limit (stale constant buffer, or a channel whose pool is not
+        // set up yet) must not read whatever lies behind the table: that yields random texture
+        // types and formats and makes the compiled shader differ from run to run. Hand the
+        // compiler a plain 2D RGBA8 texture, the same fallback it would pick for a bad entry.
+        LOG_DEBUG(HW_GPU, "texture handle {} beyond TIC limit {}, assuming 2D RGBA8", handle.first,
+                  tic_limit);
+        Tegra::Texture::TICEntry fallback{};
+        fallback.format.Assign(Tegra::Texture::TextureFormat::A8B8G8R8);
+        fallback.r_type.Assign(Tegra::Texture::ComponentType::UNORM);
+        fallback.g_type.Assign(Tegra::Texture::ComponentType::UNORM);
+        fallback.b_type.Assign(Tegra::Texture::ComponentType::UNORM);
+        fallback.a_type.Assign(Tegra::Texture::ComponentType::UNORM);
+        fallback.header_version.Assign(Tegra::Texture::TICHeaderVersion::BlockLinear);
+        fallback.texture_type.Assign(Tegra::Texture::TextureType::Texture2D);
+        fallback.normalized_coords.Assign(1);
+        return fallback;
+    }
     const GPUVAddr descriptor_addr{tic_addr + handle.first * sizeof(Tegra::Texture::TICEntry)};
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
