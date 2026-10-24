@@ -179,7 +179,8 @@ jobs:
           ndk=$(sed -n 's/.*ndkVersion = "\(.*\)".*/\1/p' src/android/app/build.gradle.kts)
           "$sdkmanager" "ndk;$ndk" "cmake;3.31.6" >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ccache
+          # glslangValidator compiles the host shaders (src/video_core/host_shaders).
+          sudo apt-get install -y -qq ccache glslang-tools
 
       - name: Restore the ccache
         id: ccache
