@@ -127,6 +127,7 @@ add_library(core STATIC
     file_sys/openpak_builtin_patches.cpp
     file_sys/openpak_builtin_patches.h
     file_sys/openpak_builtin_patches_d2r.inc
+    file_sys/openpak_builtin_patches_pvz.inc
     file_sys/partition_filesystem.cpp
     file_sys/partition_filesystem.h
     file_sys/patch_manager.cpp

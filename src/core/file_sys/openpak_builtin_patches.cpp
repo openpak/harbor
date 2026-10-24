@@ -39,8 +39,9 @@ constexpr std::array<u8, 271> CtrKeyIps{
 };
 
 #include "core/file_sys/openpak_builtin_patches_d2r.inc"
+#include "core/file_sys/openpak_builtin_patches_pvz.inc"
 
-// The two sanctioned game patches, both data-only. The CTR key swap is the same file the console setup
+// The sanctioned game patches, all data-only. The CTR key swap is the same file the console setup
 // (openpak.nro) installs to /atmosphere/exefs_patches/openpak_ctr_key/.
 //
 // Crash Team Racing Nitro-Fueled (0100F9F00C696000), final update v983040, main build
@@ -56,13 +57,23 @@ constexpr std::array<u8, 271> CtrKeyIps{
 // padded to the same size); every instruction stays as shipped. The same files ship to consoles
 // through the OpenPak Switch Patcher (/atmosphere/exefs_patches/openpak_d2r_trust/). The check is
 // the whole original bundle: 3 DigiCert certificates in the base build, 8 in update v1.0.34.
-constexpr std::array<Patch, 3> BuiltinPatches{{
+//
+// Plants vs. Zombies: Battle for Neighborville (0100C56010FD8000), the PvZ exception: the title does
+// all its EA TLS through DirtySDK, which trusts only a CA list compiled into main, never the console
+// certificate store. The patch rewrites one entry of that list, EA's "GOS 2015 Certificate
+// Authority": its subject becomes the OpenPak CA's and its RSA-2048 modulus the OpenPak CA's; the
+// entry's flags, exponent (65537) and every instruction stay as shipped. The same file ships to
+// consoles through the OpenPak Switch Patcher (/atmosphere/exefs_patches/openpak_pvz_ca/). The check
+// is the GOS 2015 modulus (256 bytes at 0x86E2FD8), update v1.0.4.
+constexpr std::array<Patch, 4> BuiltinPatches{{
     {"Crash Team Racing Nitro-Fueled v983040 Demonware key", "1C689518406930512C13DDF4217E7676",
      0x40B4E40, 294, "f474dda2e170d9700e329935e35ef7b3e9df9c1c", CtrKeyIps},
     {"Diablo II: Resurrected base game server trust", "4DE22400C997ED2373F0643E9FE9B079DB0E8D72",
      0x1B00133, 4741, "a334bc27d793ded1055b398d05f1d33daa2160f0", D2rTrustBaseIps},
     {"Diablo II: Resurrected v1.0.34 game server trust", "DB0507F36B84200AC05F75D76ED5026F903E6C9",
      0x1D6549A, 13093, "f96672829b63410f50124a6b74c98d4093f4d09d", D2rTrustUpdateIps},
+    {"Plants vs. Zombies: Battle for Neighborville v1.0.4 EA CA", "5AD255D6667B6EB5BDCF74B74BCD2602",
+     0x86E2FD8, 256, "0b23d9b4aa2f507f406b128041b671eb558feef3", PvzCaIps},
 }};
 
 std::string_view TrimPadding(std::string_view hex) {
