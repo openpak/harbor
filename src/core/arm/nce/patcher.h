@@ -48,17 +48,24 @@ using ModuleTextAddress = u64;
 using PatchTextAddress = u64;
 using EntryTrampolines = ::Common::unordered_map<ModuleTextAddress, PatchTextAddress>;
 
+struct InstructionPatch {
+    u64 offset;
+    u32 replacement;
+};
+
 class Patcher {
 public:
     void SetModuleID(const ModuleID& id) {
         module_id = id;
     }
     explicit Patcher();
+    explicit Patcher(std::span<const u8> text);
     ~Patcher();
     // zero_size: bytes of zero image (a module's BSS) that follow program_image's current end but
     // are not in it (Kernel::CodeSet::zero_size); image sizes and offsets count them.
     bool PatchText(std::span<const u8> program_image, size_t zero_size, const Kernel::CodeSet::Segment& code);
     bool RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code, std::vector<u8>& program_image, size_t zero_size, EntryTrampolines* out_trampolines);
+    std::span<const u32> RelocateRuntimeTls(s64 patch_offset, std::vector<InstructionPatch>& out_patches);
     size_t GetSectionSize() const noexcept;
     size_t GetPreSectionSize() const noexcept;
 
