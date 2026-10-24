@@ -142,7 +142,8 @@ void CeilingChecks(const std::vector<np::PinnedKey>& keys) {
                R"("ip_redirects":{"switch":[)" + rules + "]}}";
     };
     const std::string ip_payload =
-        with_ip(R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp"},)"
+        with_ip(R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp",)"
+                R"("title":"0100C6800B934000"},)"
                 R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22691","proto":"udp"})");
     std::string ip_error;
     const auto ip_ceiling =
@@ -159,6 +160,7 @@ void CeilingChecks(const std::vector<np::PinnedKey>& keys) {
              R"({"from":"192.0.2.7:23001","to":"203.0.113.10:0","proto":"tcp"})",
              R"({"from":"192.0.2.7:23001","to":"example.org:22690","proto":"tcp"})",
              R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"sctp"})",
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp","title":"x"})",
              R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp"},)"
              R"({"from":"192.0.2.7:23001","to":"203.0.113.11:22690","proto":"tcp"})",
          }) {

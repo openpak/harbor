@@ -411,6 +411,19 @@ std::optional<Ceiling> VerifyCeiling(std::string const& envelope,
                                                 r.from_port) &&
                               ParseIpv4Endpoint(entry.at("to").get<std::string>(), r.to_ip,
                                                 r.to_port);
+                    // "title" (16 hex digits) scopes the rule to one program on a console, whose
+                    // bsd mitm only takes over that program's sessions. Harbor's bsd sees every
+                    // process anyway, so it checks the field's shape and applies the rule to all.
+                    if (ok && entry.contains("title")) {
+                        auto const& title = entry.at("title");
+                        ok = title.is_string() && title.get<std::string>().size() == 16 &&
+                             std::all_of(title.get<std::string>().begin(),
+                                         title.get<std::string>().end(), [](char ch) {
+                                             return (ch >= '0' && ch <= '9') ||
+                                                    (ch >= 'a' && ch <= 'f') ||
+                                                    (ch >= 'A' && ch <= 'F');
+                                         });
+                    }
                     if (ok) {
                         r.tcp = entry.at("proto") == "tcp";
                         ok = std::none_of(rules.begin(), rules.end(), [&](IpRedirect const& o) {

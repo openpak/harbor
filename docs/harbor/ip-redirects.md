@@ -13,7 +13,8 @@ cached, verified and rollback-protected the same way:
 ```json
 "ip_redirects": {
   "switch": [
-    { "from": "192.0.2.7:23001", "to": "203.0.113.10:22690", "proto": "tcp" }
+    { "from": "192.0.2.7:23001", "to": "203.0.113.10:22690", "proto": "tcp",
+      "title": "0100C6800B934000" }
   ]
 }
 ```
@@ -21,6 +22,10 @@ cached, verified and rollback-protected the same way:
 - `from` and `to` are a dotted-quad IPv4 address with a port from 1 to 65535. The address has no
   leading zeros and is never a name.
 - `proto` is `tcp` (a stream connect) or `udp` (connect or sendto on a datagram socket).
+- `title` (16 hex digits, optional here) is the program the rule is for. A console needs it: its
+  `bsd:u` MITM takes over only the sessions of a listed program, because every command it does
+  not rewrite is forwarded synchronously. Harbor checks its shape and applies the rule to every
+  process.
 - A platform lists each `from` at most once per protocol. One malformed or duplicate entry rejects
   the whole file, the same as a malformed family.
 - The section is optional. A client that predates it ignores it, because unknown fields are
