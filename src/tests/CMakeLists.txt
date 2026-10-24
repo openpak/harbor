@@ -30,6 +30,14 @@ target_link_libraries(tests PRIVATE ${PLATFORM_LIBRARIES} Catch2::Catch2WithMain
 
 add_test(NAME tests COMMAND tests)
 
+add_executable(texture_cache_stride_selftest
+    video_core/texture_cache_stride.cpp
+    ../harbor_setup/vma_impl.cpp
+)
+set_source_files_properties(../harbor_setup/vma_impl.cpp PROPERTIES COMPILE_OPTIONS -w)
+target_link_libraries(texture_cache_stride_selftest PRIVATE common core video_core)
+add_test(NAME texture_cache_stride_selftest COMMAND texture_cache_stride_selftest)
+
 # needed for vma
 if (NOT MSVC)
     target_compile_options(tests PRIVATE

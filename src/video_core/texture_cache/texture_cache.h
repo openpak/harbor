@@ -1573,7 +1573,14 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         if (solution) {
             gpu_addr = solution->gpu_addr;
             cpu_addr = solution->cpu_addr;
-            new_info.resources = solution->resources;
+            if (new_info.layer_stride == 0 && overlap.info.layer_stride != 0 &&
+                solution->resources.layers > 1) {
+                LOG_INFO(HW_GPU,
+                         "Texture cache: retaining stride {} for merged {}x{} target ({} layers)",
+                         overlap.info.layer_stride, new_info.size.width, new_info.size.height,
+                         solution->resources.layers);
+            }
+            new_info.MergeResources(solution->resources, overlap.info);
             join_overlap_ids.push_back(overlap_id);
             join_copies_to_do.emplace_back(JoinCopy{false, overlap_id});
             return;

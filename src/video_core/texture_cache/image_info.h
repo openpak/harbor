@@ -25,6 +25,16 @@ struct ImageInfo {
     explicit ImageInfo(const Tegra::Engines::Fermi2D::Surface& config) noexcept;
     explicit ImageInfo(const Tegra::DMA::ImageOperand& config) noexcept;
 
+    void MergeResources(SubresourceExtent extent, const ImageInfo& overlap) noexcept {
+        // A single-layer render target can omit its array pitch. If an overlapping texture
+        // extends it to an array, retain that texture's stride along with its layer count.
+        if (layer_stride == 0) {
+            layer_stride = overlap.layer_stride;
+            maybe_unaligned_layer_stride = overlap.maybe_unaligned_layer_stride;
+        }
+        resources = extent;
+    }
+
     PixelFormat format = PixelFormat::Invalid;
     ImageType type = ImageType::e1D;
     SubresourceExtent resources;
