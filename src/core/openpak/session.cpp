@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -20,6 +21,14 @@
 #include <thread>
 #include <utility>
 
+#ifndef _WIN32
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/resource.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
@@ -515,12 +524,73 @@ httplib::Headers Bearer(const std::string& token) {
     return {{"Authorization", "Bearer " + token}};
 }
 
+#ifndef _WIN32
+/// What httplib hides behind "Could not establish connection": the process' open descriptors
+/// against its limit, and the errno of one plain non-blocking connect to the console server (the
+/// ROG 3 lost every new connection mid-session while the Wi-Fi stayed up; descriptor exhaustion,
+/// a network the app is cut from and a dead route all look the same from httplib). At most one
+/// report a minute.
+void LogConnectFailure() {
+    static std::atomic<std::int64_t> last_report{0};
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    auto previous = last_report.load();
+    if (now - previous < 60 || !last_report.compare_exchange_strong(previous, now)) {
+        return;
+    }
+    std::size_t open_fds = 0;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator{"/proc/self/fd", ec}) {
+        static_cast<void>(entry);
+        ++open_fds;
+    }
+    rlimit limit{};
+    getrlimit(RLIMIT_NOFILE, &limit);
+
+    const Endpoint endpoint = EndpointSnapshot(Get());
+    std::string probe = "no endpoint";
+    if (!endpoint.host.empty()) {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(static_cast<std::uint16_t>(endpoint.port));
+        if (inet_pton(AF_INET, endpoint.host.c_str(), &addr.sin_addr) == 1) {
+            const int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+            if (fd < 0) {
+                probe = fmt::format("socket(): {}", std::strerror(errno));
+            } else {
+                int rc = connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+                int err = rc == 0 ? 0 : errno;
+                if (rc != 0 && err == EINPROGRESS) {
+                    pollfd pfd{fd, POLLOUT, 0};
+                    if (poll(&pfd, 1, 3000) == 1) {
+                        socklen_t len = sizeof(err);
+                        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+                    } else {
+                        err = ETIMEDOUT;
+                    }
+                }
+                probe = err == 0 ? "connect ok" : fmt::format("connect(): {}", std::strerror(err));
+                close(fd);
+            }
+        }
+    }
+    LOG_WARNING(WebService, "[OpenPak] connect failure: {} open descriptors (limit {}), probe: {}",
+                open_fds, static_cast<std::uint64_t>(limit.rlim_cur), probe);
+}
+#else
+void LogConnectFailure() {}
+#endif
+
 /// A response body parsed, or nothing. Failures log the status and the body's size only: the
 /// body of this chain carries tokens and ids.
 std::optional<nlohmann::json> Parsed(const httplib::Result& result, std::string_view what) {
     if (!result) {
         LOG_WARNING(WebService, "[OpenPak] {} did not reach the server: {}", what,
                     httplib::to_string(result.error()));
+        if (result.error() == httplib::Error::Connection) {
+            LogConnectFailure();
+        }
         return std::nullopt;
     }
     if (result->status < 200 || result->status >= 300) {
