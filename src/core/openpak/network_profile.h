@@ -89,14 +89,39 @@ PinnedKey MakePinnedKey(std::array<unsigned char, 32> const& raw);
 // key is retired.
 std::vector<PinnedKey> const& PinnedKeys();
 
+// One signed destination rewrite (the ceiling's "ip_redirects"): a title that dials `from`, a
+// hard-coded IPv4 address and port rather than a name, is connected to `to` instead. Only a listed
+// address:port is rewritten, and only to the target the signed file names, so the box cannot widen
+// it either.
+struct IpRedirect {
+    std::array<unsigned char, 4> from_ip{};
+    unsigned short from_port = 0;
+    std::array<unsigned char, 4> to_ip{};
+    unsigned short to_port = 0;
+    bool tcp = true;  // "proto": "tcp" (a connect) or "udp" (connect or sendto on a datagram socket)
+};
+
 struct Ceiling {
     long long version = 0;  // 0: the compiled fallback, never signed
     std::string issued;
     std::map<std::string, std::vector<std::string>> platforms;
+    std::map<std::string, std::vector<IpRedirect>> ip_redirects;  // none in the compiled fallback
 
     // The platform's families; none for a platform the ceiling does not name.
     std::vector<std::string> const& FamiliesFor(std::string const& platform) const;
+    // The platform's ip redirects; none for a platform the ceiling does not name.
+    std::vector<IpRedirect> const& IpRedirectsFor(std::string const& platform) const;
 };
+
+// "a.b.c.d:port" with a dotted-quad IPv4 address (no leading zeros) and a port 1-65535.
+bool ParseIpv4Endpoint(std::string const& text, std::array<unsigned char, 4>& ip,
+                       unsigned short& port);
+
+// The target of this platform's signed ip redirect for a destination (port in host order), from
+// CurrentCeiling(); nothing when the destination is not listed for that protocol.
+std::optional<std::pair<std::array<unsigned char, 4>, unsigned short>> IpRedirectFor(
+    std::array<unsigned char, 4> const& ip, unsigned short port, bool tcp,
+    std::string const& platform);
 
 enum class CeilingSource {
     Fetched,  // fetched now, verified, not older than anything accepted before, cached
@@ -120,7 +145,8 @@ bool FamilyWellFormed(std::string const& family);
 
 // Verifies an envelope: at least one Ed25519 signature over the decoded payload bytes that is valid
 // under a key in `keys` with that keyid, then parses those same bytes and applies the payload
-// rules (type, positive version, every family well formed -- one bad entry rejects the file).
+// rules (type, positive version, every family well formed, every ip redirect well formed and
+// unique per platform and protocol -- one bad entry rejects the file).
 std::optional<Ceiling> VerifyCeiling(std::string const& envelope,
                                      std::vector<PinnedKey> const& keys, std::string& error);
 

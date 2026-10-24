@@ -9,6 +9,10 @@
 #include "core/hle/service/sockets/sfdnsres_redirect.h"
 #define HARBOR_HAVE_DNS_HOOKS 1
 #endif
+#if __has_include("core/hle/service/sockets/bsd_ip_redirect.h")
+#include "core/hle/service/sockets/bsd_ip_redirect.h"
+#define HARBOR_HAVE_IP_REDIRECT_HOOK 1
+#endif
 #if __has_include("core/hle/service/ssl/ssl_trust.h")
 #include "core/hle/service/ssl/ssl_trust.h"
 #define HARBOR_HAVE_TLS_HOOKS 1
@@ -39,6 +43,23 @@ void InstallServiceHooks() {
                 return NetworkProfile::NameAllowed(host, Network::PlatformName);
             },
     });
+#endif
+#ifdef HARBOR_HAVE_IP_REDIRECT_HOOK
+    // Hard-coded destinations the signed ceiling lists (its "ip_redirects"); nothing while OpenPak
+    // is off. Runs on guest IPC threads for every addressed datagram: answers from memory.
+    Service::Sockets::IpRedirect::SetHook(
+        [](const ::Network::SockAddrIn& to, bool stream) -> std::optional<::Network::SockAddrIn> {
+            if (!Network::Enabled()) {
+                return std::nullopt;
+            }
+            const auto target =
+                NetworkProfile::IpRedirectFor(to.ip, to.portno, stream, Network::PlatformName);
+            if (!target) {
+                return std::nullopt;
+            }
+            return ::Network::SockAddrIn{.family = to.family, .ip = target->first,
+                                         .portno = target->second};
+        });
 #endif
 #ifdef HARBOR_HAVE_TLS_HOOKS
     // Only a CA that matched the profile's pin at boot; none while OpenPak is off.

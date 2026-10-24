@@ -32,6 +32,7 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/sockets/bsd.h"
+#include "core/hle/service/sockets/bsd_ip_redirect.h"
 #include "core/hle/service/sockets/sfdnsres.h"
 #include "core/hle/service/sockets/sockets_translate.h"
 #include "core/internal_network/network.h"
@@ -334,10 +335,30 @@ Outcome OpConnect(DescriptorTable& table, s32 fd, std::span<const u8> addr, Park
             return ErrnoResult(file->is_inet6 ? Errno::NETUNREACH : Errno::INVAL);
         }
         const bool blocking = !file->non_blocking && !file->is_proxy;
+        // A signed ip redirect (bsd_ip_redirect.h) changes where the host connects; the guest
+        // keeps the address it dialled as its peer.
+        const auto redirected =
+            file->is_proxy ? std::nullopt
+                           : IpRedirect::For(*host_addr, file->is_connection_based);
+        if (redirected) {
+            LOG_INFO(Service, "bsd: {} {}:{} -> {}:{} (ip redirect)",
+                     file->is_connection_based ? "connect" : "connect (datagram)",
+                     fmt::join(host_addr->ip, "."), host_addr->portno,
+                     fmt::join(redirected->ip, "."), redirected->portno);
+            std::scoped_lock lk{file->state_mutex};
+            file->guest_peer = *host_addr;
+            if (!file->is_connection_based) {
+                file->redirected_datagrams.emplace_back(*redirected, *host_addr);
+            }
+        } else {
+            std::scoped_lock lk{file->state_mutex};
+            file->guest_peer.reset();
+        }
+        const Network::SockAddrIn target = redirected ? *redirected : *host_addr;
         if (blocking) {
             socket.SetNonBlock(true);
         }
-        Errno e = Translate(socket.Connect(*host_addr));
+        Errno e = Translate(socket.Connect(target));
         if (e == Errno::INPROGRESS) {
             std::scoped_lock lk{file->state_mutex};
             file->pending_peer = *host_addr;
@@ -449,6 +470,14 @@ Outcome OpRecv(DescriptorTable& table, s32 fd, u32 flags, std::vector<u8>& messa
         if (!want_from || r.first < 0) {
             addr_out->clear();
         } else {
+            // A reply from an ip redirect's target comes from the address the guest sent to.
+            std::scoped_lock lk{file->state_mutex};
+            for (const auto& [target, guest] : file->redirected_datagrams) {
+                if (IpRedirect::SameEndpoint(target, from)) {
+                    from = guest;
+                    break;
+                }
+            }
             *addr_out = GuestAddrBytes(*file, from);
         }
     }
@@ -479,8 +508,26 @@ Result2 OpSend(DescriptorTable& table, s32 fd, u32 flags, std::span<const u8> me
     if (!host_addr) {
         return {-1, file->is_inet6 ? Errno::NETUNREACH : Errno::INVAL};
     }
-    const auto sent = Translate(file->socket->SendTo(flags, message, &*host_addr));
-    TraceDatagram("send", *file, &*host_addr, sent.first, sent.second);
+    Network::SockAddrIn target = *host_addr;
+    if (!file->is_proxy && !file->is_connection_based) {
+        if (const auto redirected = IpRedirect::For(*host_addr, false)) {
+            target = *redirected;
+            std::scoped_lock lk{file->state_mutex};
+            auto& seen = file->redirected_datagrams;
+            const bool known = std::any_of(seen.begin(), seen.end(), [&](const auto& p) {
+                return IpRedirect::SameEndpoint(p.first, target) &&
+                       IpRedirect::SameEndpoint(p.second, *host_addr);
+            });
+            if (!known) {
+                LOG_INFO(Service, "bsd: sendto {}:{} -> {}:{} (ip redirect)",
+                         fmt::join(host_addr->ip, "."), host_addr->portno,
+                         fmt::join(target.ip, "."), target.portno);
+                seen.emplace_back(target, *host_addr);
+            }
+        }
+    }
+    const auto sent = Translate(file->socket->SendTo(flags, message, &target));
+    TraceDatagram("send", *file, &target, sent.first, sent.second);
     return sent;
 }
 
@@ -1651,6 +1698,9 @@ void BSD_USA::GetPeerName(HLERequestContext& ctx) {
         } else if (host_err == Network::Errno::NOTCONN && file->pending_peer) {
             addr = *file->pending_peer;
             host_err = Network::Errno::SUCCESS;
+        }
+        if (host_err == Network::Errno::SUCCESS && file->guest_peer) {
+            addr = *file->guest_peer; // the address the guest dialled, not the ip redirect's
         }
     }
     if (host_err != Network::Errno::SUCCESS) {

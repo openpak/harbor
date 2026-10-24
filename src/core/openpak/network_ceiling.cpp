@@ -204,6 +204,53 @@ std::vector<std::string> const& Ceiling::FamiliesFor(std::string const& platform
     return it == platforms.end() ? none : it->second;
 }
 
+std::vector<IpRedirect> const& Ceiling::IpRedirectsFor(std::string const& platform) const {
+    static const std::vector<IpRedirect> none;
+    auto const it = ip_redirects.find(platform);
+    return it == ip_redirects.end() ? none : it->second;
+}
+
+bool ParseIpv4Endpoint(std::string const& text, std::array<unsigned char, 4>& ip,
+                       unsigned short& port) {
+    std::size_t const colon = text.find(':');
+    if (colon == std::string::npos || text.find(':', colon + 1) != std::string::npos) {
+        return false;
+    }
+    auto number = [](std::string const& part, unsigned long max, unsigned long& out) {
+        if (part.empty() || part.size() > 5 || (part.size() > 1 && part.front() == '0')) {
+            return false;
+        }
+        out = 0;
+        for (char c : part) {
+            if (c < '0' || c > '9') {
+                return false;
+            }
+            out = out * 10 + static_cast<unsigned long>(c - '0');
+        }
+        return out <= max;
+    };
+    std::string const address = text.substr(0, colon);
+    std::size_t start = 0;
+    for (int i = 0; i < 4; ++i) {
+        std::size_t const dot = address.find('.', start);
+        if ((i < 3) != (dot != std::string::npos)) {
+            return false;
+        }
+        unsigned long octet = 0;
+        if (!number(address.substr(start, i < 3 ? dot - start : std::string::npos), 255, octet)) {
+            return false;
+        }
+        ip[static_cast<std::size_t>(i)] = static_cast<unsigned char>(octet);
+        start = dot + 1;
+    }
+    unsigned long p = 0;
+    if (!number(text.substr(colon + 1), 65535, p) || p == 0) {
+        return false;
+    }
+    port = static_cast<unsigned short>(p);
+    return true;
+}
+
 char const* CeilingSourceName(CeilingSource s) {
     switch (s) {
     case CeilingSource::Fetched: return "fetched";
@@ -340,6 +387,47 @@ std::optional<Ceiling> VerifyCeiling(std::string const& envelope,
             }
             c.platforms[platform] = std::move(families);
         }
+        // Optional: titles that dial a hard-coded address (bsd_ip_redirect.h). Strict like the
+        // families: one malformed or duplicate entry rejects the file.
+        if (doc.contains("ip_redirects")) {
+            if (!doc.at("ip_redirects").is_object()) {
+                error = "ip_redirects is not an object";
+                return std::nullopt;
+            }
+            for (auto const& [platform, list] : doc.at("ip_redirects").items()) {
+                if (!list.is_array()) {
+                    error = fmt::format("ip_redirects {} is not a list", platform);
+                    return std::nullopt;
+                }
+                std::vector<IpRedirect> rules;
+                for (auto const& entry : list) {
+                    IpRedirect r;
+                    bool ok = entry.is_object() && entry.contains("from") &&
+                              entry.at("from").is_string() && entry.contains("to") &&
+                              entry.at("to").is_string() && entry.contains("proto") &&
+                              entry.at("proto").is_string() &&
+                              (entry.at("proto") == "tcp" || entry.at("proto") == "udp") &&
+                              ParseIpv4Endpoint(entry.at("from").get<std::string>(), r.from_ip,
+                                                r.from_port) &&
+                              ParseIpv4Endpoint(entry.at("to").get<std::string>(), r.to_ip,
+                                                r.to_port);
+                    if (ok) {
+                        r.tcp = entry.at("proto") == "tcp";
+                        ok = std::none_of(rules.begin(), rules.end(), [&](IpRedirect const& o) {
+                            return o.tcp == r.tcp && o.from_ip == r.from_ip &&
+                                   o.from_port == r.from_port;
+                        });
+                    }
+                    if (!ok) {
+                        error = fmt::format("ip_redirects {} has a malformed or duplicate entry {}",
+                                            platform, entry.dump());
+                        return std::nullopt;
+                    }
+                    rules.push_back(r);
+                }
+                c.ip_redirects[platform] = std::move(rules);
+            }
+        }
         return c;
     } catch (std::exception const& e) {
         error = fmt::format("payload does not parse: {}", e.what());
@@ -462,6 +550,28 @@ Ceiling CurrentCeiling() {
     return *g_ceiling;
 }
 
+std::optional<std::pair<std::array<unsigned char, 4>, unsigned short>> IpRedirectFor(
+    std::array<unsigned char, 4> const& ip, unsigned short port, bool tcp,
+    std::string const& platform) {
+    // Called for every datagram a guest sends to an address: look in place, no copy.
+    auto find = [&](Ceiling const& ceiling)
+        -> std::optional<std::pair<std::array<unsigned char, 4>, unsigned short>> {
+        for (auto const& r : ceiling.IpRedirectsFor(platform)) {
+            if (r.tcp == tcp && r.from_ip == ip && r.from_port == port) {
+                return std::make_pair(r.to_ip, r.to_port);
+            }
+        }
+        return std::nullopt;
+    };
+    {
+        std::lock_guard lock{g_ceiling_mutex};
+        if (g_ceiling) {
+            return find(*g_ceiling);
+        }
+    }
+    return find(CurrentCeiling());
+}
+
 bool NameInFamilies(std::string const& host, std::vector<std::string> const& families) {
     std::string const name = Lower(host);
     for (auto const& family : families) {
@@ -514,6 +624,17 @@ std::string EffectiveDigest(Profile const& profile) {
     }
     if (!profile.server_address.empty()) {
         entries.push_back("address:" + profile.server_address);
+    }
+    // The signed ip redirects are part of what this platform redirects (none: no line, so a
+    // platform without any keeps its digest).
+    auto endpoint = [](std::array<unsigned char, 4> const& ip, unsigned short port) {
+        return fmt::format("{}.{}.{}.{}:{}", ip[0], ip[1], ip[2], ip[3], port);
+    };
+    Ceiling const ceiling = CurrentCeiling();
+    for (auto const& r : ceiling.IpRedirectsFor(profile.platform)) {
+        entries.push_back(fmt::format("ip:{}:{}={}", r.tcp ? "tcp" : "udp",
+                                      endpoint(r.from_ip, r.from_port),
+                                      endpoint(r.to_ip, r.to_port)));
     }
     std::sort(entries.begin(), entries.end());
     entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
