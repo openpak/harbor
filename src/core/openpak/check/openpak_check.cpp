@@ -154,6 +154,9 @@ void CeilingChecks(const std::vector<np::PinnedKey>& keys) {
               !ip_ceiling->IpRedirectsFor("switch")[1].tcp &&
               ip_ceiling->IpRedirectsFor("wiiu").empty(),
           "signed ip redirects are read per platform and protocol");
+    if (!ip_ceiling) {
+        std::printf("        (%s)\n", ip_error.c_str());
+    }
     for (const char* bad : {
              R"({"from":"192.0.2.7","to":"203.0.113.10:22690","proto":"tcp"})",
              R"({"from":"192.0.2.07:23001","to":"203.0.113.10:22690","proto":"tcp"})",

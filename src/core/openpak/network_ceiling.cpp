@@ -415,14 +415,13 @@ std::optional<Ceiling> VerifyCeiling(std::string const& envelope,
                     // bsd mitm only takes over that program's sessions. Harbor's bsd sees every
                     // process anyway, so it checks the field's shape and applies the rule to all.
                     if (ok && entry.contains("title")) {
-                        auto const& title = entry.at("title");
-                        ok = title.is_string() && title.get<std::string>().size() == 16 &&
-                             std::all_of(title.get<std::string>().begin(),
-                                         title.get<std::string>().end(), [](char ch) {
-                                             return (ch >= '0' && ch <= '9') ||
-                                                    (ch >= 'a' && ch <= 'f') ||
-                                                    (ch >= 'A' && ch <= 'F');
-                                         });
+                        auto const& node = entry.at("title");
+                        std::string const title = node.is_string() ? node.get<std::string>() : "";
+                        ok = title.size() == 16 &&
+                             std::all_of(title.begin(), title.end(), [](char ch) {
+                                 return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') ||
+                                        (ch >= 'A' && ch <= 'F');
+                             });
                     }
                     if (ok) {
                         r.tcp = entry.at("proto") == "tcp";
