@@ -316,6 +316,27 @@ GraphicsPipeline::GraphicsPipeline(
             MakePipeline(render_pass);
         } catch (const vk::Exception& exception) {
             LOG_CRITICAL(Render_Vulkan, "Graphics pipeline build failed: {}", exception.what());
+            // Name the shaders so a failing pipeline can be matched to the guest shader cache.
+            LOG_CRITICAL(Render_Vulkan,
+                         "  failed pipeline: shaders {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}, "
+                         "{} textures, {} descriptors, push={} descriptor_buffer={}",
+                         key.unique_hashes[0], key.unique_hashes[1], key.unique_hashes[2],
+                         key.unique_hashes[3], key.unique_hashes[4], key.unique_hashes[5],
+                         num_textures, num_descriptor_entries, uses_push_descriptor,
+                         uses_descriptor_buffer);
+            for (size_t stage = 0; stage < NUM_STAGES; ++stage) {
+                const Shader::Info& info{stage_infos[stage]};
+                if (key.unique_hashes[stage] == 0) {
+                    continue;
+                }
+                LOG_CRITICAL(Render_Vulkan,
+                             "  stage {}: subgroup_shuffles={} quad_shuffles={} derivatives={} "
+                             "cbufs={:08x} ssbos={} images={} textures={}",
+                             stage, info.uses_subgroup_shuffles, info.uses_quad_shuffles,
+                             info.uses_derivatives, info.constant_buffer_mask,
+                             info.storage_buffers_descriptors.size(),
+                             info.image_descriptors.size(), info.texture_descriptors.size());
+            }
             std::scoped_lock lock{build_mutex};
             is_built = true;
             build_condvar.notify_one();
