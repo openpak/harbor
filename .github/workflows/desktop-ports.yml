@@ -5,11 +5,10 @@
 # Compile check of the Harbor desktop (the Qt frontend with the Borealis setup and Harbor menu) on
 # Windows (MSVC) and macOS (Apple Clang, Homebrew).
 #
-# - Manual runs only: the repository is private, so these GitHub-hosted runners cost minutes. The
-#   owner starts it from the Actions tab and picks one platform or both.
+# - Manual runs only: the owner starts it from the Actions tab and picks one platform or both.
 # - Compile coverage, not a release: it builds the harbor executable and the two Harbor setup tools
 #   and keeps nothing (no workflow artifacts, the organisation's artifact quota).
-# - Linux is built locally and by release.yml on the self-hosted runner.
+# - Linux is built locally and by release.yml (harbor-build.yml).
 name: Desktop ports (compile check)
 
 on:

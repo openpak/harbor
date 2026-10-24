@@ -6,12 +6,9 @@
 #
 # - Builds only on a tag push or a deliberate manual run, never on branch pushes.
 # - One job creates the release; the build legs then attach their files to it.
-# - Public repository: GitHub-hosted runners, through harbor-build.yml (shared with nightly.yml).
-#   The self-hosted runner group does not serve public repositories.
-# - Private repository: the self-hosted heavy runner (this workstation), directly on the host with
-#   its own toolchains, one leg at a time. Every heavy step holds the shared OpenPak build lock, so
-#   CI never builds beside a local build, and waits while an emulator runs on the machine. Hosted
-#   runners would cost organisation minutes here.
+# - GitHub-hosted runners, through harbor-build.yml (shared with nightly.yml).
+# - dry_run (manual): builds every leg from the tag, or from the dispatched ref when no tag is
+#   given; creates no release, signs nothing and attaches nothing.
 # - Nothing goes through workflow artifacts (the organisation's artifact quota): each leg attaches
 #   its file to the release itself.
 name: Release
@@ -22,8 +19,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing vX.Y.Z tag to build and attach to'
-        required: true
+        description: 'Existing vX.Y.Z tag to build and attach to (optional for a dry run)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Build everything; no release, no signing, nothing attached'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -35,12 +37,12 @@ concurrency:
 env:
   TAG: ${{ inputs.tag || github.ref_name }}
   GIT_TAG_NAME: ${{ inputs.tag || github.ref_name }}
-  BUILD_LOCK: /tmp/openpak-build.lock
 
 jobs:
   release:
     name: Create the release
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "linux", "podman", "heavy"]') || 'ubuntu-latest' }}
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
     steps:
       - name: Check the tag
         uses: actions/github-script@v7
@@ -71,131 +73,12 @@ jobs:
   build-hosted:
     name: Build
     needs: [release]
-    if: ${{ !github.event.repository.private }}
+    # A dry run skips the release job; the build still runs.
+    if: ${{ !cancelled() && (needs.release.result == 'success' || (inputs.dry_run && needs.release.result == 'skipped')) }}
     uses: ./.github/workflows/harbor-build.yml
     secrets: inherit
     with:
       tag: ${{ inputs.tag || github.ref_name }}
-      ref: ${{ inputs.tag || github.ref_name }}
+      ref: ${{ inputs.tag || github.sha }}
       version: ${{ inputs.tag || github.ref_name }}
-
-  build:
-    name: Build ${{ matrix.target }}
-    needs: [release]
-    if: github.event.repository.private
-    runs-on: [self-hosted, linux, podman, heavy]
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        target: [linux, legacy, mainline]
-    env:
-      # Four compile jobs: more has run this machine out of memory while other work runs.
-      JOBS: 4
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.TAG }}
-          fetch-depth: 0
-
-      # As scripts/harbor/common.sh refuses to build while an emulator runs here, CI waits for it
-      # to close (the runner is the owner's workstation); the owner's isolated test runs under the
-      # scratch run directories do not count.
-      - name: Wait while an emulator runs on this machine
-        run: |
-          emulators_running() {
-            pgrep -x Ryujinx >/dev/null && return 0
-            pgrep -x eden >/dev/null && return 0
-            pgrep -x yuzu >/dev/null && return 0
-            pgrep -f '^[^ ]*dotnet[^ ]* .*(Ryujinx|Harbor)\.dll' >/dev/null && return 0
-            for pid in $(pgrep -x harbor || true); do
-              case "$(readlink "/proc/$pid/cwd" 2>/dev/null)" in
-                */scratch/harbor-eden/run/*) ;;
-                *) return 0 ;;
-              esac
-            done
-            return 1
-          }
-          while emulators_running; do
-            echo "An emulator is running; waiting before building."
-            sleep 120
-          done
-
-      - name: Build the Linux desktop
-        if: matrix.target == 'linux'
-        run: |
-          set -euo pipefail
-          # ponytail: CMakeLists pins the CPM cache inside the tree, so checkout's clean refetches
-          # the bundled dependencies every release; move it out if the downloads start to hurt.
-          flock "$BUILD_LOCK" nice -n 19 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr \
-            -DYUZU_TESTS=OFF \
-            -DENABLE_WEB_SERVICE=OFF -DENABLE_UPDATE_CHECKER=OFF -DUSE_DISCORD_PRESENCE=OFF \
-            -DYUZU_USE_BUNDLED_QT=OFF -DENABLE_QT_TRANSLATION=OFF \
-            -DVulkanHeaders_FORCE_BUNDLED=ON
-          flock "$BUILD_LOCK" nice -n 19 cmake --build build -j"$JOBS"
-          rm -rf staging
-          DESTDIR="$PWD/staging" cmake --install build
-          out="harbor-$TAG-linux-x86_64.tar.zst"
-          tar -C staging -cf - . | zstd -19 -T0 -o "$out"
-          echo "ASSET=$out" >> "$GITHUB_ENV"
-
-      # Signing: the committed debug keystore until the owner decides on the release key.
-      # TODO(release key): store the release keystore as the ANDROID_KEYSTORE_B64 secret (base64)
-      # with ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS; this step then signs with it.
-      - name: Signing
-        if: matrix.target != 'linux'
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-        run: |
-          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASS" ] && [ -n "$KEY_ALIAS" ]; then
-            keystore="$RUNNER_TEMP/harbor-release.keystore"
-            printf '%s' "$KEYSTORE_B64" | base64 -d > "$keystore"
-            {
-              echo "ANDROID_KEYSTORE_FILE=$keystore"
-              echo "ANDROID_KEYSTORE_PASS=$KEYSTORE_PASS"
-              echo "ANDROID_KEY_ALIAS=$KEY_ALIAS"
-            } >> "$GITHUB_ENV"
-            echo "Signing with the release keystore from the repository secrets."
-          else
-            echo "::warning::No release keystore in the secrets: the APK is signed with the committed debug keystore."
-          fi
-
-      # The Android Gradle plugin runs ninja without -j, which exhausts memory here, so compile and
-      # link are limited with CMake job pools, as scripts/harbor/build-android.sh does.
-      - name: Build the ${{ matrix.target }} APK
-        if: matrix.target != 'linux'
-        env:
-          FLAVOR: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
-          export PATH="$JAVA_HOME/bin:$PATH"
-          export ANDROID_HOME="$HOME/Android/Sdk"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          task="assemble${FLAVOR^}Release"
-          cd src/android
-          flock "$BUILD_LOCK" nice -n 19 ./gradlew "$task" \
-            -Dorg.gradle.daemon=false \
-            -Dorg.gradle.workers.max=$JOBS \
-            -PYUZU_ANDROID_ARGS="-DYUZU_DOWNLOAD_ANDROID_VVL=OFF -DCMAKE_JOB_POOLS=compile=$JOBS;link=2 -DCMAKE_JOB_POOL_COMPILE=compile -DCMAKE_JOB_POOL_LINK=link" \
-            -Pnightly=false
-          out="harbor-$TAG-android-$FLAVOR.apk"
-          cp "app/build/outputs/apk/$FLAVOR/release/app-$FLAVOR-release.apk" "$GITHUB_WORKSPACE/$out"
-          echo "ASSET=$out" >> "$GITHUB_ENV"
-
-      # Attaches to the release the first job created (the action does not create another one for
-      # an existing tag's release).
-      - name: Attach to the release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          files: ${{ env.ASSET }}
-          fail_on_unmatched_files: true
-
-      - name: Remove the signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/harbor-release.keystore"
+      dry_run: ${{ inputs.dry_run || false }}

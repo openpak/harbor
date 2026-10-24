@@ -10,7 +10,8 @@
 # - Linux builds in an Arch Linux container against Arch's system Qt and libraries, the way the
 #   tarball was built on the owner's workstation before.
 # - Nothing goes through workflow artifacts (the organisation's artifact quota): each job attaches
-#   its file to the release itself.
+#   its file to the release itself, through softprops/action-gh-release (no gh in the container).
+# - dry_run: every leg builds, nothing is signed with the release key and nothing is attached.
 name: Build
 
 on:
@@ -30,6 +31,11 @@ on:
         type: string
       nightly:
         description: 'Nightly build (version files from the version input)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Build everything; no signing, nothing attached to a release'
         required: false
         type: boolean
         default: false
@@ -64,12 +70,12 @@ jobs:
           rm -rf /host/android/* /host/dotnet/* /host/ghc/*
           echo "CCACHE_DIR=$GITHUB_WORKSPACE/.ccache" >> "$GITHUB_ENV"
 
-      # The package set of docs/Deps.md (Arch Linux), plus Wayland, git, ccache and the GitHub CLI.
+      # The package set of docs/Deps.md (Arch Linux), plus Wayland, git and ccache.
       - name: Install the build dependencies
         run: |
           pacman -Syu --noconfirm --needed base-devel boost catch2 cmake enet ffmpeg fmt git glslang \
             libzip lz4 ninja nlohmann-json openssl opus qt6-base qt6-multimedia qt6-charts qt6-wayland \
-            sdl3 zlib zstd zip unzip vulkan-headers libusb spirv-tools spirv-headers ccache github-cli
+            sdl3 zlib zstd zip unzip vulkan-headers libusb spirv-tools spirv-headers ccache
 
       - uses: actions/checkout@v4
         with:
@@ -117,11 +123,16 @@ jobs:
           path: .ccache
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+      # Attaches to the release the caller created (the action does not create another one for an
+      # existing tag's release).
       - name: Attach to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" "$ASSET" --clobber
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: ${{ env.ASSET }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
 
   android:
     name: Build ${{ matrix.flavor }}
@@ -182,6 +193,7 @@ jobs:
       # TODO(release key): store the release keystore as the ANDROID_KEYSTORE_B64 secret (base64)
       # with ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS; this step then signs with it.
       - name: Signing
+        if: ${{ !inputs.dry_run }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
@@ -227,11 +239,16 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ccache.outputs.cache-primary-key }}
 
+      # Attaches to the release the caller created (the action does not create another one for an
+      # existing tag's release).
       - name: Attach to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" "$ASSET" --clobber
+        if: ${{ !inputs.dry_run }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          files: ${{ env.ASSET }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
 
       - name: Remove the signing key
         if: always()
