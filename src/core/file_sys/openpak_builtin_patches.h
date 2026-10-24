@@ -31,7 +31,7 @@ struct Patch {
     std::span<const u8> ips;       // the IPS32 file, verbatim
 };
 
-// Every built-in patch. There is one; see the .cpp.
+// Every built-in patch: the CTR key and the two D2R trust patches; see the .cpp.
 std::span<const Patch> Patches();
 
 // The built-in patch for this build id (hex; trailing zero padding ignored), or nullptr.

@@ -38,7 +38,9 @@ constexpr std::array<u8, 271> CtrKeyIps{
     0xD4, 0x1A, 0x04, 0x4D, 0xBB, 0x26, 0x14, 0x20, 0xAC, 0xFF, 0x6F, 0x45, 0x45, 0x4F, 0x46,
 };
 
-// The one sanctioned game patch: a data-only key swap, the same file the console setup
+#include "core/file_sys/openpak_builtin_patches_d2r.inc"
+
+// The two sanctioned game patches, both data-only. The CTR key swap is the same file the console setup
 // (openpak.nro) installs to /atmosphere/exefs_patches/openpak_ctr_key/.
 //
 // Crash Team Racing Nitro-Fueled (0100F9F00C696000), final update v983040, main build
@@ -47,9 +49,20 @@ constexpr std::array<u8, 271> CtrKeyIps{
 // server's signatures verify; the exponent, the verifier and every instruction stay as shipped.
 // The check is the whole embedded SubjectPublicKeyInfo (294 bytes at 0x40B4E40, the modulus 0x21
 // bytes in), which must be Demonware's key.
-constexpr std::array<Patch, 1> BuiltinPatches{{
+//
+// Diablo II: Resurrected (0100726014352000), the D2R exception: after GameJoin the title dials its
+// game server with its own OpenSSL and trusts only a PEM bundle in its read-only segment, which no
+// console certificate store reaches. The patch replaces that bundle with the OpenPak CA (newline
+// padded to the same size); every instruction stays as shipped. The same files ship to consoles
+// through the OpenPak Switch Patcher (/atmosphere/exefs_patches/openpak_d2r_trust/). The check is
+// the whole original bundle: 3 DigiCert certificates in the base build, 8 in update v1.0.34.
+constexpr std::array<Patch, 3> BuiltinPatches{{
     {"Crash Team Racing Nitro-Fueled v983040 Demonware key", "1C689518406930512C13DDF4217E7676",
      0x40B4E40, 294, "f474dda2e170d9700e329935e35ef7b3e9df9c1c", CtrKeyIps},
+    {"Diablo II: Resurrected base game server trust", "4DE22400C997ED2373F0643E9FE9B079DB0E8D72",
+     0x1B00133, 4741, "a334bc27d793ded1055b398d05f1d33daa2160f0", D2rTrustBaseIps},
+    {"Diablo II: Resurrected v1.0.34 game server trust", "DB0507F36B84200AC05F75D76ED5026F903E6C9",
+     0x1D6549A, 13093, "f96672829b63410f50124a6b74c98d4093f4d09d", D2rTrustUpdateIps},
 }};
 
 std::string_view TrimPadding(std::string_view hex) {
