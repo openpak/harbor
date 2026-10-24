@@ -118,6 +118,11 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
         // MRS Xn, TPIDRRO_EL0
         if (auto mrs = MRS{inst};
             mrs.Verify() && (mrs.GetSystemReg() == TpidrroEl0 || mrs.GetSystemReg() == TpidrEl0)) {
+            // MRS XZR, ... discards the value: leave it as is. The handler would use XZR as a load
+            // base, which oaknut rejects (Spelunky 2 crashed at load with "unexpected XZR").
+            if (mrs.GetRt() == 31) {
+                continue;
+            }
             const auto src_reg = mrs.GetSystemReg() == TpidrroEl0 ? oaknut::SystemReg::TPIDRRO_EL0
                                                                   : oaknut::SystemReg::TPIDR_EL0;
             const auto dest_reg = oaknut::XReg{static_cast<int>(mrs.GetRt())};
@@ -133,6 +138,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
 
         // MRS Xn, CNTPCT_EL0
         if (auto mrs = MRS{inst}; mrs.Verify() && mrs.GetSystemReg() == CntpctEl0) {
+            if (mrs.GetRt() == 31) {
+                continue;
+            }
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
             if (pre_buffer) {
@@ -145,6 +153,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
 
         // MRS Xn, CNTFRQ_EL0
         if (auto mrs = MRS{inst}; mrs.Verify() && mrs.GetSystemReg() == CntfrqEl0) {
+            if (mrs.GetRt() == 31) {
+                continue;
+            }
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
             if (pre_buffer) {
