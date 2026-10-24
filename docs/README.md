@@ -28,7 +28,6 @@ This contains documentation created by developers, build instructions, guideline
 
 Policies and information on development.
 
-- **[AI and LLM Usage](./policies/AI.md)**
 - **[Coding guidelines](./policies/Coding.md)**
 - **[Contributing](../CONTRIBUTING.md)**
 

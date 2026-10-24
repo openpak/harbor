@@ -21,7 +21,6 @@ Eden is free, open-source, copyleft software, licensed under the terms of the [G
 ### Policies
 
 - No LLM or AI usage, *period*, for patches, pull requests, issues, comments, debugging, brainstorming, etc.
-  - For details on why, see the [detailed AI policy](docs/policies/AI.md).
 - Usage of any form of profanity or otherwise unsavory language is generally discouraged.
   - This is primarily because it rarely helps to actually understand what's going on.
   - Remember that your comments should be focused and actually address what's happening. With very few exceptions, expletives are actively detrimental at best.
