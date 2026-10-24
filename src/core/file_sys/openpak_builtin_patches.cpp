@@ -38,7 +38,9 @@ constexpr std::array<u8, 271> CtrKeyIps{
     0xD4, 0x1A, 0x04, 0x4D, 0xBB, 0x26, 0x14, 0x20, 0xAC, 0xFF, 0x6F, 0x45, 0x45, 0x4F, 0x46,
 };
 
-// The one sanctioned game patch: a data-only key swap, the same file the console setup
+#include "core/file_sys/openpak_builtin_patches_pvz.inc"
+
+// The sanctioned game patches, all data-only. The CTR key swap is the same file the console setup
 // (openpak.nro) installs to /atmosphere/exefs_patches/openpak_ctr_key/.
 //
 // Crash Team Racing Nitro-Fueled (0100F9F00C696000), final update v983040, main build
@@ -47,9 +49,19 @@ constexpr std::array<u8, 271> CtrKeyIps{
 // server's signatures verify; the exponent, the verifier and every instruction stay as shipped.
 // The check is the whole embedded SubjectPublicKeyInfo (294 bytes at 0x40B4E40, the modulus 0x21
 // bytes in), which must be Demonware's key.
-constexpr std::array<Patch, 1> BuiltinPatches{{
+//
+// Plants vs. Zombies: Battle for Neighborville (0100C56010FD8000), the PvZ exception: the title does
+// all its EA TLS through DirtySDK, which trusts only a CA list compiled into main, never the console
+// certificate store. The patch rewrites one entry of that list, EA's "GOS 2015 Certificate
+// Authority": its subject becomes the OpenPak CA's and its RSA-2048 modulus the OpenPak CA's; the
+// entry's flags, exponent (65537) and every instruction stay as shipped. The same file ships to
+// consoles through the OpenPak Switch Patcher (/atmosphere/exefs_patches/openpak_pvz_ca/). The check
+// is the GOS 2015 modulus (256 bytes at 0x86E2FD8), update v1.0.4.
+constexpr std::array<Patch, 2> BuiltinPatches{{
     {"Crash Team Racing Nitro-Fueled v983040 Demonware key", "1C689518406930512C13DDF4217E7676",
      0x40B4E40, 294, "f474dda2e170d9700e329935e35ef7b3e9df9c1c", CtrKeyIps},
+    {"Plants vs. Zombies: Battle for Neighborville v1.0.4 EA CA", "5AD255D6667B6EB5BDCF74B74BCD2602",
+     0x86E2FD8, 256, "0b23d9b4aa2f507f406b128041b671eb558feef3", PvzCaIps},
 }};
 
 std::string_view TrimPadding(std::string_view hex) {

@@ -126,6 +126,7 @@ add_library(core STATIC
     file_sys/nca_metadata.h
     file_sys/openpak_builtin_patches.cpp
     file_sys/openpak_builtin_patches.h
+    file_sys/openpak_builtin_patches_pvz.inc
     file_sys/partition_filesystem.cpp
     file_sys/partition_filesystem.h
     file_sys/patch_manager.cpp
