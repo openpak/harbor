@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <mutex>
+#include <set>
 #include <span>
 #include <thread>
 #include <vector>
@@ -65,6 +66,7 @@ private:
     mutable std::mutex m_lock;
     std::vector<IPmModule*> m_modules;
     std::mutex m_sequence_lock; // one sequence at a time
+    std::set<IPmModule*> m_stalled; // timed out on the last request and silent since
     std::thread m_worker;
     PmState m_state{PmState::FullAwake};
 };

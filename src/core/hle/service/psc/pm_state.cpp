@@ -38,6 +38,7 @@ void PmStateController::Register(IPmModule* module) {
 
 void PmStateController::Unregister(IPmModule* module) {
     std::scoped_lock lk{m_lock};
+    m_stalled.erase(module);
     std::erase(m_modules, module);
 }
 
@@ -46,8 +47,17 @@ void PmStateController::Dispatch(Kernel::KernelCore& kernel, PmState state, u32 
     {
         std::scoped_lock lk{m_lock};
         for (auto* module : m_modules) {
+            // A module that timed out earlier and has not acknowledged since is not waited for
+            // again (a program that died or was parked after a fatal would cost every state
+            // the full timeout); it is requested all the same.
+            const bool stalled = m_stalled.contains(module) && !module->IsAcknowledged();
+            if (!stalled) {
+                m_stalled.erase(module);
+            }
             module->Request(kernel, state, flags);
-            pending.push_back(module);
+            if (!stalled) {
+                pending.push_back(module);
+            }
         }
         LOG_INFO(Service_PSC, "psc: PmState {} -> {} ({} module(s))", PmStateName(m_state),
                  PmStateName(state), m_modules.size());
@@ -77,6 +87,8 @@ void PmStateController::Dispatch(Kernel::KernelCore& kernel, PmState state, u32 
                         "unknown contract: psc: {} module(s) did not acknowledge {} in {} ms; "
                         "continuing",
                         pending.size(), PmStateName(state), AcknowledgeTimeout.count());
+            std::scoped_lock lk{m_lock};
+            m_stalled.insert(pending.begin(), pending.end());
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds{2});
