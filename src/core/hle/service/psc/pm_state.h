@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <span>
 #include <vector>
@@ -38,6 +39,9 @@ class IPmModule;
 // for the acknowledgements; a missing one is logged.
 class PmStateController {
 public:
+    // How long one state waits for its modules before the sequence goes on without them.
+    static constexpr std::chrono::milliseconds AcknowledgeTimeout{3000};
+
     void Register(IPmModule* module);
     void Unregister(IPmModule* module);
 

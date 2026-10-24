@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 #include <algorithm>
+#include <chrono>
 #include <string>
+#include <thread>
 
 #include "common/logging.h"
 #include "core/hle/service/psc/pm_module.h"
@@ -40,19 +42,45 @@ void PmStateController::Unregister(IPmModule* module) {
 }
 
 void PmStateController::Dispatch(Kernel::KernelCore& kernel, PmState state, u32 flags) {
-    std::scoped_lock lk{m_lock};
-    size_t unacknowledged = 0;
-    for (auto* module : m_modules) {
-        if (!module->IsAcknowledged()) {
-            ++unacknowledged;
+    std::vector<IPmModule*> pending;
+    {
+        std::scoped_lock lk{m_lock};
+        for (auto* module : m_modules) {
+            module->Request(kernel, state, flags);
+            pending.push_back(module);
         }
-        module->Request(kernel, state, flags);
+        LOG_INFO(Service_PSC, "psc: PmState {} -> {} ({} module(s))", PmStateName(m_state),
+                 PmStateName(state), m_modules.size());
+        m_state = state;
     }
-    LOG_INFO(Service_PSC, "psc: PmState {} -> {} ({} module(s){})", PmStateName(m_state),
-             PmStateName(state), m_modules.size(),
-             unacknowledged ? fmt::format(", {} did not acknowledge the last one", unacknowledged)
-                            : std::string{});
-    m_state = state;
+
+    // psc moves to the next state only once every module has acknowledged this one. A module
+    // signalled again before it read the last request sees only the newest state (GetRequest
+    // returns one): olsc missed MinimumAwake that way, never closed its save-data prohibiters and
+    // aborted on FullAwake releasing what it never took. A module that never acknowledges (dead,
+    // or waiting on a lock the caller holds) delays the transition by AcknowledgeTimeout only.
+    const auto deadline = std::chrono::steady_clock::now() + AcknowledgeTimeout;
+    while (!pending.empty()) {
+        {
+            std::scoped_lock lk{m_lock};
+            // Finalize/destruction takes a module out of m_modules: its pointer may be gone.
+            std::erase_if(pending, [this](IPmModule* module) {
+                return std::find(m_modules.begin(), m_modules.end(), module) == m_modules.end() ||
+                       module->IsAcknowledged();
+            });
+        }
+        if (pending.empty()) {
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            LOG_WARNING(Service_PSC,
+                        "unknown contract: psc: {} module(s) did not acknowledge {} in {} ms; "
+                        "continuing",
+                        pending.size(), PmStateName(state), AcknowledgeTimeout.count());
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
 }
 
 void PmStateController::DispatchSequence(Kernel::KernelCore& kernel,
