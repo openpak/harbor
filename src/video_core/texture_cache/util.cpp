@@ -746,8 +746,10 @@ boost::container::small_vector<ImageCopy, 16> MakeShrinkImageCopies(const ImageI
     ASSERT(dst.resources.levels >= src.resources.levels);
 
     const bool is_dst_3d = dst.type == ImageType::e3D;
+    // A 3D image can also be rebuilt from 2D render targets that were drawn into its slices (Unity
+    // renders its colour grading LUT this way): a 2D source with N layers fills N slices.
+    const bool is_src_3d = src.type == ImageType::e3D;
     if (is_dst_3d) {
-        ASSERT(src.type == ImageType::e3D);
         ASSERT(src.resources.levels == 1);
     }
     const bool both_2d{src.type == ImageType::e2D && dst.type == ImageType::e2D};
@@ -778,7 +780,14 @@ boost::container::small_vector<ImageCopy, 16> MakeShrinkImageCopies(const ImageI
         const Extent3D mip_size = AdjustMipSize(dst.size, base.level + level);
         copy.extent = AdjustSamplesSize(mip_size, dst.num_samples);
         if (is_dst_3d) {
-            copy.extent.depth = src.size.depth;
+            const u32 src_depth = is_src_3d ? src.size.depth : static_cast<u32>(src.resources.layers);
+            const u32 dst_depth = AdjustMipSize(dst.size, base.level + level).depth;
+            const u32 first_slice = static_cast<u32>(base.layer);
+            copy.extent.depth = first_slice < dst_depth ? (std::min)(src_depth, dst_depth - first_slice) : 1U;
+            if (!is_src_3d) {
+                // Vulkan wants the 2D image's layer count to equal the depth of the copy.
+                copy.src_subresource.num_layers = static_cast<s32>(copy.extent.depth);
+            }
         }
         copy.extent.width = std::max<u32>((copy.extent.width * up_scale) >> down_shift, 1);
         if (both_2d) {
