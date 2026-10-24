@@ -203,10 +203,11 @@ void WindowSystem::WakeLocked(const char* reason) {
     auto& sleep = *m_sleep;
     const bool was_asleep = sleep.stage == SleepSequence::Stage::Asleep;
     if (was_asleep) {
-        // The frontend pauses the guest while the console sleeps: it resumes first, or no psc
-        // module could acknowledge the wake states (each would time out).
+        // The frontend pauses the guest while the console sleeps and resumes it from the handler
+        // below, which on a wake key press runs after this call returns: the wake states go out
+        // on a worker, so the modules can run and acknowledge each one.
+        PSC::GetPmStateController().DispatchSequenceAsync(m_system.Kernel(), WakeStates);
         m_system.GetAppletManager().OnSleepStateChanged(false);
-        PSC::GetPmStateController().DispatchSequence(m_system.Kernel(), WakeStates);
         ++sleep.wakeup_count;
     }
     LOG_INFO(Service_AM, "am: sleep sequence {}: {} ({}); wake count {}", sleep.sequence_id,

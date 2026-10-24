@@ -6,6 +6,7 @@
 #include <chrono>
 #include <mutex>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include "common/common_types.h"
@@ -39,6 +40,8 @@ class IPmModule;
 // for the acknowledgements; a missing one is logged.
 class PmStateController {
 public:
+    ~PmStateController();
+
     // How long one state waits for its modules before the sequence goes on without them.
     static constexpr std::chrono::milliseconds AcknowledgeTimeout{3000};
 
@@ -52,11 +55,17 @@ public:
     // A whole transition, one state after the other.
     void DispatchSequence(Kernel::KernelCore& kernel, std::span<const PmState> states);
 
+    // The same on a worker thread, for a caller that is the thread the modules need running to
+    // acknowledge (the frontend resumes a paused guest only after the wake key handler returns).
+    void DispatchSequenceAsync(Kernel::KernelCore& kernel, std::span<const PmState> states);
+
     [[nodiscard]] PmState GetState() const;
 
 private:
     mutable std::mutex m_lock;
     std::vector<IPmModule*> m_modules;
+    std::mutex m_sequence_lock; // one sequence at a time
+    std::thread m_worker;
     PmState m_state{PmState::FullAwake};
 };
 

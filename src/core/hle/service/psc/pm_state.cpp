@@ -83,8 +83,23 @@ void PmStateController::Dispatch(Kernel::KernelCore& kernel, PmState state, u32 
     }
 }
 
+PmStateController::~PmStateController() {
+    if (m_worker.joinable()) {
+        m_worker.join();
+    }
+}
+
+void PmStateController::DispatchSequenceAsync(Kernel::KernelCore& kernel,
+                                              std::span<const PmState> states) {
+    if (m_worker.joinable()) {
+        m_worker.join(); // the previous sequence; a new one waits behind it anyway
+    }
+    m_worker = std::thread{[this, &kernel, states] { DispatchSequence(kernel, states); }};
+}
+
 void PmStateController::DispatchSequence(Kernel::KernelCore& kernel,
                                          std::span<const PmState> states) {
+    std::scoped_lock sequence{m_sequence_lock};
     for (const auto state : states) {
         Dispatch(kernel, state);
     }
