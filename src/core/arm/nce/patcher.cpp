@@ -10,6 +10,7 @@
 #include "core/arm/nce/guest_context.h"
 #include "core/arm/nce/instructions.h"
 #include "core/arm/nce/patcher.h"
+#include "core/arm/nce/patcher_reach.h"
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/hle/kernel/svc.h"
@@ -81,6 +82,8 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
     const auto text_words =
         std::span<const u32>{reinterpret_cast<const u32*>(text.data()), text.size() / sizeof(u32)};
 
+    size_t unreachable_sites = 0;
+
     // Loop through instructions, patching as needed.
     for (u32 i = ModuleCodeIndex; i < static_cast<u32>(text_words.size()); i++) {
         const u32 inst = text_words[i];
@@ -89,7 +92,19 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
             const uintptr_t this_offset = i * sizeof(u32);
             const uintptr_t next_offset = this_offset + sizeof(u32);
 
-            pre_buffer = use_split && (this_offset < MaxRelativeBranch);
+            if (use_split) {
+                const auto site = ClassifySplitSite(this_offset, image_size);
+                if (site == SplitSite::Unreachable) {
+                    // Too far from both patch sections for a branch. Leave the instruction as it
+                    // is: in a module this large these are almost always data words in .text.
+                    if (unreachable_sites++ == 0) {
+                        LOG_WARNING(Core_ARM, "NCE: site {:#x} is out of branch range of the patch sections, "
+                                              "left unpatched (module image {} bytes)", this_offset, image_size);
+                    }
+                    return uintptr_t{0};
+                }
+                pre_buffer = site == SplitSite::Pre;
+            }
 
             // Relocate to pre- or post-patch
             if (pre_buffer) {
@@ -106,6 +121,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
         if (auto svc = SVC{inst}; svc.Verify()) {
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
+            if (ret == 0) {
+                continue;
+            }
             if (pre_buffer) {
                 WriteSvcTrampoline(ret, svc.GetValue(), c_pre, m_save_context_pre, m_load_context_pre);
             } else {
@@ -128,6 +146,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
             const auto dest_reg = oaknut::XReg{static_cast<int>(mrs.GetRt())};
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
+            if (ret == 0) {
+                continue;
+            }
             if (pre_buffer) {
                 WriteMrsHandler(ret, dest_reg, src_reg, c_pre);
             } else {
@@ -143,6 +164,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
             }
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
+            if (ret == 0) {
+                continue;
+            }
             if (pre_buffer) {
                 WriteCntpctHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c_pre);
             } else {
@@ -158,6 +182,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
             }
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
+            if (ret == 0) {
+                continue;
+            }
             if (pre_buffer) {
                 WriteCntfrqHandler(ret, oaknut::XReg{static_cast<int>(mrs.GetRt())}, c_pre);
             } else {
@@ -170,6 +197,9 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
         if (auto msr = MSR{inst}; msr.Verify() && msr.GetSystemReg() == TpidrEl0) {
             bool pre_buffer = false;
             auto ret = AddRelocations(pre_buffer);
+            if (ret == 0) {
+                continue;
+            }
              if (pre_buffer) {
                 WriteMsrHandler(ret, oaknut::XReg{static_cast<int>(msr.GetRt())}, c_pre);
             } else {
@@ -181,6 +211,10 @@ bool Patcher::PatchText(std::span<const u8> program_image, size_t zero_size, con
         if (auto exclusive = Exclusive{inst}; exclusive.Verify()) {
             curr_patch->m_exclusives.push_back(i);
         }
+    }
+
+    if (unreachable_sites > 0) {
+        LOG_WARNING(Core_ARM, "NCE: {} site(s) left unpatched, out of branch range", unreachable_sites);
     }
 
     // Determine patching mode for the final relocation step
