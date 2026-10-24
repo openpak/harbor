@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cctype>
 #include <mutex>
 #include <map>
 #include <array>
@@ -1085,25 +1086,59 @@ public:
 
 // [Harbor] nn::account::nas::IAuthorizationRequest: the title-driven half of the console
 // authorization flow. A title that talks to a third-party network (Battle.net for Diablo II:
-// Resurrected) asks the account system to authorize it against the signed-in user, then collects
-// the proof, an authorization code or the id_token, to hand to that network. The user is already
-// signed in, so there is nothing to interact over: the request completes, reports authorized, and
-// both proofs are the user's OpenPak id_token, the credential OpenPak's check_token resolves.
-// Behaviour follows the Ryujinx Harbor (MIT-licensed Ryujinx base).
+// Resurrected, EA's Nucleus for Plants vs. Zombies: Battle for Neighborville) asks the account
+// system to authorize it against the signed-in user, then collects the proof, an authorization
+// code and the id_token, to hand to that network.
+//
+// The console does this with the silent authorize (prompt=none, response_type "code id_token")
+// against accounts.nintendo.com, which nx-baas answers with a redirect whose fragment carries
+// state, code and id_token. The request keeps the title's parameters (scope, state, nonce),
+// runs that authorize in InvokeWithoutInteractionAsync, and hands the results out: GetState the
+// title's own state back, GetAuthorizationCode the code (a 0x200 buffer), GetIdToken the NA
+// id_token (0x600). When the authorize cannot be done, both proofs fall back to the user's
+// OpenPak id_token, the credential OpenPak's check_token resolves.
 class IAuthorizationRequest final : public ServiceFramework<IAuthorizationRequest> {
 public:
+    /// What the request holds; the async work fills it in while the guest polls.
+    struct Held {
+        std::mutex mutex;
+        std::string scope;
+        std::string state;
+        std::string nonce;
+        std::string code;
+        std::string id_token;
+    };
+
     explicit IAuthorizationRequest(Core::System& system_, Common::UUID user_,
-                                   std::shared_ptr<OpenPak::AsyncWorker> worker_)
+                                   std::shared_ptr<OpenPak::AsyncWorker> worker_,
+                                   std::vector<u8> parameters)
         : ServiceFramework{system_, "IAuthorizationRequest"}, user{user_},
-          worker{std::move(worker_)},
+          worker{std::move(worker_)}, held{std::make_shared<Held>()},
           session_id{std::random_device{}() | (u64{std::random_device{}()} << 32)} {
+        // NintendoAccountAuthorizationRequestParameters: scope[0x100] at +0, state[0x80] at
+        // +0x100, nonce[0x80] after it; each a NUL-terminated string.
+        const auto field = [&parameters](std::size_t offset, std::size_t size) {
+            std::string out;
+            for (std::size_t i = offset; i < offset + size && i < parameters.size(); ++i) {
+                if (parameters[i] == 0) {
+                    break;
+                }
+                out.push_back(static_cast<char>(parameters[i]));
+            }
+            return out;
+        };
+        held->scope = field(0, 0x100);
+        held->state = field(0x100, 0x80);
+        held->nonce = field(0x180, 0x80);
+        LOG_INFO(Service_ACC, "acc: authorization request (scope '{}', state {} bytes, nonce {} bytes)",
+                 held->scope, held->state.size(), held->nonce.size());
         // clang-format off
         static const FunctionInfo functions[] = {
             {0, &IAuthorizationRequest::GetSessionId, "GetSessionId"},
             {10, &IAuthorizationRequest::InvokeWithoutInteractionAsync, "InvokeWithoutInteractionAsync"},
             {19, &IAuthorizationRequest::IsAuthorized, "IsAuthorized"},
-            {20, &IAuthorizationRequest::GetSessionToken, "GetAuthorizationCode"},
-            {21, &IAuthorizationRequest::GetSessionToken, "GetIdToken"},
+            {20, &IAuthorizationRequest::GetAuthorizationCode, "GetAuthorizationCode"},
+            {21, &IAuthorizationRequest::GetIdToken, "GetIdToken"},
             {22, &IAuthorizationRequest::GetState, "GetState"},
         };
         // clang-format on
@@ -1112,6 +1147,105 @@ public:
     }
 
 private:
+    static std::string UrlEncode(std::string_view in) {
+        static constexpr char hex[] = "0123456789ABCDEF";
+        std::string out;
+        for (const unsigned char c : in) {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                out.push_back(static_cast<char>(c));
+            } else {
+                out.push_back('%');
+                out.push_back(hex[c >> 4]);
+                out.push_back(hex[c & 15]);
+            }
+        }
+        return out;
+    }
+
+    static std::string UrlDecode(std::string_view in) {
+        std::string out;
+        for (std::size_t i = 0; i < in.size(); ++i) {
+            if (in[i] == '%' && i + 2 < in.size() && std::isxdigit(static_cast<unsigned char>(in[i + 1])) &&
+                std::isxdigit(static_cast<unsigned char>(in[i + 2]))) {
+                out.push_back(static_cast<char>(std::stoi(std::string{in.substr(i + 1, 2)}, nullptr, 16)));
+                i += 2;
+            } else if (in[i] == '+') {
+                out.push_back(' ');
+            } else {
+                out.push_back(in[i]);
+            }
+        }
+        return out;
+    }
+
+    /// The silent authorize, as the account module sends it. True when the answer carried a code
+    /// and an id_token and echoed the title's state.
+    static bool Authorize(const std::string& uid, u64 program_id, Held& held) {
+        if (!OpenPak::Session::Enabled() || program_id == 0) {
+            return false;
+        }
+        OpenPak::Session::Ensure(uid);
+        const std::string bearer = OpenPak::Session::IdToken(uid);
+        if (bearer.empty()) {
+            return false;
+        }
+        const std::string client = fmt::format("{:016x}", program_id);
+        std::string scope, state, nonce;
+        {
+            std::scoped_lock lock{held.mutex};
+            scope = held.scope;
+            state = held.state;
+            nonce = held.nonce;
+        }
+        std::string body = "prompt=none&response_type=" + UrlEncode("code id_token") +
+                           "&client_id=" + client +
+                           "&redirect_uri=" + UrlEncode("npf" + client + "://auth") +
+                           "&scope=" + UrlEncode(scope) + "&state=" + UrlEncode(state) +
+                           "&nonce=" + UrlEncode(nonce);
+        const auto reply = OpenPak::Session::Send(
+            "POST", "accounts.nintendo.com", "/connect/1.0.0/authorize",
+            {{"Authorization", "Bearer " + bearer}}, "application/x-www-form-urlencoded", body);
+        const auto hash = reply.location.find('#');
+        if (reply.status / 100 != 3 || hash == std::string::npos) {
+            LOG_WARNING(Service_ACC, "acc: silent authorize answered {}", reply.status);
+            return false;
+        }
+        std::string code, id_token, echoed, error;
+        std::string_view fragment{reply.location};
+        fragment.remove_prefix(hash + 1);
+        while (!fragment.empty()) {
+            const auto amp = fragment.find('&');
+            const std::string_view pair = fragment.substr(0, amp);
+            const auto eq = pair.find('=');
+            if (eq != std::string_view::npos) {
+                const std::string_view key = pair.substr(0, eq);
+                const std::string value = UrlDecode(pair.substr(eq + 1));
+                if (key == "code") {
+                    code = value;
+                } else if (key == "id_token") {
+                    id_token = value;
+                } else if (key == "state") {
+                    echoed = value;
+                } else if (key == "error") {
+                    error = value;
+                }
+            }
+            fragment = amp == std::string_view::npos ? std::string_view{} : fragment.substr(amp + 1);
+        }
+        if (!error.empty() || code.empty() || id_token.empty()) {
+            LOG_WARNING(Service_ACC, "acc: silent authorize refused ({})",
+                        error.empty() ? "no code" : error);
+            return false;
+        }
+        std::scoped_lock lock{held.mutex};
+        held.code = std::move(code);
+        held.id_token = std::move(id_token);
+        if (!echoed.empty()) {
+            held.state = std::move(echoed);
+        }
+        return true;
+    }
+
     void GetSessionId(HLERequestContext& ctx) {
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
@@ -1119,14 +1253,19 @@ private:
     }
 
     void InvokeWithoutInteractionAsync(HLERequestContext& ctx) {
-        // The title polls the async shape; the work is a fresh token for the user.
+        // The title polls the async shape; the work is the silent authorize for the user.
+        const u64 program_id = system.GetApplicationProcessProgramID();
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
         rb.PushIpcInterface<OpenPakAsyncContext>(
             ctx, system, worker,
-            [uid = OpenPakAccount::UidString(user)](std::stop_token, std::vector<u8>&) {
+            [uid = OpenPakAccount::UidString(user), program_id,
+             held = held](std::stop_token, std::vector<u8>&) {
                 if (OpenPakAccount::Enabled()) {
                     OpenPak::Session::Ensure(uid);
+                    if (Authorize(uid, program_id, *held)) {
+                        LOG_INFO(Service_ACC, "acc: authorization request done (code and id_token)");
+                    }
                 }
                 return ResultSuccess;
             });
@@ -1138,34 +1277,59 @@ private:
         rb.Push<u8>(1);
     }
 
-    // Nothing here fails the call for want of a token: a title that only wants the size asks
-    // with no buffer.
-    void GetSessionToken(HLERequestContext& ctx) {
-        const std::string token = OpenPakAccount::Enabled()
-                                      ? OpenPak::Session::IdToken(OpenPakAccount::UidString(user))
-                                      : std::string{};
-        if (ctx.CanWriteBuffer() && ctx.GetWriteBufferSize() > 0 && !token.empty()) {
-            if (token.size() > ctx.GetWriteBufferSize()) {
-                LOG_WARNING(Service_ACC, "acc: id_token is {} bytes, guest buffer is {}",
-                            token.size(), ctx.GetWriteBufferSize());
+    /// Writes `value` to the guest's buffer when it has one; the size is always answered, so a
+    /// title that only wants the size asks with no buffer.
+    void AnswerString(HLERequestContext& ctx, const std::string& value) {
+        if (ctx.CanWriteBuffer() && ctx.GetWriteBufferSize() > 0 && !value.empty()) {
+            if (value.size() > ctx.GetWriteBufferSize()) {
+                LOG_WARNING(Service_ACC, "acc: answer is {} bytes, guest buffer is {}",
+                            value.size(), ctx.GetWriteBufferSize());
                 PushResult(ctx, ResultInvalidBufferSize);
                 return;
             }
-            ctx.WriteBuffer(token.data(), token.size());
+            ctx.WriteBuffer(value.data(), value.size());
         }
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
-        rb.Push<u32>(static_cast<u32>(token.size()));
+        rb.Push<u32>(static_cast<u32>(value.size()));
+    }
+
+    std::string Fallback() const {
+        return OpenPakAccount::Enabled()
+                   ? OpenPak::Session::IdToken(OpenPakAccount::UidString(user))
+                   : std::string{};
+    }
+
+    void GetAuthorizationCode(HLERequestContext& ctx) {
+        std::string code;
+        {
+            std::scoped_lock lock{held->mutex};
+            code = held->code;
+        }
+        AnswerString(ctx, code.empty() ? Fallback() : code);
+    }
+
+    void GetIdToken(HLERequestContext& ctx) {
+        std::string token;
+        {
+            std::scoped_lock lock{held->mutex};
+            token = held->id_token;
+        }
+        AnswerString(ctx, token.empty() ? Fallback() : token);
     }
 
     void GetState(HLERequestContext& ctx) {
-        IPC::ResponseBuilder rb{ctx, 3};
-        rb.Push(ResultSuccess);
-        rb.Push<u32>(3); // nn::account::nas::AuthorizationRequestState: Done
+        std::string state;
+        {
+            std::scoped_lock lock{held->mutex};
+            state = held->state;
+        }
+        AnswerString(ctx, state);
     }
 
     Common::UUID user;
     std::shared_ptr<OpenPak::AsyncWorker> worker;
+    std::shared_ptr<Held> held;
     u64 session_id;
 };
 
@@ -1283,12 +1447,16 @@ private:
     }
 
     void CreateAuthorizationRequest(HLERequestContext& ctx) {
-        // The request input carries the title's authorization configuration; nothing in it
-        // changes OpenPak's answer.
+        // The request input carries the title's authorization parameters (scope, state, nonce).
         LOG_DEBUG(Service_ACC, "called");
+        std::vector<u8> parameters;
+        if (ctx.CanReadBuffer()) {
+            parameters = ctx.ReadBufferCopy();
+        }
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
-        rb.PushIpcInterface<IAuthorizationRequest>(ctx, system, user_id, worker);
+        rb.PushIpcInterface<IAuthorizationRequest>(ctx, system, user_id, worker,
+                                                   std::move(parameters));
     }
 
     void StoreOpenContext(HLERequestContext& ctx) {

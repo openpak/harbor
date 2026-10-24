@@ -2158,7 +2158,7 @@ Response Send(const std::string& method, const std::string& host,
             return {};
         }
         return {result->status, result->body, result->get_header_value("ETag"),
-                result->get_header_value("Content-Type")};
+                result->get_header_value("Content-Type"), result->get_header_value("Location")};
     } catch (const std::exception& e) {
         LOG_DEBUG(WebService, "[OpenPak] {} {}: {}", method, host, e.what());
         return {};

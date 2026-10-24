@@ -201,6 +201,7 @@ struct Response {
     std::string body;
     std::string etag;         ///< The ETag header, when the server sent one.
     std::string content_type; ///< The Content-Type header, when the server sent one.
+    std::string location;     ///< The Location header of a redirect (Send only).
 };
 Response SendAs(const std::string& method, const std::string& host,
                 const std::string& path_and_query, const std::string& content_type,
