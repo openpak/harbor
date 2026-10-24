@@ -241,12 +241,22 @@ struct ColorConsoleBackend final : public Backend {
 /// @brief Backend that writes to a file passed into the constructor
 struct FileBackend final : public Backend {
     explicit FileBackend(const std::filesystem::path filename) noexcept : path{filename} {
-        auto old_filename = filename;
-        old_filename += ".old.txt";
+        // Harbor: keep the logs of the last runs, not just one (a phone session is often
+        // restarted a few times before anyone reads its log): eden_log.txt.old.txt is the previous
+        // run, eden_log.txt.old.1.txt ... .old.5.txt the ones before it.
         // Existence checks are done within the functions themselves.
         // We don't particularly care if these succeed or not.
-        void(FS::RemoveFile(old_filename));
-        void(FS::RenameFile(filename, old_filename));
+        constexpr int kept_older = 5;
+        const auto old_name = [&filename](int n) {
+            auto name = filename;
+            name += n == 0 ? std::string{".old.txt"} : fmt::format(".old.{}.txt", n);
+            return name;
+        };
+        void(FS::RemoveFile(old_name(kept_older)));
+        for (int n = kept_older - 1; n >= 0; --n) {
+            void(FS::RenameFile(old_name(n), old_name(n + 1)));
+        }
+        void(FS::RenameFile(filename, old_name(0)));
         file.emplace(filename, FS::FileAccessMode::Write, FS::FileType::TextFile);
     }
     ~FileBackend() noexcept override = default;

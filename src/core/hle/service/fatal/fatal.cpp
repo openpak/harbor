@@ -180,18 +180,27 @@ static void ThrowFatalError(Core::System& system, Result error_code, FatalType f
     }
 }
 
-// [OpenPak] A firmware system program that threw a fatal is terminated: a console halts entirely,
-// Harbor keeps HOME and the other modules running. Left alive, the aborted program's main thread
-// spins at its (higher) priority and starves every other system module on core 3.
-static void TerminateFatalFirmwareProgram(Core::System& system, HLERequestContext& ctx) {
-    auto* const process = ctx.GetThread().GetOwnerProcess();
+// [OpenPak] A firmware system program that threw a fatal loses the thread that threw it, not the
+// program. A console halts entirely on a fatal (error screen until power-off), so there is no
+// console behaviour to copy: Harbor's rule is that one module's abort must not take HOME down.
+// Terminating the process closes every session its services serve, and each client then aborts on
+// the closed session (qlaunch: 2011-0301 after olsc died), which ended HOME. The thread that made
+// the call is paused instead: it is the one that would go on into the abort loop and spin at the
+// program's (higher) priority, starving the other modules on its core; the program's other
+// threads keep serving their sessions.
+static void ParkFatalFirmwareThread(Core::System& system, HLERequestContext& ctx) {
+    auto& thread = ctx.GetThread();
+    auto* const process = thread.GetOwnerProcess();
     if (process == nullptr || (process->GetProgramId() & ~u64{0xFFFF}) != 0x0100000000000000ULL ||
         process->IsApplication()) {
         return;
     }
-    LOG_ERROR(Service_Fatal, "terminating firmware program {} ({:016x}) after its fatal",
-              process->GetName(), process->GetProgramId());
-    process->Terminate(system.Kernel());
+    const auto result = thread.SetActivity(system.Kernel(), Kernel::Svc::ThreadActivity::Paused);
+    LOG_ERROR(Service_Fatal,
+              "parking thread {} of firmware program {} ({:016x}) after its fatal (result {:#x}); "
+              "its sessions stay open",
+              thread.GetThreadId(), process->GetName(), process->GetProgramId(),
+              result.raw);
 }
 
 void Module::Interface::ThrowFatal(HLERequestContext& ctx) {
@@ -200,7 +209,7 @@ void Module::Interface::ThrowFatal(HLERequestContext& ctx) {
     const auto error_code = rp.Pop<Result>();
 
     ThrowFatalError(system, error_code, FatalType::ErrorScreen, {});
-    TerminateFatalFirmwareProgram(system, ctx);
+    ParkFatalFirmwareThread(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
@@ -213,7 +222,7 @@ void Module::Interface::ThrowFatalWithPolicy(HLERequestContext& ctx) {
 
     ThrowFatalError(system, error_code, fatal_type,
                     {}); // No info is passed with ThrowFatalWithPolicy
-    TerminateFatalFirmwareProgram(system, ctx);
+    ParkFatalFirmwareThread(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
@@ -230,7 +239,7 @@ void Module::Interface::ThrowFatalWithCpuContext(HLERequestContext& ctx) {
     std::memcpy(&info, fatal_info.data(), sizeof(FatalInfo));
 
     ThrowFatalError(system, error_code, fatal_type, info);
-    TerminateFatalFirmwareProgram(system, ctx);
+    ParkFatalFirmwareThread(system, ctx);
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }
