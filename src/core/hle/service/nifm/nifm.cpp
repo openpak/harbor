@@ -595,11 +595,13 @@ static SfNetworkProfileData MakeStoredProfile() {
 
 void IGeneralService::GetClientId(HLERequestContext& ctx) {
     static constexpr u32 client_id = 1;
-    LOG_WARNING(Service_NIFM, "(STUBBED) called");
+    // nn::nifm::ClientId is a four-byte fixed-size output pointer buffer, not
+    // an inline response value. Leave the ID nonzero so clients can use it.
+    ctx.WriteBuffer(&client_id, sizeof(client_id));
+    LOG_INFO(Service_NIFM, "GetClientId: wrote client ID to output buffer");
 
-    IPC::ResponseBuilder rb{ctx, 4};
+    IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
-    rb.Push<u64>(client_id); // Client ID needs to be non zero otherwise it's considered invalid
 }
 
 void IGeneralService::CreateScanRequest(HLERequestContext& ctx) {
@@ -864,15 +866,16 @@ void IGeneralService::NotifyConnectionStateChanged(HLERequestContext& ctx) {
 }
 
 void IGeneralService::IsAnyInternetRequestAccepted(HLERequestContext& ctx) {
-    LOG_ERROR(Service_NIFM, "(STUBBED) called");
+    const bool has_address = Network::GetHostIPv4Address().has_value();
+    const bool airplane_mode = Settings::values.airplane_mode.GetValue();
+    const bool accepted = has_address && !airplane_mode;
+    LOG_INFO(Service_NIFM,
+             "Internet request accepted: {} (host IPv4: {}, airplane mode: {})", accepted,
+             has_address, airplane_mode);
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    if (Network::GetHostIPv4Address().has_value() && !Settings::values.airplane_mode.GetValue()) {
-        rb.Push<u8>(1);
-    } else {
-        rb.Push<u8>(0);
-    }
+    rb.Push<u8>(accepted);
 }
 
 void IGeneralService::IsAnyForegroundRequestAccepted(HLERequestContext& ctx) {
