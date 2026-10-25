@@ -231,7 +231,7 @@ Use this guide when you need to determine the connection information for the Pub
     
     # Example Output
     #{
-    #  "address": "118.208.233.90",
+    #  "address": "HOST_IP",
     #  "port": 5001
     #}
     ```
@@ -244,7 +244,7 @@ Use this guide when you need to determine the connection information for the Pub
     
     # Example Output
     #{
-    #  "address": "118.208.233.90",
+    #  "address": "HOST_IP",
     #  "port": 5001
     #}
     ```
@@ -304,7 +304,7 @@ If you can't connect to the metaserver, it's likely your ISP is blocking the req
 
 Most Linux systems and Steamdeck should allow to modify the base `/etc/hosts` file, this should fix the DNS lookup issue; hence add the following to said file:
 ```
-28.165.181.135 api.ynet-fun.xyz api.ynet-fun.xyz
+HOST_IP api.ynet-fun.xyz api.ynet-fun.xyz
 ```
 
 ### Zapret

@@ -15,7 +15,7 @@ This guide explains how to set up a public/private self hosted Eden server/lobby
  - Then, after creating the first rule, add TCP & UDP Ports for Eden - Direction: IN, Interface: net0, Protocol: TCP or UDP (for respective rule), Source: ANY, Destination Port: 24872, Policy: ACCEPT, leave a comment: Eden server port.
  - Note: Only UDP is required for Eden; opening TCP is optional.
 
-- SSH into the server: `ssh root@YOUR_SERVER_IP`.
+- SSH into the server: `ssh YOUR_SERVER_IP`.
 
 - Install Docker: `apt update`, `apt install -y docker.io`, `systemctl enable --now docker`. Verify Docker installation: `docker --version`
 

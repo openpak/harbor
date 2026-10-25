@@ -27,7 +27,7 @@ Use this when you need to review the logs to determine an issue or provide them 
 
 ### Steam Deck
 
-*By default the Eden folder is stored in `/home/deck/.local/share/Eden`, or the local **user** folder if you have a portable installation.*
+*By default the Eden folder is stored in `~/.local/share/Eden`, or the local **user** folder if you have a portable installation.*
 
 <aside>
 
