@@ -56,6 +56,7 @@ import org.yuzu.yuzu_emu.features.input.NativeInput
 import org.yuzu.yuzu_emu.features.settings.model.BooleanSetting
 import org.yuzu.yuzu_emu.features.settings.model.IntSetting
 import org.yuzu.yuzu_emu.features.settings.model.Settings
+import org.yuzu.yuzu_emu.harbor.HarborLanReception
 import org.yuzu.yuzu_emu.harbor.HarborAudioFocus
 import org.yuzu.yuzu_emu.harbor.HarborConsole
 import org.yuzu.yuzu_emu.harbor.HarborStartActivity
@@ -95,6 +96,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     private var motionTimestamp: Long = 0
     private var flipMotionOrientation: Boolean = false
 
+    private val lanReception = HarborLanReception()
     private val actionPause = "ACTION_EMULATOR_PAUSE"
     private val actionPlay = "ACTION_EMULATOR_PLAY"
     private val actionMute = "ACTION_EMULATOR_MUTE"
@@ -285,6 +287,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
     override fun onResume() {
         super.onResume()
+        lanReception.acquire(this)
         foreground = this
         nfcReader.startScanning()
         startMotionSensorListener()
@@ -299,6 +302,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     override fun onPause() {
+        lanReception.release()
         if (HarborConsole.active) {
             HarborAudioFocus.release()
             // Leaving Harbor wakes a sleeping console; the screen's own pause takes over.

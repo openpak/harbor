@@ -43,6 +43,10 @@ Nintendo. Nintendo Switch and all other trademarks belong to their respective ow
   by the maintainer. Restoring onto a physical Switch is not yet tested.
 - Not verified: everything not listed above. A game that launches is not evidence that it works online.
 
+Local multiplayer over the home network is under development; see
+[setup and the unverified device test cases](docs/harbor/local-play.md). Mixed
+Harbor/Switch Local Wireless requires a compatible `ldn_mitm` module on the Switch.
+
 ## Connecting to OpenPak
 
 On first launch Harbor's setup wizard walks through a device check, your keys, firmware, games, optional DLC and

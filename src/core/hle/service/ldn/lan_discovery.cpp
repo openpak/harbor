@@ -8,6 +8,7 @@
 
 #include "core/harbor_calibration/calibration.h"
 #include "core/hle/service/ldn/lan_discovery.h"
+#include "core/hle/service/ldn/local_wireless_transport.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/network_interface.h"
 
@@ -73,6 +74,7 @@ void LANDiscovery::InitNodeStateChange() {
 }
 
 State LANDiscovery::GetState() const {
+    std::scoped_lock lock{packet_mutex};
     return state;
 }
 
@@ -81,6 +83,7 @@ void LANDiscovery::SetState(State new_state) {
 }
 
 Result LANDiscovery::GetNetworkInfo(NetworkInfo& out_network) const {
+    std::scoped_lock lock{packet_mutex};
     if (state == State::AccessPointCreated || state == State::StationConnected) {
         std::memcpy(&out_network, &network_info, sizeof(network_info));
         return ResultSuccess;
@@ -91,6 +94,7 @@ Result LANDiscovery::GetNetworkInfo(NetworkInfo& out_network) const {
 
 Result LANDiscovery::GetNetworkInfo(NetworkInfo& out_network,
                                     std::span<NodeLatestUpdate> out_updates) {
+    std::scoped_lock lock{packet_mutex};
     if (out_updates.size() > NodeCountMax) {
         return ResultInvalidBufferCount;
     }
@@ -108,13 +112,18 @@ Result LANDiscovery::GetNetworkInfo(NetworkInfo& out_network,
 }
 
 DisconnectReason LANDiscovery::GetDisconnectReason() const {
+    std::scoped_lock lock{packet_mutex};
     return disconnect_reason;
 }
 
 Result LANDiscovery::Scan(std::span<NetworkInfo> out_networks, s16& out_count,
                           const ScanFilter& filter) {
+    out_count = 0;
     {
         std::scoped_lock lock{packet_mutex};
+        if (!inited) {
+            return ResultBadState;
+        }
         scan_results.clear();
 
         SendBroadcast(Network::LDNPacketType::Scan);
@@ -197,7 +206,7 @@ Result LANDiscovery::CloseAccessPoint() {
     }
 
     if (state == State::AccessPointCreated) {
-        DestroyNetwork();
+        DestroyNetworkLocked();
     }
 
     ResetStations();
@@ -225,8 +234,8 @@ Result LANDiscovery::CloseStation() {
         return ResultBadState;
     }
 
-    if (state == State::StationConnected) {
-        Disconnect();
+    if (state == State::StationConnected || connection_pending) {
+        DisconnectLocked();
     }
 
     ResetStations();
@@ -244,6 +253,9 @@ Result LANDiscovery::CreateNetwork(const SecurityConfig& security_config,
         return ResultBadState;
     }
 
+    if (network_config.node_count_max == 0 || network_config.node_count_max > NodeCountMax) {
+        return ResultInvalidNodeCount;
+    }
     InitNetworkInfo();
     network_info.ldn.node_count_max = network_config.node_count_max;
     network_info.ldn.security_mode = security_config.security_mode;
@@ -267,6 +279,9 @@ Result LANDiscovery::CreateNetwork(const SecurityConfig& security_config,
 
     SetState(State::AccessPointCreated);
 
+    if (local_transport) {
+        local_transport->SetHosting(true);
+    }
     InitNodeStateChange();
     node0.is_connected = 1;
     UpdateNodes();
@@ -275,10 +290,18 @@ Result LANDiscovery::CreateNetwork(const SecurityConfig& security_config,
 }
 
 Result LANDiscovery::DestroyNetwork() {
+    std::scoped_lock lock{packet_mutex};
+    return DestroyNetworkLocked();
+}
+
+Result LANDiscovery::DestroyNetworkLocked() {
     for (auto local_ip : connected_clients) {
         SendPacket(Network::LDNPacketType::DestroyNetwork, local_ip);
     }
 
+    if (local_transport) {
+        local_transport->SetHosting(false);
+    }
     ResetStations();
 
     SetState(State::AccessPointOpened);
@@ -287,35 +310,56 @@ Result LANDiscovery::DestroyNetwork() {
     return ResultSuccess;
 }
 
-Result LANDiscovery::Connect(const NetworkInfo& network_info_, const UserConfig& user_config,
+Result LANDiscovery::Connect(const NetworkInfo& candidate, const UserConfig& user_config,
                              u16 local_communication_version) {
-    std::scoped_lock lock{packet_mutex};
-    if (network_info_.ldn.node_count == 0) {
+    std::unique_lock lock{packet_mutex};
+    if (state != State::StationOpened || connection_pending) {
+        return ResultBadState;
+    }
+    if (candidate.ldn.node_count == 0 || candidate.ldn.node_count_max > NodeCountMax ||
+        candidate.ldn.node_count >= candidate.ldn.node_count_max) {
         return ResultInvalidNodeCount;
     }
-
-    Result rc = GetNodeInfo(node_info, user_config, local_communication_version);
-    if (rc.IsError()) {
+    node_info = {};
+    if (GetNodeInfo(node_info, user_config, local_communication_version).IsError()) {
         return ResultConnectionFailed;
     }
-
-    Ipv4Address node_host = network_info_.ldn.nodes[0].ipv4_address;
-    std::reverse(std::begin(node_host), std::end(node_host)); // htonl
+    network_info = candidate;
+    auto node_host = candidate.ldn.nodes[0].ipv4_address;
+    std::reverse(node_host.begin(), node_host.end());
     host_ip = node_host;
+    InitNodeStateChange();
+    connection_pending = true;
     SendPacket(Network::LDNPacketType::Connect, node_info, *host_ip);
 
-    InitNodeStateChange();
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-
-    return ResultSuccess;
+    // Receiving SyncNetwork requires packet_mutex too. Waiting while holding it used to
+    // report success before the receiver could process even one reply.
+    connection_changed.wait_for(lock, std::chrono::seconds(5), [&] { return !connection_pending; });
+    if (state == State::StationConnected) {
+        return ResultSuccess;
+    }
+    connection_pending = false;
+    if (host_ip) {
+        SendPacket(Network::LDNPacketType::Disconnect, node_info, *host_ip);
+        host_ip.reset();
+    }
+    return ResultConnectionFailed;
 }
 
 Result LANDiscovery::Disconnect() {
+    std::scoped_lock lock{packet_mutex};
+    return DisconnectLocked();
+}
+
+Result LANDiscovery::DisconnectLocked() {
     if (host_ip) {
         SendPacket(Network::LDNPacketType::Disconnect, node_info, *host_ip);
     }
 
+    host_ip.reset();
+    connection_pending = false;
+    connection_changed.notify_all();
+    disconnect_reason = DisconnectReason::DisconnectedByUser;
     SetState(State::StationOpened);
     lan_event();
 
@@ -335,7 +379,41 @@ Result LANDiscovery::Initialize(LanEventFunc lan_event_, bool listening) {
     }
 
     connected_clients.clear();
+    host_ip.reset();
+    connection_pending = false;
+    network_info = {};
+    node_info = {};
     lan_event = lan_event_;
+    use_room = false;
+    if (auto room = Network::GetRoomMember().lock()) {
+        use_room = room->IsConnected();
+    }
+    if (!use_room && listening) {
+        const auto interface = Network::GetSelectedNetworkInterface();
+        if (!interface) {
+            return ResultNoIpAddress;
+        }
+        auto transport = std::make_unique<LocalWirelessTransport>();
+        std::string error;
+        if (!transport->Start(
+                Network::TranslateIPv4(interface->ip_address),
+                Network::TranslateIPv4(interface->subnet_mask),
+                [this](LocalWirelessPacket packet) {
+                    ReceivePacket({static_cast<Network::LDNPacketType>(packet.type),
+                                   packet.peer,
+                                   {},
+                                   false,
+                                   std::move(packet.data)},
+                                  false);
+                },
+                error)) {
+            LOG_ERROR(Service_LDN, "Local network transport could not start: {}", error);
+            return ResultConnectionFailed;
+        }
+        local_transport = std::move(transport);
+    }
+    LOG_INFO(Service_LDN, "Local wireless transport: {}",
+             use_room ? "emulator room" : "home LAN (ldn_mitm)");
 
     SetState(State::Initialized);
 
@@ -344,24 +422,29 @@ Result LANDiscovery::Initialize(LanEventFunc lan_event_, bool listening) {
 }
 
 Result LANDiscovery::Finalize() {
-    std::scoped_lock lock{packet_mutex};
-    Result rc = ResultSuccess;
-
-    if (inited) {
-        if (state == State::AccessPointCreated) {
-            DestroyNetwork();
+    std::unique_ptr<LocalWirelessTransport> transport;
+    {
+        std::scoped_lock lock{packet_mutex};
+        if (inited) {
+            if (state == State::AccessPointCreated) {
+                DestroyNetworkLocked();
+            }
+            if (state == State::StationConnected || connection_pending) {
+                DisconnectLocked();
+            }
+            ResetStations();
+            inited = false;
         }
-        if (state == State::StationConnected) {
-            Disconnect();
-        }
-
-        ResetStations();
-        inited = false;
+        SetState(State::None);
+        connection_pending = false;
+        connection_changed.notify_all();
+        transport = std::move(local_transport);
     }
-
-    SetState(State::None);
-
-    return rc;
+    // A callback may be waiting for packet_mutex. Join only after releasing it.
+    if (transport) {
+        transport->Stop();
+    }
+    return ResultSuccess;
 }
 
 void LANDiscovery::ResetStations() {
@@ -394,12 +477,17 @@ void LANDiscovery::OnSyncNetwork(const NetworkInfo& info) {
     if (state == State::StationOpened) {
         SetState(State::StationConnected);
     }
+    connection_pending = false;
+    connection_changed.notify_all();
     OnNetworkInfoChanged();
 }
 
 void LANDiscovery::OnDisconnectFromHost() {
     LOG_INFO(Service_LDN, "OnDisconnectFromHost state: {}", static_cast<int>(state));
     host_ip = std::nullopt;
+    disconnect_reason = DisconnectReason::SignalLost;
+    connection_pending = false;
+    connection_changed.notify_all();
     if (state == State::StationConnected) {
         SetState(State::StationOpened);
         lan_event();
@@ -413,14 +501,18 @@ void LANDiscovery::OnNetworkInfoChanged() {
     return;
 }
 
+Ipv4Address LANDiscovery::GetLocalAddress() const {
+    std::scoped_lock lock{packet_mutex};
+    return GetLocalIp();
+}
+
 Network::IPv4Address LANDiscovery::GetLocalIp() const {
-    Network::IPv4Address local_ip{0xFF, 0xFF, 0xFF, 0xFF};
-    if (auto room_member = Network::GetRoomMember().lock()) {
-        if (room_member->IsConnected()) {
-            local_ip = room_member->GetFakeIpAddress();
+    if (use_room) {
+        if (auto room = Network::GetRoomMember().lock(); room && room->IsConnected()) {
+            return room->GetFakeIpAddress();
         }
     }
-    return local_ip;
+    return Network::GetHostIPv4Address().value_or(Network::IPv4Address{});
 }
 
 template <typename Data>
@@ -473,6 +565,11 @@ void LANDiscovery::SendBroadcast(Network::LDNPacketType type) {
 }
 
 void LANDiscovery::SendPacket(const Network::LDNPacket& packet) {
+    if (local_transport) {
+        local_transport->Send(
+            {static_cast<LocalWirelessMessage>(packet.type), packet.remote_ip, packet.data});
+        return;
+    }
     if (auto room_member = Network::GetRoomMember().lock()) {
         if (room_member->IsConnected()) {
             room_member->SendLdnPacket(packet);
@@ -480,8 +577,11 @@ void LANDiscovery::SendPacket(const Network::LDNPacket& packet) {
     }
 }
 
-void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
+void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet, bool from_room) {
     std::scoped_lock lock{packet_mutex};
+    if (!inited || use_room != from_room) {
+        return;
+    }
     switch (packet.type) {
     case Network::LDNPacketType::Scan: {
         LOG_INFO(Frontend, "Scan packet received!");
@@ -494,26 +594,47 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
     case Network::LDNPacketType::ScanResp: {
         LOG_INFO(Frontend, "ScanResp packet received!");
 
-        if (packet.data.size() < sizeof(NetworkInfo)) {
+        if (packet.data.size() != sizeof(NetworkInfo)) {
             break;
         }
 
         NetworkInfo info{};
         std::memcpy(&info, packet.data.data(), sizeof(NetworkInfo));
-        scan_results.insert({info.common.bssid, info});
+        auto advertised_host = info.ldn.nodes[0].ipv4_address;
+        std::reverse(advertised_host.begin(), advertised_host.end());
+        if (info.common.ssid.length > SsidLengthMax ||
+            info.ldn.advertise_data_size > AdvertiseDataSizeMax || info.ldn.node_count == 0 ||
+            info.ldn.node_count_max > NodeCountMax ||
+            info.ldn.node_count > info.ldn.node_count_max ||
+            (!use_room && advertised_host != packet.local_ip) || scan_results.size() >= 128) {
+            break;
+        }
+        scan_results.insert_or_assign(info.common.bssid, info);
 
         break;
     }
     case Network::LDNPacketType::Connect: {
         LOG_INFO(Frontend, "Connect packet received!");
 
-        if (packet.data.size() < sizeof(NodeInfo)) {
+        if (packet.data.size() != sizeof(NodeInfo)) {
             break;
         }
 
         NodeInfo info{};
         std::memcpy(&info, packet.data.data(), sizeof(NodeInfo));
 
+        if (state != State::AccessPointCreated ||
+            network_info.ldn.station_accept_policy == AcceptPolicy::RejectAll ||
+            network_info.ldn.node_count >= network_info.ldn.node_count_max ||
+            std::find(connected_clients.begin(), connected_clients.end(), packet.local_ip) !=
+                connected_clients.end() ||
+            info.local_communication_version !=
+                network_info.ldn.nodes[0].local_communication_version) {
+            if (local_transport) {
+                SendPacket(Network::LDNPacketType::Disconnect, packet.local_ip);
+            }
+            break;
+        }
         connected_clients.push_back(packet.local_ip);
 
         for (LanStation& station : stations) {
@@ -535,7 +656,7 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
             std::remove(connected_clients.begin(), connected_clients.end(), packet.local_ip),
             connected_clients.end());
 
-        if (packet.data.size() < sizeof(NodeInfo)) {
+        if (packet.data.size() != sizeof(NodeInfo)) {
             break;
         }
 
@@ -553,13 +674,17 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
         break;
     }
     case Network::LDNPacketType::DestroyNetwork: {
+        if (!host_ip || packet.local_ip != *host_ip) {
+            break;
+        }
         ResetStations();
         OnDisconnectFromHost();
         break;
     }
     case Network::LDNPacketType::SyncNetwork: {
-        if (state == State::StationOpened || state == State::StationConnected) {
-            if (packet.data.size() < sizeof(NetworkInfo)) {
+        if (host_ip && packet.local_ip == *host_ip &&
+            (connection_pending || state == State::StationConnected)) {
+            if (packet.data.size() != sizeof(NetworkInfo)) {
                 break;
             }
 
@@ -567,11 +692,21 @@ void LANDiscovery::ReceivePacket(const Network::LDNPacket& packet) {
             std::memcpy(&info, packet.data.data(), sizeof(NetworkInfo));
 
             // A connected station only follows the session it joined.
-            if (state == State::StationConnected &&
+            if (info.common.ssid.length > SsidLengthMax ||
+                info.ldn.advertise_data_size > AdvertiseDataSizeMax || info.ldn.node_count == 0 ||
+                info.ldn.node_count_max > NodeCountMax ||
+                info.ldn.node_count > info.ldn.node_count_max ||
                 info.network_id.session_id != network_info.network_id.session_id) {
                 break;
             }
 
+            const auto own = std::find_if(
+                info.ldn.nodes.begin(), info.ldn.nodes.end(), [this](const NodeInfo& node) {
+                    return node.is_connected && node.mac_address == node_info.mac_address;
+                });
+            if (own == info.ldn.nodes.end()) {
+                break;
+            }
             LOG_INFO(Frontend, "SyncNetwork packet received!");
             OnSyncNetwork(info);
         } else {

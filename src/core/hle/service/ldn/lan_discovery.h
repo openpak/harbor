@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -27,6 +28,7 @@
 namespace Service::LDN {
 
 class LANDiscovery;
+class LocalWirelessTransport;
 
 class LanStation {
 public:
@@ -80,11 +82,14 @@ public:
     Result Initialize(LanEventFunc lan_event_ = empty_func, bool listening = true);
     Result Finalize();
 
-    void ReceivePacket(const Network::LDNPacket& packet);
+    void ReceivePacket(const Network::LDNPacket& packet, bool from_room = true);
+    Ipv4Address GetLocalAddress() const;
 
 protected:
     friend class LanStation;
 
+    Result DestroyNetworkLocked();
+    Result DisconnectLocked();
     void InitNetworkInfo();
     void InitNodeStateChange();
 
@@ -115,7 +120,11 @@ protected:
     static constexpr Ssid fake_ssid{"YuzuFakeSsidForLdn"};
 
     bool inited{};
-    std::mutex packet_mutex;
+    mutable std::mutex packet_mutex;
+    std::condition_variable connection_changed;
+    std::unique_ptr<LocalWirelessTransport> local_transport;
+    bool use_room{};
+    bool connection_pending{};
     std::array<LanStation, StationCountMax> stations;
     std::array<NodeLatestUpdate, NodeCountMax> node_changes{};
     std::array<u8, NodeCountMax> node_last_states{};
