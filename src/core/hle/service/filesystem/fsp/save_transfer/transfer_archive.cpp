@@ -284,7 +284,8 @@ ArchiveReader::Error ArchiveReader::Open(std::span<const u8> meta, const Key128&
         content.division_count < 1 || content.division_count > MaxDivisionCount) {
         return Error::Meta;
     }
-    if (expected_mac && Cmac(mac_key, Bytes(content)) != *expected_mac) {
+    last_mac = Cmac(mac_key, Bytes(content));
+    if (expected_mac && last_mac != *expected_mac) {
         return Error::Mac;
     }
     plain.assign(content.division_count, std::nullopt);

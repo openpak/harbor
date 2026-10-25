@@ -367,6 +367,13 @@ Result TransferManager::OpenImporter(std::shared_ptr<Importer>* out,
     case ArchiveReader::Error::None:
         break;
     case ArchiveReader::Error::Mac:
+        LOG_WARNING(Service_FS,
+                    "save transfer: import initial data MAC mismatch (computed {:02x}{:02x}{:02x}{:02x}.. "
+                    "expected {:02x}{:02x}{:02x}{:02x}..)",
+                    importer->reader.LastMac()[0], importer->reader.LastMac()[1],
+                    importer->reader.LastMac()[2], importer->reader.LastMac()[3],
+                    package->initial_data_mac[0], package->initial_data_mac[1],
+                    package->initial_data_mac[2], package->initial_data_mac[3]);
         R_THROW(ResultInitialDataMac);
     default:
         R_THROW(ResultImportDataVerification);
