@@ -117,6 +117,7 @@ private:
     ArchiveSource source;
     Key128 stream_key;
     Key128 mac_key;
+    std::optional<Key128> handed_mac; ///< the MAC last given to the guest, for the consistency check
     InitialDataContent content{};
     std::array<Key128, MaxDivisionCount> ivs{};
     Key128 meta_iv{};
