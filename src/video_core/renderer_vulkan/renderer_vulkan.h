@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <variant>
@@ -65,6 +66,9 @@ public:
     void InitializePlatformSpecific();
 
 private:
+    void LogResourcesEvery30s();
+    std::chrono::steady_clock::time_point next_resource_log{};
+    std::chrono::steady_clock::time_point resource_log_start{};
     void InterpolateFrames(Frame* prev_frame, Frame* curr_frame);
     Frame* previous_frame = nullptr;  // Store the previous frame for interpolation
     VkCommandBuffer BeginSingleTimeCommands();

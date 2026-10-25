@@ -260,6 +260,9 @@ public:
     /// Runs `handler` on the first device loss (at once when the device is already lost).
     void AddLossHandler(std::function<void()> handler) const;
 
+    /// One line with the usage and budget of every device memory heap, for diagnostics.
+    [[nodiscard]] std::string DescribeMemoryHeaps() const;
+
     /// Whether VK_AMD_buffer_marker is available (GPU breadcrumbs).
     bool IsAmdBufferMarkerSupported() const noexcept {
         return extensions.buffer_marker;
