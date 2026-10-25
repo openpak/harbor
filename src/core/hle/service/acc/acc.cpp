@@ -2381,7 +2381,17 @@ private:
         return process != nullptr ? process->GetProcessId() : 0;
     }
 
-    void Ensure(HLERequestContext& ctx, std::map<u64, std::string>& cache, std::string vendor) {
+    // The token caches and their mutex. The Ensure work runs on a plain thread that can outlive
+    // this service object (session closed, emulation stopped) while the network call is stuck in
+    // a timeout, so the work holds the state by shared_ptr, never through `this`.
+    struct State {
+        std::mutex mutex;
+        std::map<u64, std::string> device_tokens;
+        std::map<u64, std::string> edge_tokens;
+    };
+
+    void Ensure(HLERequestContext& ctx, std::map<u64, std::string> State::*cache_member,
+                std::string vendor) {
         const u64 client_id = PopClientId(ctx, true);
         const u64 caller = Caller(ctx);
         LOG_INFO(Service_ACC, "dauth: token for client {:016x}{}{} requested", client_id,
@@ -2390,12 +2400,14 @@ private:
         rb.Push(ResultSuccess);
         rb.PushIpcInterface<OpenPakAsyncContext>(
             ctx, system, worker,
-            [this, &cache, client_id, caller, vendor](std::stop_token, std::vector<u8>&) {
+            [st = state, cache_member, client_id, caller,
+             vendor](std::stop_token, std::vector<u8>&) {
                 const auto token =
                     OpenPak::Session::DauthToken(fmt::format("{:016x}", client_id), vendor);
                 LOG_INFO(Service_ACC, "dauth: token for client {:016x}{}{} -> {}", client_id,
                          vendor.empty() ? "" : " vendor ", vendor, token.empty() ? "none" : "ok");
-                std::scoped_lock lk{mutex};
+                std::scoped_lock lk{st->mutex};
+                auto& cache = (*st).*cache_member;
                 if (token.empty()) {
                     cache.erase(caller);
                     return ResultInternetRequestDenied;
@@ -2406,9 +2418,10 @@ private:
             false, true);
     }
 
-    void Load(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+    void Load(HLERequestContext& ctx, std::map<u64, std::string> State::*cache_member) {
         const u64 client_id = PopClientId(ctx, false);
-        std::scoped_lock lk{mutex};
+        std::scoped_lock lk{state->mutex};
+        auto& cache = (*state).*cache_member;
         const auto it = cache.find(client_id);
         if (it == cache.end()) {
             LOG_WARNING(Service_ACC, "dauth: no cached token for process {}", client_id);
@@ -2423,40 +2436,40 @@ private:
         rb.Push(ResultSuccess);
     }
 
-    void Invalidate(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+    void Invalidate(HLERequestContext& ctx, std::map<u64, std::string> State::*cache_member) {
         const u64 client_id = PopClientId(ctx, false);
-        std::scoped_lock lk{mutex};
+        std::scoped_lock lk{state->mutex};
+        auto& cache = (*state).*cache_member;
         cache.erase(client_id);
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
     }
 
-    void IsAvailable(HLERequestContext& ctx, std::map<u64, std::string>& cache) {
+    void IsAvailable(HLERequestContext& ctx, std::map<u64, std::string> State::*cache_member) {
         const u64 client_id = PopClientId(ctx, false);
-        std::scoped_lock lk{mutex};
+        std::scoped_lock lk{state->mutex};
+        auto& cache = (*state).*cache_member;
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
         rb.Push<bool>(cache.contains(client_id));
     }
 
-    void EnsureAuthenticationTokenCacheAsync(HLERequestContext& ctx) { Ensure(ctx, device_tokens, ""); }
-    void LoadAuthenticationTokenCache(HLERequestContext& ctx) { Load(ctx, device_tokens); }
-    void InvalidateAuthenticationTokenCache(HLERequestContext& ctx) { Invalidate(ctx, device_tokens); }
-    void IsDeviceAuthenticationTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, device_tokens); }
+    void EnsureAuthenticationTokenCacheAsync(HLERequestContext& ctx) { Ensure(ctx, &State::device_tokens, ""); }
+    void LoadAuthenticationTokenCache(HLERequestContext& ctx) { Load(ctx, &State::device_tokens); }
+    void InvalidateAuthenticationTokenCache(HLERequestContext& ctx) { Invalidate(ctx, &State::device_tokens); }
+    void IsDeviceAuthenticationTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, &State::device_tokens); }
 
     // No vendor is passed: the dauth program knows it per client, and every edge client here is
     // the CDN's ("akamai").
     void EnsureEdgeTokenCacheAsync(HLERequestContext& ctx) {
-        Ensure(ctx, edge_tokens, "akamai");
+        Ensure(ctx, &State::edge_tokens, "akamai");
     }
-    void LoadEdgeTokenCache(HLERequestContext& ctx) { Load(ctx, edge_tokens); }
-    void InvalidateEdgeTokenCache(HLERequestContext& ctx) { Invalidate(ctx, edge_tokens); }
-    void IsEdgeTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, edge_tokens); }
+    void LoadEdgeTokenCache(HLERequestContext& ctx) { Load(ctx, &State::edge_tokens); }
+    void InvalidateEdgeTokenCache(HLERequestContext& ctx) { Invalidate(ctx, &State::edge_tokens); }
+    void IsEdgeTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, &State::edge_tokens); }
 
     std::shared_ptr<OpenPak::AsyncWorker> worker;
-    std::mutex mutex;
-    std::map<u64, std::string> device_tokens;
-    std::map<u64, std::string> edge_tokens;
+    std::shared_ptr<State> state = std::make_shared<State>();
 };
 
 class ACC_E final : public Module::Interface {
