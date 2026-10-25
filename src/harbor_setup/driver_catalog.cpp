@@ -102,7 +102,24 @@ int AdrenoModel(const DeviceInfo& device) {
     return std::stoi(match[1].str());
 }
 
+bool SupportsXclipseDrivers(const DeviceInfo& device) {
+    const bool arm64 = device.abis && std::find(device.abis->begin(), device.abis->end(),
+                                               "arm64-v8a") != device.abis->end();
+    if (!arm64 || device.android_api.value_or(0) < 34) {
+        return false;
+    }
+    static const std::regex stock(R"(\bXclipse\s+(530|540|550|920|940|950|960)\b)", std::regex::icase);
+    static const std::regex radv(
+        R"(\bRADV\s+(VANGOGHLITE|TITAN|MAGELLAN(?:\s+CARL)?|ARIEL|TRITON|GALILEO|JUNO)\b)",
+        std::regex::icase);
+    const auto gpu = device.gpu.value_or("");
+    return std::regex_search(gpu, stock) || std::regex_search(gpu, radv);
+}
+
 bool CanBrowseDrivers(const DeviceInfo& device) {
+    if (SupportsXclipseDrivers(device)) {
+        return true;
+    }
     const int model = AdrenoModel(device);
     // Unknown and new chips stay manual installs until their publishers' support is reviewed.
     static const int reviewed[] = {710, 720, 722, 730, 735, 740, 750, 760, 810, 812, 825, 829, 830, 840};
@@ -135,6 +152,11 @@ bool AllowedDriverDownload(const std::string& url) {
 std::vector<DriverRelease> ParseDriverReleases(const std::string& json, const std::string& repository,
                                                const DeviceInfo& device, std::string* error) {
     std::vector<DriverRelease> chosen;
+    const bool xclipse = SupportsXclipseDrivers(device);
+    const bool radv = repository == "JimVulkan/radv-xclipse";
+    if (xclipse != radv || (radv && !CanBrowseDrivers(device))) {
+        return chosen;
+    }
     nlohmann::json releases;
     try {
         releases = nlohmann::json::parse(json);
@@ -172,6 +194,16 @@ std::vector<DriverRelease> ParseDriverReleases(const std::string& json, const st
         const std::string name = Text(*release, "name");
         const std::string tag = Text(*release, "tag_name");
         const std::string body = Text(*release, "body");
+        // 1.7 is the first release covering all seven reviewed Xclipse GPUs.
+        if (radv) {
+            std::smatch version;
+            static const std::regex pattern(R"(^v?(\d+)\.(\d+)\.)");
+            if (!std::regex_search(tag, version, pattern) ||
+                (std::stoi(version[1].str()) < 1) ||
+                (std::stoi(version[1].str()) == 1 && std::stoi(version[2].str()) < 7)) {
+                continue;
+            }
+        }
         if (purple && api < 30) {
             continue; // MrPurple's release notes require Android 11+.
         }
@@ -210,14 +242,16 @@ std::vector<DriverRelease> ParseDriverReleases(const std::string& json, const st
                 minimum_api = 35;
             }
 
-            if ((!qualcomm && !turnip) || !EndsWith(file, ".zip") || api < minimum_api || size <= 0 ||
+            if ((!radv && !qualcomm && !turnip) ||
+                (radv && (!file.starts_with("radv-xclipse-") || Contains(file, "wayland"))) ||
+                !EndsWith(file, ".zip") || api < minimum_api || size <= 0 ||
                 static_cast<std::uint64_t>(size) > MaxDriverDownload ||
                 !AllowedDriverDownload(url, repository) || (digest && !IsSha256Digest(*digest)) ||
-                !SupportsAsset(repository, body, file, model, qualcomm)) {
+                (!radv && !SupportsAsset(repository, body, file, model, qualcomm))) {
                 continue;
             }
 
-            const std::string channel = qualcomm ? "Qualcomm"
+            const std::string channel = radv ? "RADV Xclipse" : qualcomm ? "Qualcomm"
                                         : purple ? "Turnip Unified"
                                         : Contains(name, "Stable") ? "Turnip Stable"
                                                                    : "Turnip";
@@ -270,6 +304,13 @@ std::string DriverPackageProblem(const std::string& name, const std::string& lib
     if (device.android_api && min_api > *device.android_api) {
         return name + " requires Android API " + std::to_string(min_api) + "; this phone has API " +
                std::to_string(*device.android_api) + ". Choose another driver.";
+    }
+    const bool radv = library_name == "vulkan.radeon.so";
+    if (radv && !SupportsXclipseDrivers(device)) {
+        return name + " requires a supported Xclipse GPU on Android 14 or newer (ARM64).";
+    }
+    if (SupportsXclipseDrivers(device) && !radv) {
+        return name + " is not a RADV Xclipse driver. Choose an Xclipse driver package.";
     }
     const int family = AdrenoModel(device) / 100;
     if (const auto built_for = LibraryFamily(library_name); built_for && family != 0 && *built_for != family) {

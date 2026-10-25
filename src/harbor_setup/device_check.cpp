@@ -10,6 +10,7 @@
 #include <map>
 
 #include "harbor_setup/device_check.h"
+#include "harbor_setup/driver_catalog.h"
 
 namespace HarborSetup {
 
@@ -101,7 +102,10 @@ std::vector<DeviceCheckRow> RunDeviceCheck(const DeviceInfo& d) {
     }
 
     if (d.adreno) {
-        if (*d.adreno) {
+        if (SupportsXclipseDrivers(d)) {
+            rows.push_back({"Graphics driver", "Phone's or RADV Xclipse",
+                            "RADV Xclipse drivers can be installed for this GPU.", CheckLevel::Pass});
+        } else if (*d.adreno) {
             rows.push_back({"Graphics driver", "Phone's or Turnip",
                             "Turnip drivers can be installed for this Adreno GPU.", CheckLevel::Pass});
         } else {

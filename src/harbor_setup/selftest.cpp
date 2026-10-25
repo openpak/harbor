@@ -222,6 +222,48 @@ void TestDriverCatalog() {
     Check(AdrenoModel(a650) == 650 && AdrenoModel(a740) == 740, "drivers: Adreno model from the GPU name");
     Check(CanBrowseDrivers(a650), "drivers: an Adreno 650 on Android 12 may browse");
 
+    DeviceInfo xclipse = a650;
+    xclipse.adreno = false;
+    xclipse.android_api = 34;
+    const std::string radv = "JimVulkan/radv-xclipse";
+    const std::string radv_json = "[" + Release("RADV Xclipse", "v1.8.0", "", radv,
+        {"radv-xclipse-27.0.0-devel-test.zip", "radv-xclipse-wayland-27.0.0-devel-test.zip"},
+        "2026-10-19") + "]";
+    for (const char* model : {"530", "540", "550", "920", "940", "950", "960"}) {
+        xclipse.gpu = std::string("Samsung Xclipse ") + model;
+        Check(CanBrowseDrivers(xclipse), "drivers: each supported Xclipse GPU may browse");
+        const auto packages = ParseDriverReleases(radv_json, radv, xclipse);
+        Check(packages.size() == 1 && packages.front().channel == "RADV Xclipse" &&
+                  packages.front().file_name == "radv-xclipse-27.0.0-devel-test.zip",
+              "drivers: Xclipse offers Android RADV, excluding Wayland");
+    }
+    for (const char* name : {"RADV VANGOGHLITE", "RADV TITAN", "RADV ARIEL", "RADV TRITON",
+                              "RADV MAGELLAN CARL", "RADV MAGELLAN", "RADV GALILEO", "RADV JUNO"}) {
+        xclipse.gpu = name;
+        Check(CanBrowseDrivers(xclipse), "drivers: active RADV keeps Xclipse controls available");
+    }
+    xclipse.gpu = "Xclipse 940";
+    const std::string old_radv = "[" + Release("RADV Xclipse", "v1.6.0", "", radv,
+        {"radv-xclipse-old.zip"}, "2026-10-13") + "]";
+    Check(ParseDriverReleases(old_radv, radv, xclipse).empty(),
+          "drivers: online Xclipse listing starts with the release supporting all models");
+    Check(DriverPackageProblem("RADV", "vulkan.radeon.so", 34, xclipse).empty() &&
+              !DriverPackageProblem("Turnip", "vulkan.ad07xx.so", 28, xclipse).empty() &&
+              !DriverPackageProblem("RADV", "vulkan.radeon.so", 34, a740).empty(),
+          "drivers: Xclipse and Adreno packages cannot be mixed");
+    Check(ParseDriverReleases(radv_json, radv, a740).empty(),
+          "drivers: RADV Xclipse is not offered on Adreno");
+    xclipse.android_api = 33;
+    Check(!CanBrowseDrivers(xclipse), "drivers: Xclipse needs Android 14");
+    xclipse.android_api = 34;
+    xclipse.abis = std::vector<std::string>{"armeabi-v7a"};
+    Check(!CanBrowseDrivers(xclipse), "drivers: Xclipse needs ARM64");
+    xclipse.abis = std::vector<std::string>{"arm64-v8a"};
+    for (const char* name : {"Xclipse 999", "Xclipse 9400", "Mali-G78", "Unknown", "RADV NAVI21"}) {
+        xclipse.gpu = name;
+        Check(!CanBrowseDrivers(xclipse), "drivers: unsupported GPUs stay unsupported");
+    }
+
     const std::string kimchi = "K11MCH1/AdrenoToolsDrivers";
     const std::string kimchi_json =
         "[" + Release(" v25.3.0 - Revision 11", "v25.3.0-rc.11", "Vulkan 1.4.328", kimchi, {"Turnip_v25.3.0_R11.zip"}, "2025-10-09") +
@@ -281,10 +323,18 @@ void TestDriverDownloads() {
     a650.gpu = "Adreno (TM) 650";
     a650.android_api = 31;
     const auto listing = FetchDriverListing(host, a650, cancel);
-    Check(host.http_gets == static_cast<int>(DriverRepositories.size()) && listing.releases.empty() &&
+    Check(host.http_gets == static_cast<int>(DriverRepositories.size()) - 1 && listing.releases.empty() &&
               listing.notice && listing.notice->find("MrPurple666: offline.") != std::string::npos &&
               listing.notice->find("StevenMXZ: offline.") != std::string::npos,
           "downloads: every publisher is asked, and each failure is named");
+    FakeHost samsung;
+    auto xclipse = a650;
+    xclipse.adreno = false;
+    xclipse.gpu = "Xclipse 940";
+    xclipse.android_api = 34;
+    const auto radv = FetchDriverListing(samsung, xclipse, cancel);
+    Check(samsung.http_gets == 1 && radv.notice && radv.notice->find("JimVulkan") != std::string::npos,
+          "downloads: Xclipse contacts only its RADV publisher");
     FakeHost other;
     const auto none = FetchDriverListing(other, SampleDevice("warn"), cancel);
     Check(other.http_gets == 0 && none.releases.empty() && none.notice,

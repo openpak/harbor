@@ -123,7 +123,7 @@ object HarborMenuBridge {
                 ""
             }
             // Only an Adreno GPU loads another driver (G4.GPU.1).
-            "hasDriverChoice" -> flag(GpuDriverHelper.isAdrenoGpu())
+            "hasDriverChoice" -> flag(GpuDriverHelper.supportsCustomDriverLoading())
             "drivers" -> {
                 val lines = mutableListOf(
                     "",

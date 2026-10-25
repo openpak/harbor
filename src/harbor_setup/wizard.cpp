@@ -105,7 +105,7 @@ Wizard::Wizard(Host& host_, std::filesystem::path record_path_, const Readiness&
     setup.firmware_version =
         readiness.FirmwareReady() ? std::optional{readiness.firmware_version} : std::nullopt;
 
-    driver_page = host.HasDriverStore() && device.adreno.value_or(false);
+    driver_page = host.HasDriverStore() && (device.adreno.value_or(false) || SupportsXclipseDrivers(device));
     checks = RunDeviceCheck(device);
     keys_usable = readiness.keys_usable;
     if (readiness.FirmwareReady()) {
@@ -217,7 +217,7 @@ std::string Wizard::Lead() const {
         return "Optional. Choose the folders that hold updates for your games. Skip this if you have "
                "none.";
     case Step::Driver:
-        return "Use the phone's Vulkan driver, download an Adreno driver from GitHub, or install a "
+        return "Use the phone's Vulkan driver, download a compatible driver from GitHub, or install a "
                "driver .zip. Set up again from the console's menu (Android back) to change it later.";
     case Step::Account:
         switch (account_state) {

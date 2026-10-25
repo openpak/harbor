@@ -51,7 +51,8 @@ class DriverFetcherFragment : Fragment() {
         get() = parseAdrenoModel()
 
     private val recommendedDriver: String
-        get() = driverMap.firstOrNull { adrenoModel in it.first }?.second ?: "Unsupported"
+        get() = if (GpuDriverHelper.isXclipseGpu()) "RADV Xclipse" else
+            driverMap.firstOrNull { adrenoModel in it.first }?.second ?: "Unsupported"
 
     enum class SortMode {
         Default, PublishTime,
@@ -65,7 +66,10 @@ class DriverFetcherFragment : Fragment() {
         val sortMode: SortMode = SortMode.Default
     )
 
-    private val repoList: List<DriverRepo> = listOf(
+    private val repoList: List<DriverRepo>
+        get() = if (GpuDriverHelper.isXclipseGpu()) listOf(
+            DriverRepo("RADV Xclipse", "JimVulkan/radv-xclipse", 0, true, SortMode.PublishTime)
+        ) else listOf(
         DriverRepo("Mr. Purple Turnip", "MrPurple666/purple-turnip", 0),
         DriverRepo("GameHub Adreno 8xx", "crueter/GameHub-8Elite-Drivers", 1),
         DriverRepo("KIMCHI Turnip", "K11MCH1/AdrenoToolsDrivers", 2, true, SortMode.PublishTime),
@@ -179,6 +183,24 @@ class DriverFetcherFragment : Fragment() {
 
                             val body = response.body?.string() ?: return@withContext
                             releases = Release.fromJsonArray(body, useTagName, sortMode)
+                            if (path == "JimVulkan/radv-xclipse") {
+                                // 1.7+ covers all seven supported Xclipse models.
+                                releases.removeAll { release ->
+                                    val version = release.tagName.removePrefix("v").split(".")
+                                    val major = version.getOrNull(0)?.toIntOrNull() ?: 0
+                                    val minor = version.getOrNull(1)?.toIntOrNull() ?: 0
+                                    major < 1 || (major == 1 && minor < 7)
+                                }
+                                // Wayland packages target Bannerlator, not Android emulator surfaces.
+                                releases.forEach { release ->
+                                    release.artifacts = release.artifacts.filter {
+                                        it.name.startsWith("radv-xclipse-") &&
+                                            !it.name.contains("wayland", ignoreCase = true) &&
+                                            it.name.endsWith(".zip")
+                                    }
+                                }
+                                releases.removeAll { it.artifacts.isEmpty() }
+                            }
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {

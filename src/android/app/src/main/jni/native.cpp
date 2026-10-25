@@ -53,6 +53,7 @@ extern "C" {
 #include "common/fs/fs_util.h"
 #include "common/fs/path_util.h"
 #include "common/logging.h"
+#include "harbor_setup/driver_catalog.h"
 #include "common/scm_rev.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -1055,7 +1056,7 @@ void JNICALL Java_org_yuzu_yuzu_1emu_NativeLibrary_initializeGpuDriver(JNIEnv* e
     return android_get_device_api_level() >= 28 && CheckKgslPresent();
 }
 
-jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_supportsCustomDriverLoading(
+jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_isAdrenoGpu(
     JNIEnv* env, jobject instance) {
 #ifdef ARCHITECTURE_arm64
     // If the KGSL device exists custom drivers can be loaded using adrenotools
@@ -1063,6 +1064,43 @@ jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_supportsCustomDri
 #else
     return false;
 #endif
+}
+
+jboolean JNICALL Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_supportsXclipseDriverLoading(
+    JNIEnv* env, jobject, jstring j_hook_lib_dir) {
+#ifdef ARCHITECTURE_arm64
+    if (android_get_device_api_level() < 34) {
+        return false;
+    }
+    try {
+        // Use the selected loader when available; probing must not create a window or GPU device.
+        auto library = EmulationSession::GetInstance().CustomDriverLibrary();
+        if (!library) {
+            const auto hook_dir = Common::Android::GetJString(env, j_hook_lib_dir);
+            auto handle = adrenotools_open_libvulkan(RTLD_NOW, 0, nullptr, hook_dir.c_str(),
+                                                     nullptr, nullptr, nullptr, nullptr);
+            library = std::make_shared<Common::DynamicLibrary>(handle);
+        }
+        if (!library->IsOpen()) {
+            return false;
+        }
+        Vulkan::vk::InstanceDispatch dispatch;
+        const auto instance = Vulkan::CreateInstance(
+            *library, dispatch, VK_API_VERSION_1_1, Core::Frontend::WindowSystemType::Android);
+        const auto devices = instance.EnumeratePhysicalDevices();
+        if (devices.empty()) {
+            return false;
+        }
+        HarborSetup::DeviceInfo device;
+        device.gpu = Vulkan::vk::PhysicalDevice(devices.front(), dispatch).GetProperties().deviceName;
+        device.abis = std::vector<std::string>{"arm64-v8a"};
+        device.android_api = android_get_device_api_level();
+        return HarborSetup::SupportsXclipseDrivers(device);
+    } catch (const std::exception& e) {
+        LOG_WARNING(Frontend, "Could not identify Xclipse GPU: {}", e.what());
+    }
+#endif
+    return false;
 }
 
 jobjectArray Java_org_yuzu_yuzu_1emu_utils_GpuDriverHelper_getSystemDriverInfo(

@@ -79,6 +79,12 @@ object GpuDriverHelper {
         initializeDriverParameters()
     }
 
+    private fun isDriverCompatible(metadata: GpuDriverMetadata): Boolean {
+        if (metadata.minApi > Build.VERSION.SDK_INT) return false
+        val radv = metadata.libraryName == "vulkan.radeon.so"
+        return if (isXclipseGpu()) radv else !radv
+    }
+
     fun copyDriverToInternalStorage(driverUri: Uri): Boolean {
         // Ensure we have directories.
         initializeDirectories()
@@ -94,7 +100,7 @@ object GpuDriverHelper {
             return false
         }
 
-        if (metadata.minApi > Build.VERSION.SDK_INT) {
+        if (!isDriverCompatible(metadata)) {
             copiedFile.delete()
             return false
         }
@@ -123,7 +129,7 @@ object GpuDriverHelper {
             return false
         }
 
-        if (metadata.minApi > Build.VERSION.SDK_INT) {
+        if (!isDriverCompatible(metadata)) {
             copiedFile.delete()
             return false
         }
@@ -158,6 +164,10 @@ object GpuDriverHelper {
         val metadata = getMetadataFromZip(driver)
         if (metadata.name == null) {
             driver.delete()
+            return false
+        }
+
+        if (!isDriverCompatible(metadata)) {
             return false
         }
 
@@ -206,7 +216,20 @@ object GpuDriverHelper {
         return GpuDriverMetadata()
     }
 
-    external fun supportsCustomDriverLoading(): Boolean
+    external fun isAdrenoGpu(): Boolean
+
+    private external fun supportsXclipseDriverLoading(hookLibPath: String): Boolean
+    private var xclipseSupported: Boolean? = null
+
+    fun isXclipseGpu(): Boolean {
+        if (Build.VERSION.SDK_INT < 34 || !Build.SUPPORTED_ABIS.contains("arm64-v8a") || isAdrenoGpu()) {
+            return false
+        }
+        val hookPath = hookLibPath ?: return false
+        return xclipseSupported ?: supportsXclipseDriverLoading(hookPath).also { xclipseSupported = it }
+    }
+
+    fun supportsCustomDriverLoading(): Boolean = isAdrenoGpu() || isXclipseGpu()
 
     external fun getSystemDriverInfo(
         surface: Surface = Surface(SurfaceTexture(true)),
@@ -217,14 +240,6 @@ object GpuDriverHelper {
         surface: Surface = Surface(SurfaceTexture(true)),
         hookLibPath: String
     ): String?
-
-    fun isAdrenoGpu(): Boolean {
-        return try {
-            supportsCustomDriverLoading()
-        } catch (e: Exception) {
-            false
-        }
-    }
 
     // Parse the custom driver metadata to retrieve the name.
     val installedCustomDriverData: GpuDriverMetadata

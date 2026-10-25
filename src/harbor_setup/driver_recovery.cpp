@@ -37,6 +37,10 @@ void Remove(const std::string& path) {
 } // namespace
 
 std::string DriverDownloadLead(const DeviceInfo& device) {
+    if (SupportsXclipseDrivers(device)) {
+        return "Choose RADV Xclipse releases from GitHub. Android requirements are checked before "
+               "installation. You can always switch back to the phone's driver.";
+    }
     return CanBrowseDrivers(device)
                ? "Choose from recent Turnip and Qualcomm releases on GitHub. Packages are filtered for "
                  "your GPU; Android requirements are checked before installation. You can always "
@@ -48,12 +52,15 @@ std::string DriverDownloadLead(const DeviceInfo& device) {
 DriverListing FetchDriverListing(Host& host, const DeviceInfo& device, const std::atomic_bool& cancel) {
     DriverListing listing;
     if (!CanBrowseDrivers(device)) {
-        // A non-Adreno or unknown device never contacts GitHub (G4.GPU.11).
+        // Unsupported devices never contact GitHub.
         listing.notice = "Online downloads are not available for this GPU or Android version.";
         return listing;
     }
     std::vector<std::string> errors;
     for (const char* repository : DriverRepositories) {
+        if ((std::string_view(repository) == "JimVulkan/radv-xclipse") != SupportsXclipseDrivers(device)) {
+            continue;
+        }
         if (cancel) {
             break;
         }

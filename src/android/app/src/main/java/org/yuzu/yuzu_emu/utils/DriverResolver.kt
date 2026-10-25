@@ -53,7 +53,8 @@ object DriverResolver {
         "MrPurple666/purple-turnip",
         "crueter/GameHub-8Elite-Drivers",
         "K11MCH1/AdrenoToolsDrivers",
-        "Weab-chan/freedreno_turnip-CI"
+        "Weab-chan/freedreno_turnip-CI",
+        "JimVulkan/radv-xclipse"
     )
 
     private val urlCache = ConcurrentHashMap<String, ResolvedDriver>()

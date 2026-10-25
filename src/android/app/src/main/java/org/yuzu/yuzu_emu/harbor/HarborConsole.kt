@@ -159,12 +159,12 @@ object HarborConsole {
      * HOME runs with it. Returns its name for the log.
      */
     private fun ensureDriver(): String {
-        // Only an Adreno GPU loads another driver: elsewhere a saved choice is ignored (G4.GPU.1).
-        if (!GpuDriverHelper.isAdrenoGpu()) {
+        // Ignore saved choices on devices without a supported custom-driver path.
+        if (!GpuDriverHelper.supportsCustomDriverLoading()) {
             if (GpuDriverHelper.installedCustomDriverData.name != null) {
                 GpuDriverHelper.installDefaultDriver()
             }
-            Log.info("[Harbor] console start: graphics driver the phone's (not an Adreno GPU)")
+            Log.info("[Harbor] console start: graphics driver the phone's (custom drivers unsupported)")
             return ""
         }
         val path = StringSetting.DRIVER_PATH.getString()

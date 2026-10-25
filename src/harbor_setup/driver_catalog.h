@@ -37,17 +37,21 @@ inline constexpr std::uint64_t MaxDriverDownload = 32ULL * 1024 * 1024;
 inline constexpr std::uint64_t MaxReleasesResponse = 2ULL * 1024 * 1024;
 
 /// The publishers whose public GitHub releases the driver page lists.
-inline constexpr std::array<const char*, 4> DriverRepositories = {
+inline constexpr std::array<const char*, 5> DriverRepositories = {
     "MrPurple666/purple-turnip",
     "whitebelyash/AdrenoToolsDrivers",
     "K11MCH1/AdrenoToolsDrivers",
     "StevenMXZ/Adreno-Tools-Drivers",
+    "JimVulkan/radv-xclipse",
 };
 
 /// The Adreno model in the GPU's name ("Adreno (TM) 650" -> 650), or 0.
 int AdrenoModel(const DeviceInfo& device);
 
-/// Whether online downloads can be offered: a reviewed Adreno model, Android 9+ and arm64.
+/// Whether a supported Xclipse model (stock or RADV name) has an Android 14+ ARM64 host.
+bool SupportsXclipseDrivers(const DeviceInfo& device);
+
+/// Whether online downloads can be offered for this GPU, Android version and ABI.
 bool CanBrowseDrivers(const DeviceInfo& device);
 
 std::string ReleasesUrl(const std::string& repository);

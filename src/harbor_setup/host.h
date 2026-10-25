@@ -85,7 +85,7 @@ public:
     /// "Start Harbor" was pressed and the completed record saved.
     virtual void Finished(const Record& record) {}
 
-    // Graphics drivers: Android with an Adreno GPU only.
+    // Graphics drivers: Android with a supported Adreno or Xclipse GPU.
     virtual bool HasDriverStore() const {
         return false;
     }
