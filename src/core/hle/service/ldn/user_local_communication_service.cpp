@@ -75,6 +75,7 @@ IUserLocalCommunicationService::~IUserLocalCommunicationService() {
         }
     }
 
+    lan_discovery.Finalize();
     service_context.CloseEvent(state_change_event);
 }
 
@@ -107,12 +108,8 @@ Result IUserLocalCommunicationService::GetIpv4Address(Out<Ipv4Address> out_curre
     *out_current_address = {Network::TranslateIPv4(network_interface->ip_address)};
     *out_subnet_mask = {Network::TranslateIPv4(network_interface->subnet_mask)};
 
-    // When we're connected to a room, spoof the hosts IP address
-    if (auto room_member = Network::GetRoomMember().lock()) {
-        if (room_member->IsConnected()) {
-            *out_current_address = room_member->GetFakeIpAddress();
-        }
-    }
+    // Keep this consistent with the transport selected at Initialize.
+    *out_current_address = lan_discovery.GetLocalAddress();
 
     std::reverse(std::begin(*out_current_address), std::end(*out_current_address)); // ntohl
     std::reverse(std::begin(*out_subnet_mask), std::end(*out_subnet_mask));         // ntohl
@@ -307,15 +304,12 @@ Result IUserLocalCommunicationService::Initialize(ClientProcessId aruid) {
     const auto network_interface = Network::GetSelectedNetworkInterface();
     R_UNLESS(network_interface, ResultAirplaneModeEnabled);
 
+    R_TRY(lan_discovery.Initialize([&]() { OnEventFired(); }));
     if (auto room_member = Network::GetRoomMember().lock()) {
         ldn_packet_received = room_member->BindOnLdnPacketReceived(
             [this](const Network::LDNPacket& packet) { OnLDNPacketReceived(packet); });
-    } else {
-        LOG_ERROR(Service_LDN, "Couldn't bind callback!");
-        R_RETURN(ResultAirplaneModeEnabled);
     }
 
-    lan_discovery.Initialize([&]() { OnEventFired(); });
     is_initialized = true;
     R_SUCCEED();
 }
