@@ -97,7 +97,8 @@ PixelFormat PixelFormatFromDepthFormat(Tegra::DepthFormat format) {
     }
 }
 
-PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format) {
+PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format,
+                                             const std::source_location& caller) {
     switch (format) {
     case Tegra::RenderTargetFormat::R32G32B32A32_FLOAT:
     case Tegra::RenderTargetFormat::R32G32B32X32_FLOAT:
@@ -200,7 +201,8 @@ PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format) 
     case Tegra::RenderTargetFormat::R8_UINT:
         return PixelFormat::R8_UINT;
     default:
-        UNIMPLEMENTED_MSG("Unimplemented format={}", format);
+        UNIMPLEMENTED_MSG("Unimplemented render-target format={} from {} ({}:{})", format,
+                          caller.function_name(), caller.file_name(), caller.line());
         return PixelFormat::A8B8G8R8_UNORM;
     }
 }

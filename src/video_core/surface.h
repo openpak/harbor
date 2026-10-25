@@ -8,6 +8,7 @@
 #undef PIXEL_FORMAT_LIST
 
 #include <climits>
+#include <source_location>
 #include <utility>
 #include "common/assert.h"
 #include "common/common_types.h"
@@ -209,7 +210,9 @@ SurfaceTarget SurfaceTargetFromTextureType(Tegra::Texture::TextureType texture_t
 bool SurfaceTargetIsLayered(SurfaceTarget target);
 bool SurfaceTargetIsArray(SurfaceTarget target);
 PixelFormat PixelFormatFromDepthFormat(Tegra::DepthFormat format);
-PixelFormat PixelFormatFromRenderTargetFormat(Tegra::RenderTargetFormat format);
+PixelFormat PixelFormatFromRenderTargetFormat(
+    Tegra::RenderTargetFormat format,
+    const std::source_location& caller = std::source_location::current());
 PixelFormat PixelFormatFromGPUPixelFormat(Service::android::PixelFormat format);
 SurfaceType GetFormatType(PixelFormat pixel_format);
 bool HasAlpha(PixelFormat pixel_format);
