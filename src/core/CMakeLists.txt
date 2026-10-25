@@ -126,6 +126,8 @@ add_library(core STATIC
     file_sys/nca_metadata.h
     file_sys/openpak_builtin_patches.cpp
     file_sys/openpak_builtin_patches.h
+    file_sys/openpak_builtin_patches_d2r.inc
+    file_sys/openpak_builtin_patches_pvz.inc
     file_sys/partition_filesystem.cpp
     file_sys/partition_filesystem.h
     file_sys/patch_manager.cpp
@@ -1135,6 +1137,7 @@ add_library(core STATIC
     hle/service/sm/sm_controller.h
     hle/service/sockets/bsd.cpp
     hle/service/sockets/bsd.h
+    hle/service/sockets/bsd_ip_redirect.h
     hle/service/sockets/nsd.cpp
     hle/service/sockets/nsd.h
     hle/service/sockets/sfdnsres.cpp

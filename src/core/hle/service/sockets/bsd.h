@@ -99,6 +99,12 @@ struct OpenFile {
 
     std::mutex state_mutex;
     std::optional<Network::SockAddrIn> pending_peer; ///< target of a connect still in progress
+    /// The address the guest dialled when a signed ip redirect sent the socket elsewhere
+    /// (bsd_ip_redirect.h): getpeername keeps reporting it.
+    std::optional<Network::SockAddrIn> guest_peer;
+    /// Datagram destinations rewritten by an ip redirect, (host target, guest address): a reply
+    /// from the target is reported as coming from the address the guest sent to.
+    std::vector<std::pair<Network::SockAddrIn, Network::SockAddrIn>> redirected_datagrams;
     u32 rcv_timeout_ms = 0;
 };
 

@@ -136,6 +136,50 @@ void CeilingChecks(const std::vector<np::PinnedKey>& keys) {
     Check(!Verifies(Envelope(malformed, Sign(malformed), keys[0].keyid), keys),
           "a malformed family rejects the whole ceiling");
 
+    // ip_redirects: hard-coded destinations, signed with the families.
+    const auto with_ip = [](const std::string& rules) {
+        return R"({"type":"openpak-ceiling","version":6,"platforms":{"switch":[".nintendo.net"]},)"
+               R"("ip_redirects":{"switch":[)" + rules + "]}}";
+    };
+    const std::string ip_payload =
+        with_ip(R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp",)"
+                R"("title":"0100C6800B934000"},)"
+                R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22691","proto":"udp"})");
+    std::string ip_error;
+    const auto ip_ceiling =
+        np::VerifyCeiling(Envelope(ip_payload, Sign(ip_payload), keys[0].keyid), keys, ip_error);
+    Check(ip_ceiling && ip_ceiling->IpRedirectsFor("switch").size() == 2 &&
+              ip_ceiling->IpRedirectsFor("switch")[0].tcp &&
+              ip_ceiling->IpRedirectsFor("switch")[0].to_port == 22690 &&
+              !ip_ceiling->IpRedirectsFor("switch")[1].tcp &&
+              ip_ceiling->IpRedirectsFor("wiiu").empty(),
+          "signed ip redirects are read per platform and protocol");
+    if (!ip_ceiling) {
+        std::printf("        (%s)\n", ip_error.c_str());
+    }
+    for (const char* bad : {
+             R"({"from":"192.0.2.7","to":"203.0.113.10:22690","proto":"tcp"})",
+             R"({"from":"192.0.2.07:23001","to":"203.0.113.10:22690","proto":"tcp"})",
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.10:0","proto":"tcp"})",
+             R"({"from":"192.0.2.7:23001","to":"example.org:22690","proto":"tcp"})",
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"sctp"})",
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp","title":"x"})",
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.10:22690","proto":"tcp"},)"
+             R"({"from":"192.0.2.7:23001","to":"203.0.113.11:22690","proto":"tcp"})",
+         }) {
+        const std::string p = with_ip(bad);
+        Check(!Verifies(Envelope(p, Sign(p), keys[0].keyid), keys),
+              "a malformed or duplicate ip redirect rejects the whole ceiling");
+    }
+    std::array<unsigned char, 4> ip{};
+    unsigned short port = 0;
+    Check(np::ParseIpv4Endpoint("255.0.0.1:65535", ip, port) && ip[0] == 255 && port == 65535 &&
+              !np::ParseIpv4Endpoint("256.0.0.1:1", ip, port) &&
+              !np::ParseIpv4Endpoint("1.2.3:4", ip, port) &&
+              !np::ParseIpv4Endpoint("1.2.3.4.5:6", ip, port) &&
+              !np::ParseIpv4Endpoint("1.2.3.4:65536", ip, port),
+          "ip redirect endpoints are dotted-quad IPv4 with a port");
+
     const auto rollback = np::DecideCeiling(std::nullopt, good, 5, keys);
     Check(rollback.result.source == np::CeilingSource::BuiltIn && !rollback.store,
           "a ceiling older than one accepted before is refused");
@@ -1443,6 +1487,26 @@ int SelfTest(bool online) {
     SecretChecks();
     AauthChecks();
     BcatKeyPatchChecks(dir);
+
+    // Last, because it replaces the process ceiling: the bsd hook's lookup.
+    std::puts("ip redirects");
+    const std::array<unsigned char, 4> listed = {192, 0, 2, 7};
+    Check(!np::IpRedirectFor(listed, 23001, true, "switch"),
+          "no ip redirect while the ceiling lists none");
+    const std::string ip_payload =
+        R"({"type":"openpak-ceiling","version":7,"platforms":{"switch":[".nintendo.net"]},)"
+        R"("ip_redirects":{"switch":[{"from":"192.0.2.7:23001","to":"203.0.113.10:22690",)"
+        R"("proto":"tcp"}]}})";
+    np::LoadCeiling(Envelope(ip_payload, Sign(ip_payload), keys[0].keyid), keys);
+    const auto hit = np::IpRedirectFor(listed, 23001, true, "switch");
+    Check(hit && hit->first == std::array<unsigned char, 4>{203, 0, 113, 10} &&
+              hit->second == 22690,
+          "a listed destination goes to its signed target");
+    Check(!np::IpRedirectFor(listed, 23002, true, "switch") &&
+              !np::IpRedirectFor(listed, 23001, false, "switch") &&
+              !np::IpRedirectFor(listed, 23001, true, "wiiu") &&
+              !np::IpRedirectFor({192, 0, 2, 8}, 23001, true, "switch"),
+          "another port, protocol, platform or address is left alone");
 
     std::filesystem::remove_all(dir, ec);
     if (g_failures != 0) {
