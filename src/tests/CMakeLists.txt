@@ -20,6 +20,7 @@ add_executable(tests
     core/nce_patcher_reach.cpp
     core/internal_network/network.cpp
     video_core/memory_tracker.cpp
+    video_core/render_pass_attachment.cpp
     video_core/memory_budget.cpp
     input_common/calibration_configuration_job.cpp
 )

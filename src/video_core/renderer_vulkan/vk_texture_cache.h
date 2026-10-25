@@ -251,7 +251,10 @@ public:
     }
 
     [[nodiscard]] bool HasAspectColorBit(size_t index) const noexcept {
-        return (image_ranges.at(rt_map[index]).aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
+        // Unbound slots retain rt_map's zero initialization. Checking that map alone
+        // aliases image zero whenever another color attachment exists.
+        return render_pass_key.HasColorAttachment(index) &&
+               (image_ranges.at(rt_map[index]).aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
     }
 
     [[nodiscard]] bool HasAspectDepthBit() const noexcept {

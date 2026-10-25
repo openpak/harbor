@@ -32,3 +32,12 @@ build must use a tag, as requested by the owner. Acceptance needs a repeated
 same-scene run to measure memory/exit behavior and capture the diagnostic
 caller. Keep driver, resolution, cache and accuracy changes separate so the
 comparison remains useful.
+
+## RC2 clear-path correction
+
+RC1 diagnostics locate format 0 calls in RasterizerVulkan::Clear. Framebuffer's
+HasAspectColorBit used rt_map for unbound slots, whose zero initialization aliases
+the first image. RC2 first checks the render-pass key for an actual color binding.
+This prevents a clear of an absent slot from being issued against image zero.
+Regression checks cover sparse bindings, depth-only, all-bound and out-of-range
+slots. Artifact resolution is pending a same-scene test on the S25 FE.

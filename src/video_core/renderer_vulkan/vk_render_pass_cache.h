@@ -18,6 +18,11 @@ namespace Vulkan {
 struct RenderPassKey {
     bool operator==(const RenderPassKey&) const noexcept = default;
 
+    [[nodiscard]] constexpr bool HasColorAttachment(size_t index) const noexcept {
+        return index < color_formats.size() &&
+               color_formats[index] != VideoCore::Surface::PixelFormat::Invalid;
+    }
+
     std::array<VideoCore::Surface::PixelFormat, 8> color_formats;
     VideoCore::Surface::PixelFormat depth_format;
     VkSampleCountFlagBits samples;
