@@ -140,23 +140,58 @@ bool GcmDecrypt(const Key128& key, std::span<const u8> iv, std::span<u8> data,
     return Gcm(false, key, iv, data, expected);
 }
 
+// AES-128 CMAC (RFC 4493) over single-block AES-ECB. It used to go through EVP_MAC "CMAC", which
+// fails silently (a zero MAC, so every initial-data MAC mismatched as 2002-7006) when the
+// build's OpenSSL has no usable CMAC provider.
 Key128 Cmac(const Key128& key, std::span<const u8> data) {
-    Key128 out{};
-    EVP_MAC* mac = EVP_MAC_fetch(nullptr, "CMAC", nullptr);
-    EVP_MAC_CTX* ctx = mac ? EVP_MAC_CTX_new(mac) : nullptr;
-    char cipher[] = "AES-128-CBC";
-    const OSSL_PARAM params[] = {
-        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_CIPHER, cipher, 0),
-        OSSL_PARAM_construct_end(),
+    const auto encrypt = [&](const Key128& block) {
+        Key128 out{};
+        CipherCtx ctx{EVP_CIPHER_CTX_new()};
+        int len = 0;
+        if (!ctx || EVP_EncryptInit_ex(ctx.get(), EVP_aes_128_ecb(), nullptr, key.data(),
+                                       nullptr) != 1) {
+            return out;
+        }
+        EVP_CIPHER_CTX_set_padding(ctx.get(), 0);
+        EVP_EncryptUpdate(ctx.get(), out.data(), &len, block.data(),
+                          static_cast<int>(block.size()));
+        return out;
     };
-    std::size_t len = 0;
-    if (ctx && EVP_MAC_init(ctx, key.data(), key.size(), params) == 1) {
-        EVP_MAC_update(ctx, data.data(), data.size());
-        EVP_MAC_final(ctx, out.data(), &len, out.size());
+    const auto shift = [](const Key128& in) {
+        Key128 out{};
+        for (std::size_t i = 0; i < in.size(); ++i) {
+            out[i] = static_cast<u8>(in[i] << 1 | (i + 1 < in.size() ? in[i + 1] >> 7 : 0));
+        }
+        if (in[0] & 0x80) {
+            out[15] ^= 0x87;
+        }
+        return out;
+    };
+    const Key128 k1 = shift(encrypt(Key128{}));
+    const Key128 k2 = shift(k1);
+    const std::size_t blocks = data.empty() ? 1 : (data.size() + 15) / 16;
+    const bool complete = !data.empty() && data.size() % 16 == 0;
+    Key128 x{};
+    for (std::size_t n = 0; n < blocks; ++n) {
+        Key128 block{};
+        const std::size_t at = n * 16;
+        const std::size_t have = std::min<std::size_t>(16, data.size() - std::min(at, data.size()));
+        std::copy_n(data.begin() + std::min(at, data.size()), have, block.begin());
+        if (n + 1 == blocks) {
+            if (!complete) {
+                block[have] = 0x80;
+            }
+            const Key128& k = complete ? k1 : k2;
+            for (std::size_t i = 0; i < 16; ++i) {
+                block[i] ^= k[i];
+            }
+        }
+        for (std::size_t i = 0; i < 16; ++i) {
+            x[i] ^= block[i];
+        }
+        x = encrypt(x);
     }
-    EVP_MAC_CTX_free(ctx);
-    EVP_MAC_free(mac);
-    return out;
+    return x;
 }
 
 bool VerifyPss(const Modulus& modulus, std::span<const u8> signature, std::span<const u8> data) {

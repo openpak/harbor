@@ -142,6 +142,10 @@ public:
                const std::optional<Key128>& expected_mac);
 
     const InitialDataContent& Content() const;
+    /// The MAC computed by the last Open (for diagnostics when it differs).
+    const Key128& LastMac() const {
+        return last_mac;
+    }
     std::vector<u16> ChunkIds() const;
 
     /// One data chunk's archive bytes. Chunks may come in any order, each once.
@@ -152,6 +156,7 @@ public:
     std::vector<u8> Stream() const;
 
 private:
+    Key128 last_mac{};
     Key128 stream_key{};
     InitialDataContent content{};
     std::vector<std::optional<std::vector<u8>>> plain;
