@@ -79,8 +79,8 @@ object GpuDriverHelper {
         initializeDriverParameters()
     }
 
-    private fun isDriverCompatible(metadata: GpuDriverMetadata): Boolean {
-        if (metadata.minApi > Build.VERSION.SDK_INT) return false
+    private fun isDriverCompatible(metadata: GpuDriverMetadata, checkApi: Boolean = true): Boolean {
+        if (checkApi && metadata.minApi > Build.VERSION.SDK_INT) return false
         val radv = metadata.libraryName == "vulkan.radeon.so"
         return if (isXclipseGpu()) radv else !radv
     }
@@ -167,7 +167,10 @@ object GpuDriverHelper {
             return false
         }
 
-        if (!isDriverCompatible(metadata)) {
+        // Only the driver kind is checked here (RADV vs Turnip). The minimum Android version was
+        // checked when the package entered the store; checking it again would make choosing an
+        // installed driver fail, and Harbor restarts into a chosen driver only once this succeeds.
+        if (!isDriverCompatible(metadata, checkApi = false)) {
             return false
         }
 
