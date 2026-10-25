@@ -18,6 +18,18 @@ constexpr std::uint64_t IntegratedMemoryBudget(std::uint64_t budget,
     return std::min(limit, available - std::min(available / 8, gib));
 }
 
+// Android GPUs share physical RAM with guest CPU memory and the OS. A large
+// Vulkan heap budget is not permission to consume the remaining system memory.
+constexpr std::uint64_t SystemAwareMemoryBudget(std::uint64_t driver_budget,
+                                               std::uint64_t gpu_usage,
+                                               std::uint64_t available) {
+    constexpr std::uint64_t reserve = 512ULL << 20;
+    const auto growth = available > reserve ? available - reserve : 0;
+    // Saturate without overflowing when a driver reports a very large usage.
+    return gpu_usage >= driver_budget ? driver_budget
+        : gpu_usage + std::min(growth, driver_budget - gpu_usage);
+}
+
 struct TextureMemoryLimits {
     std::uint64_t expected;
     std::uint64_t critical;

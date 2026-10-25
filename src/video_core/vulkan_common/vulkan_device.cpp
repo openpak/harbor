@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <mutex>
 #include <thread>
 #include "common/container/unordered_map.h"
 #include "common/container/unordered_set.h"
@@ -40,6 +41,36 @@
 namespace Vulkan {
 using namespace Common::Literals;
 namespace {
+#ifdef __ANDROID__
+// Query at most once a second, not once per texture-cache tick. Failure keeps the
+// driver's existing budget; zero available memory is a valid pressure reading.
+std::optional<u64> AndroidAvailableMemory() {
+    static std::mutex mutex;
+    static auto last = std::chrono::steady_clock::time_point::min();
+    static std::optional<u64> available;
+    std::scoped_lock lock{mutex};
+    const auto now = std::chrono::steady_clock::now();
+    if (last != std::chrono::steady_clock::time_point::min() &&
+        now - last < std::chrono::seconds(1)) {
+        return available;
+    }
+    last = now;
+    available.reset();
+    std::ifstream file{"/proc/meminfo"};
+    std::string key;
+    u64 kib;
+    std::string rest;
+    while (file >> key >> kib) {
+        std::getline(file, rest);
+        if (key == "MemAvailable:") {
+            available = kib * 1024;
+            break;
+        }
+    }
+    return available;
+}
+#endif
+
 namespace Alternatives {
 constexpr std::array STENCIL8_UINT{
     VK_FORMAT_D16_UNORM_S8_UINT,
@@ -1637,12 +1668,20 @@ u64 Device::GetDeviceLocalMemory() const {
     budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
     physical.GetMemoryProperties(&budget);
     u64 current_budget{};
+    u64 current_usage{};
     for (const size_t heap : valid_heap_memory) {
         current_budget += budget.heapBudget[heap];
+        current_usage += budget.heapUsage[heap];
     }
+    auto effective_budget = VideoCommon::IntegratedMemoryBudget(current_budget, 0, device_access_memory);
+#ifdef __ANDROID__
+    if (const auto available = AndroidAvailableMemory()) {
+        effective_budget = VideoCommon::SystemAwareMemoryBudget(effective_budget, current_usage, *available);
+    }
+#endif
     // Usage is already compared with the cleanup limits by the caches. Do not
     // subtract it again here: follow changes in the driver's total budget.
-    return VideoCommon::IntegratedMemoryBudget(current_budget, 0, device_access_memory);
+    return effective_budget;
 }
 
 u64 Device::GetDeviceMemoryUsage() const {

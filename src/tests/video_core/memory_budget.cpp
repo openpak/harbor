@@ -27,3 +27,12 @@ TEST_CASE("Texture cleanup precedes exhaustion on small heaps", "[video_core]") 
     const auto new_limits = VideoCommon::CalculateTextureMemoryLimits(gib, 3 * gib);
     REQUIRE(new_limits.critical < old_limits.expected);
 }
+
+TEST_CASE("Android GPU budget leaves system headroom", "[video_core]") {
+    constexpr std::uint64_t mib = 1ULL << 20;
+    REQUIRE(VideoCommon::SystemAwareMemoryBudget(5000*mib, 500*mib, 768*mib) == 756*mib);
+    REQUIRE(VideoCommon::SystemAwareMemoryBudget(5000*mib, 500*mib, 100*mib) == 500*mib);
+    REQUIRE(VideoCommon::SystemAwareMemoryBudget(5000*mib, 500*mib, 0) == 500*mib);
+    REQUIRE(VideoCommon::SystemAwareMemoryBudget(2000*mib, 500*mib, 8000*mib) == 2000*mib);
+    REQUIRE(VideoCommon::SystemAwareMemoryBudget(400*mib, 500*mib, 0) == 400*mib);
+}
