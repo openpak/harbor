@@ -10,6 +10,7 @@
 #include "core/file_sys/common_funcs.h"
 #include "core/core.h"
 #include "core/hle/result.h"
+#include "core/hle/service/acc/profile_manager.h"
 #include "core/hle/service/am/am_results.h"
 #include "core/hle/service/am/am_types.h"
 #include "core/hle/service/am/applet.h"
@@ -107,7 +108,7 @@ Result IApplicationAccessor::PushLaunchParameter(LaunchParameterKind kind,
                                                  SharedPointer<IStorage> storage) {
     LOG_INFO(Service_AM, "called, kind={}", kind);
 
-    const auto data = storage ? storage->GetData() : std::vector<u8>{};
+    auto data = storage ? storage->GetData() : std::vector<u8>{};
 
     switch (kind) {
     case LaunchParameterKind::UserChannel: {
@@ -126,6 +127,23 @@ Result IApplicationAccessor::PushLaunchParameter(LaunchParameterKind kind,
         if (data.size() >= 0x18 && magic == PreselectedUserMagic) {
             Common::UUID uuid;
             std::memcpy(&uuid, data.data() + 0x8, sizeof(uuid));
+            u32 selected{};
+            std::memcpy(&selected, data.data() + 0x4, sizeof(selected));
+            LOG_INFO(Service_AM, "preselected user: selected={} valid={}", selected,
+                     uuid.IsValid());
+            // A console with exactly one user selects it for a title that needs a user. HOME
+            // pushed none, and a title that requires an account (Animal Crossing) then aborts
+            // at boot instead of opening its account save.
+            auto& profiles = system.GetProfileManager();
+            if ((selected == 0 || !uuid.IsValid()) && profiles.GetUserCount() == 1) {
+                if (const auto only = profiles.GetUser(0); only && only->IsValid()) {
+                    uuid = *only;
+                    selected = 1;
+                    std::memcpy(data.data() + 0x4, &selected, sizeof(selected));
+                    std::memcpy(data.data() + 0x8, &uuid, sizeof(uuid));
+                    LOG_INFO(Service_AM, "preselected user: filled in the only user");
+                }
+            }
             m_last_preselected_user = uuid;
         }
         std::scoped_lock lk{m_applet->lock};
