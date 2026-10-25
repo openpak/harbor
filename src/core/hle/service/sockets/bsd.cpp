@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -368,6 +369,18 @@ Outcome OpConnect(DescriptorTable& table, s32 fd, std::span<const u8> addr, Park
     return ErrnoResult(e);
 }
 
+std::atomic<u64> g_dgram_sent{0};
+std::atomic<u64> g_dgram_received{0};
+std::atomic<u64> g_dgram_failed{0};
+std::atomic<s64> g_dgram_last_ms{0};
+std::atomic<s64> g_dgram_summary_ms{0};
+
+s64 SteadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 // Datagram trace for peer-connectivity debugging (2026-10-14, Mario Party: the Switch punched
 // Harbor but nothing came back). Logs the first 600 datagram events and every failure other than
 // EAGAIN; the local port is the socket's real bound port, which is what peers must reach.
@@ -380,6 +393,20 @@ void TraceDatagram(const char* dir, const OpenFile& file, const Network::SockAdd
     const bool failed = len < 0;
     if (failed && err == Errno::AGAIN) {
         return;
+    }
+    // The 600-line cap below silences the trace for the rest of a session, so a quiet log says
+    // nothing about the network. These totals and the 10 s summary keep going.
+    if (failed) {
+        g_dgram_failed.fetch_add(1);
+    } else {
+        (dir[0] == 's' ? g_dgram_sent : g_dgram_received).fetch_add(1);
+        const s64 now = SteadyMs();
+        g_dgram_last_ms.store(now);
+        s64 window = g_dgram_summary_ms.load();
+        if (now - window >= 10000 && g_dgram_summary_ms.compare_exchange_strong(window, now)) {
+            LOG_INFO(Service, "udp totals: sent={} recv={} failed={}", g_dgram_sent.load(),
+                     g_dgram_received.load(), g_dgram_failed.load());
+        }
     }
     if (!failed && count.fetch_add(1) >= 600) {
         return;
@@ -2622,5 +2649,10 @@ BSD_NU::BSD_NU(Core::System& system_)
 }
 
 BSD_NU::~BSD_NU() = default;
+
+DatagramStats GetDatagramStats() {
+    return {g_dgram_sent.load(), g_dgram_received.load(), g_dgram_failed.load(),
+            g_dgram_last_ms.load()};
+}
 
 } // namespace Service::Sockets

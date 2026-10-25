@@ -43,6 +43,17 @@ class Socket;
 
 namespace Service::Sockets {
 
+/// Running totals of the guest's UDP traffic through bsd, kept even after the 600-line datagram
+/// trace has gone quiet. last_ms is steady-clock milliseconds of the last datagram (0 = none).
+struct DatagramStats {
+    u64 sent;
+    u64 received;
+    u64 failed;
+    s64 last_ms;
+};
+DatagramStats GetDatagramStats();
+
+
 /// [Harbor] A guest eventfd (bsd EventFd, 7.0.0+): a 64-bit counter that never blocks. Other
 /// services may hold one (BSD_USA::GetEventFd) and Write() to it to wake a guest poller.
 /// Written from: Linux eventfd(2); emulator-parity-ledger §2 Sockets ("Event fd is a counter,

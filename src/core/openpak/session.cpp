@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -43,6 +44,7 @@
 
 #include "common/httplib.h"
 #include "common/logging.h"
+#include "core/hle/service/sockets/bsd.h"
 #include "core/openpak/baas.h"
 #include "core/openpak/platform.h"
 #include "core/openpak/presence_state.h"
@@ -575,8 +577,78 @@ void LogConnectFailure() {
             }
         }
     }
-    LOG_WARNING(WebService, "[OpenPak] connect failure: {} open descriptors (limit {}), probe: {}",
-                open_fds, static_cast<std::uint64_t>(limit.rlim_cur), probe);
+    // Is the whole device cut, or only the console server? One connect to a public address
+    // answers that; the interface counters and the default route say which network the kernel
+    // is sending on and whether anything is still arriving.
+    std::string control = "connect ok";
+    {
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(443);
+        inet_pton(AF_INET, "1.1.1.1", &addr.sin_addr);
+        const int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+        if (fd >= 0) {
+            int rc = connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+            int err = rc == 0 ? 0 : errno;
+            if (rc != 0 && err == EINPROGRESS) {
+                pollfd pfd{fd, POLLOUT, 0};
+                if (poll(&pfd, 1, 3000) == 1) {
+                    socklen_t len = sizeof(err);
+                    getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+                } else {
+                    err = ETIMEDOUT;
+                }
+            }
+            control = err == 0 ? "connect ok" : fmt::format("connect(): {}", std::strerror(err));
+            close(fd);
+        }
+    }
+    std::string route = "none";
+    if (std::ifstream in{"/proc/net/route"}) {
+        std::string line;
+        std::getline(in, line);
+        while (std::getline(in, line)) {
+            char iface[32]{};
+            unsigned long dest = 1;
+            if (std::sscanf(line.c_str(), "%31s %lx", iface, &dest) == 2 && dest == 0) {
+                route = iface;
+                break;
+            }
+        }
+    }
+    std::string counters;
+    if (std::ifstream in{"/proc/net/dev"}) {
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto colon = line.find(':');
+            if (colon == std::string::npos) {
+                continue;
+            }
+            std::string name = line.substr(0, colon);
+            name.erase(0, name.find_first_not_of(' '));
+            if (name == "lo") {
+                continue;
+            }
+            unsigned long long rx = 0, rx_pk = 0, tx = 0, tx_pk = 0, skip = 0;
+            if (std::sscanf(line.c_str() + colon + 1,
+                            "%llu %llu %llu %llu %llu %llu %llu %llu %llu %llu", &rx, &rx_pk,
+                            &skip, &skip, &skip, &skip, &skip, &skip, &tx, &tx_pk) == 10 &&
+                rx_pk + tx_pk > 0) {
+                counters += fmt::format(" {}(rx {} pk, tx {} pk)", name, rx_pk, tx_pk);
+            }
+        }
+    }
+    const auto dgram = Service::Sockets::GetDatagramStats();
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+    LOG_WARNING(WebService,
+                "[OpenPak] connect failure: {} open descriptors (limit {}), probe: {}, control "
+                "1.1.1.1:443: {}, default route: {}, ifaces:{}, guest udp sent={} recv={} "
+                "failed={} last {} ms ago",
+                open_fds, static_cast<std::uint64_t>(limit.rlim_cur), probe, control, route,
+                counters, dgram.sent, dgram.received, dgram.failed,
+                dgram.last_ms == 0 ? -1 : now_ms - dgram.last_ms);
 }
 #else
 void LogConnectFailure() {}
