@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string_view>
 
+#include "common/logging.h"
 #include <openssl/hmac.h>
 #include <openssl/sha.h>
 
@@ -227,6 +228,13 @@ std::optional<std::vector<u8>> ArchiveWriter::Chunk(u16 id) {
         auto& meta = chunks.back();
         if (!meta) {
             meta = EncryptStream(stream_key, meta_iv, StreamKeyGeneration, Bytes(content));
+            // The server stores the MAC the guest was handed and later checks it against this
+            // chunk; content that changed between the two (a late SetAad, say) is a 2002-7006.
+            if (handed_mac && Cmac(mac_key, Bytes(content)) != *handed_mac) {
+                LOG_WARNING(Service_FS,
+                            "save transfer: the initial data changed after its MAC was handed out; "
+                            "the uploaded MAC will not verify");
+            }
         }
         return meta;
     }
@@ -263,7 +271,8 @@ const std::array<u8, 0x20>& ArchiveWriter::Aad() const {
 
 Key128 ArchiveWriter::InitialDataMac() {
     MakeAll();
-    return Cmac(mac_key, Bytes(content));
+    handed_mac = Cmac(mac_key, Bytes(content));
+    return *handed_mac;
 }
 
 const InitialDataContent& ArchiveWriter::Content() {
