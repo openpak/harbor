@@ -8,6 +8,7 @@
 
 #include <shared_mutex>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "shader_recompiler/shader_info.h"
@@ -62,6 +63,9 @@ private:
 
     std::vector<vk::DescriptorSets> sets;
 };
+
+/// Descriptor pool totals for the periodic diagnostics line.
+[[nodiscard]] std::string DescriptorPoolStats();
 
 class DescriptorPool {
 public:
