@@ -21,12 +21,6 @@ if (DEFINED GIT_RELEASE)
 else()
     string(SUBSTRING ${GIT_COMMIT} 0 10 BUILD_VERSION)
     set(BUILD_VERSION "${BUILD_VERSION}-${GIT_REFSPEC}")
-    # Local builds follow Harbor's release version and commit count. The rolling
-    # nightly tag must not replace that release base; CI supplies GIT_RELEASE above.
-    run_git_command(HARBOR_RELEASE_DESC describe --tags --match "v[0-9]*" --long)
-    if (HARBOR_RELEASE_DESC MATCHES "^v[0-9]+\\.[0-9]+\\.[0-9]+.*-g[0-9a-f]+$")
-        string(REGEX REPLACE "(-0)?-g[0-9a-f]+$" "" BUILD_VERSION "${HARBOR_RELEASE_DESC}")
-    endif()
     set(IS_DEV_BUILD true)
 endif()
 
@@ -36,7 +30,6 @@ else()
     set(IS_NIGHTLY_BUILD false)
 endif()
 
-message(STATUS "[Harbor] Build version: ${BUILD_VERSION}")
 set(GIT_DESC ${BUILD_VERSION})
 
 # Generate cpp with Git revision from template

@@ -335,8 +335,6 @@ fun getGitVersion(): String {
             "git",
             "describe",
             "--tags",
-            "--match",
-            "v[0-9]*",
             "--always",
             "--long"
         )
