@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
+#include <fmt/format.h>
 #include <mutex>
 #include <span>
 #include <vector>
@@ -25,8 +27,26 @@ constexpr s32 SCORE_THRESHOLD = 3;
 
 struct DescriptorBank {
     DescriptorBankInfo info;
+    std::mutex pools_mutex;
     std::vector<vk::DescriptorPool> pools;
 };
+
+namespace {
+// Totals for the diagnostics line; only ever read for logging.
+std::atomic<u64> stat_banks{};
+std::atomic<u64> stat_pools{};
+std::atomic<u64> stat_sets_allocated{};
+std::atomic<u64> stat_pool_retries{};
+std::atomic<u64> stat_growth_failures{};
+} // Anonymous namespace
+
+std::string DescriptorPoolStats() {
+    // Sets are never given back (pools are created without the free bit, as upstream does), so
+    // this only grows with the number of pipelines.
+    return fmt::format("descriptors: banks={} pools={} sets={} pool_retries={} grow_failures={}",
+                       stat_banks.load(), stat_pools.load(), stat_sets_allocated.load(),
+                       stat_pool_retries.load(), stat_growth_failures.load());
+}
 
 bool DescriptorBankInfo::IsSuperset(const DescriptorBankInfo& subset) const noexcept {
     return uniform_buffers >= subset.uniform_buffers && storage_buffers >= subset.storage_buffers &&
@@ -77,6 +97,7 @@ static void AllocatePool(const Device& device, DescriptorBank& bank) {
     add(VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, info.image_buffers);
     add(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, info.textures);
     add(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, info.images);
+    stat_pools.fetch_add(1, std::memory_order_relaxed);
     bank.pools.push_back(device.GetLogical().CreateDescriptorPool({
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .pNext = nullptr,
@@ -94,7 +115,17 @@ DescriptorAllocator::DescriptorAllocator(const Device& device_, MasterSemaphore&
 
 VkDescriptorSet DescriptorAllocator::Commit() {
     const size_t index = CommitResource();
-    return sets[index / SETS_GROW_RATE][index % SETS_GROW_RATE];
+    const size_t chunk = index / SETS_GROW_RATE;
+    if (chunk >= sets.size() || sets[chunk].size() == 0) {
+        // Never hand out a set that does not exist (a failed grow); the caller treats the
+        // memory error like any other.
+        throw vk::Exception(VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+    const VkDescriptorSet set = sets[chunk][index % SETS_GROW_RATE];
+    if (set == VK_NULL_HANDLE) {
+        throw vk::Exception(VK_ERROR_OUT_OF_HOST_MEMORY);
+    }
+    return set;
 }
 
 void DescriptorAllocator::Allocate(size_t begin, size_t end) {
@@ -106,22 +137,37 @@ vk::DescriptorSets DescriptorAllocator::AllocateDescriptors(size_t count) {
     VkDescriptorSetAllocateInfo allocate_info{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .pNext = nullptr,
-        .descriptorPool = *bank->pools.back(),
+        .descriptorPool = VK_NULL_HANDLE,
         .descriptorSetCount = static_cast<u32>(count),
         .pSetLayouts = layouts.data(),
     };
-    vk::DescriptorSets new_sets = bank->pools.back().Allocate(allocate_info);
-    if (!new_sets.IsOutOfPoolMemory()) {
-        return new_sets;
-    }
-    // Our current pool is out of memory. Allocate a new one and retry
-    AllocatePool(*device, *bank);
-    allocate_info.descriptorPool = *bank->pools.back();
-    new_sets = bank->pools.back().Allocate(allocate_info);
-    if (!new_sets.IsOutOfPoolMemory()) {
-        return new_sets;
+    const auto note = [count](vk::DescriptorSets& result) {
+        stat_sets_allocated.fetch_add(count, std::memory_order_relaxed);
+        return std::move(result);
+    };
+    try {
+        std::scoped_lock lock{bank->pools_mutex};
+        vk::DescriptorPool& current = bank->pools.back();
+        allocate_info.descriptorPool = *current;
+        vk::DescriptorSets first = current.Allocate(allocate_info);
+        if (!first.IsOutOfPoolMemory()) {
+            return note(first);
+        }
+        // The newest pool is out of memory (or too fragmented). Allocate a new one and retry.
+        stat_pool_retries.fetch_add(1, std::memory_order_relaxed);
+        AllocatePool(*device, *bank);
+        vk::DescriptorPool& pool = bank->pools.back();
+        allocate_info.descriptorPool = *pool;
+        vk::DescriptorSets new_sets = pool.Allocate(allocate_info);
+        if (!new_sets.IsOutOfPoolMemory()) {
+            return note(new_sets);
+        }
+    } catch (...) {
+        stat_growth_failures.fetch_add(1, std::memory_order_relaxed);
+        throw;
     }
     // After allocating a new pool, we are out of memory again. We can't handle this from here.
+    stat_growth_failures.fetch_add(1, std::memory_order_relaxed);
     throw vk::Exception(VK_ERROR_OUT_OF_POOL_MEMORY);
 }
 
@@ -151,11 +197,14 @@ DescriptorBank& DescriptorPool::Bank(const Device& device, const DescriptorBankI
     read_lock.unlock();
 
     std::unique_lock write_lock{banks_mutex};
+    // Built completely before it is published: a failing pool creation (out of memory) must not
+    // leave a bank without pools for the next caller to find.
+    auto new_bank = std::make_unique<DescriptorBank>();
+    new_bank->info = reqs;
+    AllocatePool(device, *new_bank);
+    stat_banks.fetch_add(1, std::memory_order_relaxed);
     bank_infos.push_back(reqs);
-
-    auto& bank = *banks.emplace_back(std::make_unique<DescriptorBank>());
-    bank.info = reqs;
-    AllocatePool(device, bank);
+    auto& bank = *banks.emplace_back(std::move(new_bank));
     return bank;
 }
 

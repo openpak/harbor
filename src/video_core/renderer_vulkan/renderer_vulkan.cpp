@@ -32,6 +32,7 @@
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_blit_screen.h"
+#include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_gpu_diag.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -188,9 +189,9 @@ try
     // Harbor: a lost GPU (it hung and the driver reset it) stops the console onto the "Harbor
     // stopped" screen instead of an uncaught VK_ERROR_DEVICE_LOST aborting the process.
     device.AddLossHandler([this, &gpu = gpu] {
-        LOG_CRITICAL(Render_Vulkan, "harbor-diag: at the loss: {} | {} | {} | tick={}",
+        LOG_CRITICAL(Render_Vulkan, "harbor-diag: at the loss: {} | {} | {} | {} | tick={}",
                      GpuDiag::ProcessSummary(), device.DescribeMemoryHeaps(),
-                     memory_allocator.Stats(), scheduler.CurrentTick());
+                     memory_allocator.Stats(), DescriptorPoolStats(), scheduler.CurrentTick());
         GpuDiag::DumpRing();
         gpu.StopConsoleForHostFailure(
             "The graphics driver stopped responding: the GPU hung and the driver reset it.");
@@ -229,10 +230,10 @@ void RendererVulkan::LogResourcesEvery30s() {
         resource_log_start = now;
     }
     next_resource_log = now + std::chrono::seconds{30};
-    LOG_INFO(Render_Vulkan, "harbor-diag: t={}s {} | {} | {} | tick={} draws={} dispatches={}",
+    LOG_INFO(Render_Vulkan, "harbor-diag: t={}s {} | {} | {} | {} | tick={} draws={} dispatches={}",
              std::chrono::duration_cast<std::chrono::seconds>(now - resource_log_start).count(),
              GpuDiag::ProcessSummary(), device.DescribeMemoryHeaps(), memory_allocator.Stats(),
-             scheduler.CurrentTick(), GpuDiag::total_draws.load(), GpuDiag::total_dispatches.load());
+             DescriptorPoolStats(), scheduler.CurrentTick(), GpuDiag::total_draws.load(), GpuDiag::total_dispatches.load());
 }
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {

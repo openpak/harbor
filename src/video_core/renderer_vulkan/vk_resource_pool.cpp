@@ -60,7 +60,15 @@ size_t ResourcePool::ManageOverflow() {
 void ResourcePool::Grow() {
     const size_t old_capacity = ticks.size();
     ticks.resize(old_capacity + grow_step);
-    Allocate(old_capacity, old_capacity + grow_step);
+    try {
+        Allocate(old_capacity, old_capacity + grow_step);
+    } catch (...) {
+        // The resources were not created (out of memory): keep ticks in step with them, or a
+        // later commit would hand out a resource that does not exist.
+        ticks.resize(old_capacity);
+        hint_iterator = 0;
+        throw;
+    }
 }
 
 } // namespace Vulkan
