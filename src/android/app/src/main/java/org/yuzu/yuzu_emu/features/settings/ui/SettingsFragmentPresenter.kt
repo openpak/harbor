@@ -1513,6 +1513,7 @@ class SettingsFragmentPresenter(
             add(IntSetting.RENDERER_BACKEND.key)
             add(BooleanSetting.RENDERER_DEBUG.key)
             add(BooleanSetting.RENDERER_PATCH_OLD_QCOM_DRIVERS.key)
+            add(BooleanSetting.RENDERER_TURNIP_GEOMETRY_SUBGROUP_EMULATION.key)
             add(BooleanSetting.BUFFER_REORDER_DISABLE.key)
 
             add(HeaderSetting(R.string.cpu))

@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "common/common_types.h"
@@ -102,6 +103,9 @@ namespace Vulkan {
         MemoryAllocator &operator=(const MemoryAllocator &) = delete;
 
         MemoryAllocator(const MemoryAllocator &) = delete;
+
+        /// VMA totals (blocks, allocations, bytes) for diagnostics.
+        [[nodiscard]] std::string Stats() const;
 
         vk::Image CreateImage(const VkImageCreateInfo &ci) const;
 

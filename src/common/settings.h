@@ -715,6 +715,11 @@ struct Values {
                                                     linkage, false, "disable_shader_loop_safety_checks", Category::RendererDebug};
     Setting<bool> enable_renderdoc_hotkey{linkage, false, "renderdoc_hotkey",
                                           Category::RendererDebug};
+    // Harbor: the QCOM/Turnip geometry-stage subgroup emulation (geometry shaders compile without
+    // subgroup operations and a compaction pass runs). Off restores the earlier behaviour, where
+    // geometry shaders keep the host's subgroup operations. For A/B testing a GPU hang.
+    Setting<bool> turnip_geometry_subgroup_emulation{
+        linkage, true, "turnip_geometry_subgroup_emulation", Category::RendererDebug};
 #if defined(__ANDROID__) && defined(ARCHITECTURE_arm64)
     // Debug override for automatic BCn patching detection
     Setting<bool> patch_old_qcom_drivers{linkage, false, "patch_old_qcom_drivers",

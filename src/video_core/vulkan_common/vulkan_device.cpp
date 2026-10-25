@@ -1657,6 +1657,26 @@ u64 Device::GetDeviceMemoryUsage() const {
     return result;
 }
 
+std::string Device::DescribeMemoryHeaps() const {
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    const bool has_budget = extensions.memory_budget;
+    const auto info = physical.GetMemoryProperties(has_budget ? &budget : nullptr);
+    std::string out;
+    for (u32 heap = 0; heap < info.memoryProperties.memoryHeapCount; ++heap) {
+        const auto& h = info.memoryProperties.memoryHeaps[heap];
+        out += fmt::format("heap{}{}: size={}M", heap,
+                           (h.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ? "(local)" : "",
+                           h.size >> 20);
+        if (has_budget) {
+            out += fmt::format(" used={}M budget={}M", budget.heapUsage[heap] >> 20,
+                               budget.heapBudget[heap] >> 20);
+        }
+        out += "; ";
+    }
+    return out;
+}
+
 void Device::CollectPhysicalMemoryInfo() {
     // Calculate limits using memory budget
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};

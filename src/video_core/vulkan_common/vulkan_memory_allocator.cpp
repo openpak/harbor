@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/common_types.h"
@@ -204,6 +206,16 @@ MemoryAllocator::MemoryAllocator(const Device &device_)
 }
 
 MemoryAllocator::~MemoryAllocator() = default;
+
+std::string MemoryAllocator::Stats() const {
+    VmaTotalStatistics stats{};
+    vmaCalculateStatistics(allocator, &stats);
+    const VmaDetailedStatistics& t = stats.total;
+    return fmt::format("vma: blocks={} allocs={} block={}M used={}M unused-ranges={}",
+                       t.statistics.blockCount, t.statistics.allocationCount,
+                       t.statistics.blockBytes >> 20, t.statistics.allocationBytes >> 20,
+                       t.unusedRangeCount);
+}
 
 vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo &ci) const
 {

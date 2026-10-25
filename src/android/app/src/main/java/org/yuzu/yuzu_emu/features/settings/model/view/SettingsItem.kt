@@ -1016,6 +1016,13 @@ abstract class SettingsItem(
             )
             put(
                 SwitchSetting(
+                    BooleanSetting.RENDERER_TURNIP_GEOMETRY_SUBGROUP_EMULATION,
+                    titleId = R.string.turnip_geometry_subgroup_emulation,
+                    descriptionId = R.string.turnip_geometry_subgroup_emulation_description
+                )
+            )
+            put(
+                SwitchSetting(
                     BooleanSetting.USE_AUTO_STUB,
                     titleId = R.string.use_auto_stub,
                     descriptionId = R.string.use_auto_stub_description

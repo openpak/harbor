@@ -32,6 +32,7 @@
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_query_cache.h"
+#include "video_core/renderer_vulkan/vk_gpu_diag.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
@@ -250,6 +251,10 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     pipeline->SetEngine(maxwell3d, gpu_memory);
     if (!pipeline->Configure(is_indexed))
         return;
+
+    GpuDiag::Push(is_indexed ? GpuDiag::Kind::DrawIndexed : GpuDiag::Kind::Draw,
+                  pipeline->Key().unique_hashes,
+                  static_cast<u32>(pipeline->Key().state.topology.Value()));
 
     UpdateDynamicStates();
 
@@ -595,6 +600,8 @@ void RasterizerVulkan::DispatchCompute() {
                              texture_cache)) {
         return;
     }
+
+    GpuDiag::Push(GpuDiag::Kind::Compute, {pipeline->ShaderHash()}, 0);
 
     const auto& qmd{kepler_compute->launch_description};
     auto indirect_address = kepler_compute->GetIndirectComputeAddress();

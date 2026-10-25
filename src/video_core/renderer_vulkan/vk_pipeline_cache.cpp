@@ -384,8 +384,17 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
         (fragment_subgroups ? subgroup_stage_bit(VK_SHADER_STAGE_FRAGMENT_BIT, Shader::Stage::Fragment)
                             : 0u) |
         subgroup_stage_bit(VK_SHADER_STAGE_COMPUTE_BIT, Shader::Stage::Compute)};
+    // HARBOR_TU_GEOMETRY_SUBGROUPS=0|1 (harbor-driver-env.txt) overrides the setting.
+    bool geometry_subgroup_emulation = Settings::values.turnip_geometry_subgroup_emulation.GetValue();
+    if (const char* env = std::getenv("HARBOR_TU_GEOMETRY_SUBGROUPS"); env && env[0] != '\0') {
+        geometry_subgroup_emulation = env[0] != '0';
+    }
     if (driver_id == VK_DRIVER_ID_MESA_TURNIP) {
-        supported_subgroup_stages &= ~(1u << static_cast<u32>(Shader::Stage::Geometry));
+        LOG_INFO(Render_Vulkan, "harbor-diag: Turnip geometry subgroup emulation {}",
+                 geometry_subgroup_emulation ? "on" : "off");
+        if (geometry_subgroup_emulation) {
+            supported_subgroup_stages &= ~(1u << static_cast<u32>(Shader::Stage::Geometry));
+        }
     }
     profile = Shader::Profile{
         .supported_spirv = device.SupportedSpirvVersion(),
