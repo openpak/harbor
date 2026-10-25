@@ -94,6 +94,7 @@ struct OpenFile {
     std::atomic<bool> non_blocking{false};
     bool is_connection_based = false;
     bool is_datagram = false;
+    bool is_icmp = false; ///< guest ICMP ping socket (a host SOCK_DGRAM ping socket)
     bool is_inet6 = false; ///< guest AF_INET6, served over host IPv4 with v4-mapped addresses
     bool is_proxy = false; ///< LDN room proxy socket: no host descriptor, no parking
 

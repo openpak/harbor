@@ -263,6 +263,7 @@ Result2 OpSocket(DescriptorTable& table, bool is_user, u32 domain_raw, u32 type_
     }
     file->is_connection_based = type == Type::STREAM || type == Type::SEQPACKET;
     file->is_datagram = type == Type::DGRAM || type == Type::RAW;
+    file->is_icmp = type == Type::RAW && protocol == Protocol::ICMP;
     file->is_inet6 = domain == Domain::INET6;
 
     if (Settings::values.airplane_mode.GetValue() && file->is_connection_based) {
@@ -371,6 +372,11 @@ Outcome OpConnect(DescriptorTable& table, s32 fd, std::span<const u8> addr, Park
             if (e == Errno::ISCONN) {
                 e = Errno::SUCCESS;
             }
+            if (e != Errno::SUCCESS && e != Errno::INPROGRESS) {
+                LOG_WARNING(Service, "bsd: connect {}.{}.{}.{}:{} failed at once: guest errno {}",
+                            target.ip[0], target.ip[1], target.ip[2], target.ip[3], target.portno,
+                            static_cast<int>(e));
+            }
             return ErrnoResult(e);
         }
         slot.connecting = true;
@@ -384,7 +390,15 @@ Outcome OpConnect(DescriptorTable& table, s32 fd, std::span<const u8> addr, Park
     const Errno e =
         getsockopt_err != Network::Errno::SUCCESS ? Translate(getsockopt_err) : Translate(pending);
     if (e != Errno::SUCCESS) {
+        // The host's verdict on a connect that was in flight (refused, unreachable, timed out)
+        // reaches no log otherwise; the guest only sees ENOTCONN on its next call.
         std::scoped_lock lk{file->state_mutex};
+        if (file->pending_peer) {
+            const auto& peer = *file->pending_peer;
+            LOG_WARNING(Service, "bsd: connect {}.{}.{}.{}:{} failed in flight: guest errno {}",
+                        peer.ip[0], peer.ip[1], peer.ip[2], peer.ip[3], peer.portno,
+                        static_cast<int>(e));
+        }
         file->pending_peer.reset();
     }
     return ErrnoResult(e);
@@ -433,12 +447,14 @@ void TraceDatagram(const char* dir, const OpenFile& file, const Network::SockAdd
         return;
     }
     const auto local = file.socket->GetSockName().first;
+    // An ICMP echo has no ports: "local" is the kernel's ping identifier and the peer port is 0.
+    const char* const kind = file.is_icmp ? "icmp" : "udp";
     if (peer != nullptr) {
-        LOG_INFO(Service, "udp {} local={} peer={}.{}.{}.{}:{} len={} errno={}", dir, local.portno,
+        LOG_INFO(Service, "{} {} local={} peer={}.{}.{}.{}:{} len={} errno={}", kind, dir, local.portno,
                  peer->ip[0], peer->ip[1], peer->ip[2], peer->ip[3], peer->portno, len,
                  static_cast<int>(err));
     } else {
-        LOG_INFO(Service, "udp {} local={} peer=connected len={} errno={}", dir, local.portno, len,
+        LOG_INFO(Service, "{} {} local={} peer=connected len={} errno={}", kind, dir, local.portno, len,
                  static_cast<int>(err));
     }
 }

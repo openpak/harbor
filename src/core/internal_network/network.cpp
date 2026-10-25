@@ -386,7 +386,8 @@ Errno GetAndLogLastError(CallType call_type = CallType::Other) {
     int e = errno;
 #endif
     const Errno err = TranslateNativeError(e, call_type);
-    if (err == Errno::AGAIN || err == Errno::TIMEDOUT || err == Errno::INPROGRESS) {
+    if (err == Errno::AGAIN || err == Errno::TIMEDOUT || err == Errno::INPROGRESS ||
+        err == Errno::NOTCONN) {
         // These happen during normal operation, so only log them at debug level.
         LOG_DEBUG(Network, "Socket operation error: {}", Common::NativeErrorToString(e));
         return err;
