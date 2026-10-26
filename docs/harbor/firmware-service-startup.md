@@ -52,8 +52,12 @@ Firmware binary excerpts remain in local investigation scratch, not in this repo
 
 - The OpenPak duplicate-device-identity rejection clears later in the capture;
   it does not establish a persistent identity failure.
-- SSL command 36 and NIFM commands 43/57 remain unimplemented. Their response
-  shapes and effects require investigation before implementation. NIFM 43 is
+- SSL command 36 is GetSessionTicket (HOS 20+), per
+  [SSL services](https://switchbrew.org/wiki/SSL_services). Its response format
+  and backend session-ticket handling still need investigation. NIFM commands
+  43/57 also remain unimplemented. The installed npns client wrappers at NSO
+  offsets 0x8F1C0 and 0x8F2E0 both marshal one 32-bit input through the same IPC
+  helper; timeout validation and wake behavior need further tracing. NIFM 43 is
   documented as SetWowlDelayedWakeTime and 57 as SetWowlTcpKeepAliveTimeout:
   [Network Interface services](https://switchbrew.org/wiki/Network_Interface_services).
 - Account resource-cache refresh command 132 remains unimplemented; it needs a
