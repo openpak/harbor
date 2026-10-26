@@ -19,6 +19,10 @@ struct EmuNetState {
 
     std::atomic<bool> wifi_enabled{true};
     std::atomic<bool> ethernet_enabled{true};
+    // Guest wake-on-WLAN configuration. Harbor uses the host network and does
+    // not program host radio wake timers or alter TCP socket keepalive behavior.
+    std::atomic<s32> wowl_delayed_wake_time{0};
+    std::atomic<s32> wowl_tcp_keepalive_timeout{0};
 
     std::mutex mtx;
     bool connected = false;

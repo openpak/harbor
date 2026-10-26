@@ -31,6 +31,7 @@ private:
     // [OpenPak] Enough of bgtc:t for the firmware's own programs (friends) to register their
     // background tasks: nothing is ever scheduled, so the events stay unsignalled.
     void Succeed(HLERequestContext& ctx);
+    void GetOperationMode(HLERequestContext& ctx);
     void EnableStayHalfAwake(HLERequestContext& ctx);
     void WillDisconnectNetworkWhenEnteringSleep(HLERequestContext& ctx);
     void WillStayHalfAwakeInsteadSleep(HLERequestContext& ctx);

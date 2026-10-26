@@ -55,7 +55,7 @@ ITaskService::ITaskService(Core::System& system_)
         {14, &ITaskService::GetScheduleEvent, "GetScheduleEvent"},
         {15, &ITaskService::SchedulePeriodicTask, "SchedulePeriodicTask"},
         {16, nullptr, "Unknown16"},
-        {101, nullptr, "GetOperationMode"},
+        {101, &ITaskService::GetOperationMode, "GetOperationMode"},
         {102, &ITaskService::WillDisconnectNetworkWhenEnteringSleep, "WillDisconnectNetworkWhenEnteringSleep"},
         {103, &ITaskService::WillStayHalfAwakeInsteadSleep, "WillStayHalfAwakeInsteadSleep"},
         {200, &ITaskService::EnableStayHalfAwake, "EnableStayHalfAwake"},
@@ -71,6 +71,16 @@ void ITaskService::Succeed(HLERequestContext& ctx) {
     LOG_DEBUG(Service_BGTC, "called");
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
+}
+
+void ITaskService::GetOperationMode(HLERequestContext& ctx) {
+    // Installed glue returns mode 3 when bgtc!enable_halfawake is false.
+    // Harbor has no hardware half-awake/radio-wake implementation.
+    constexpr u32 HalfAwakeDisabled = 3;
+    LOG_INFO(Service_BGTC, "half-awake operation disabled; host remains fully awake");
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(HalfAwakeDisabled);
 }
 
 void ITaskService::EnableStayHalfAwake(HLERequestContext& ctx) {
@@ -94,7 +104,8 @@ void ITaskService::WillDisconnectNetworkWhenEnteringSleep(HLERequestContext& ctx
 void ITaskService::WillStayHalfAwakeInsteadSleep(HLERequestContext& ctx) {
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(stay_half_awake_enabled);
+    // The task requested it, but the global operation mode disables half-awake.
+    rb.Push<bool>(false);
 }
 
 void ITaskService::IsInHalfAwake(HLERequestContext& ctx) {

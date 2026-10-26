@@ -949,11 +949,11 @@ void IGeneralService::GetCurrentAccessPoint(HLERequestContext& ctx) {
     rb.Push(ResultSuccess);
 }
 
-IGeneralService::IGeneralService(Core::System& system_)
+IGeneralService::IGeneralService(Core::System& system_, bool privileged)
     : ServiceFramework{system_, "IGeneralService"} {
     // clang-format off
 
-    static const FunctionInfo functions[] = {
+    const FunctionInfo functions[] = {
         {1, &IGeneralService::GetClientId, "GetClientId"},
         {2, &IGeneralService::CreateScanRequest, "CreateScanRequest"},
         {4, &IGeneralService::CreateRequest, "CreateRequest"},
@@ -995,14 +995,15 @@ IGeneralService::IGeneralService(Core::System& system_)
         {40, nullptr, "SetAcceptableNetworkTypeFlag"},
         {41, nullptr, "GetAcceptableNetworkTypeFlag"},
         {42, &IGeneralService::NotifyConnectionStateChanged, "NotifyConnectionStateChanged"},
-        {43, nullptr, "SetWowlDelayedWakeTime"},
+        {43, privileged ? &IGeneralService::SetWowlDelayedWakeTime : nullptr, "SetWowlDelayedWakeTime"},
         {44, nullptr, "IsWiredConnectionAvailable"}, // 18.0.0+
         {45, nullptr, "IsNetworkEmulationFeatureEnabled"}, // 18.0.0+
         {46, nullptr, "SelectActiveNetworkEmulationProfileIdForDebug"}, // 18.0.0+
         {47, &IGeneralService::GetScanDataV3, "GetScanData"}, // 19.0.0+
         {50, nullptr, "IsRewriteFeatureEnabled"}, // 18.0.0+
         {51, nullptr, "CreateRewriteRule"}, // 18.0.0+
-        {52, nullptr, "DestroyRewriteRule"} // 18.0.0+
+        {52, nullptr, "DestroyRewriteRule"}, // 18.0.0+
+        {57, privileged ? &IGeneralService::SetWowlTcpKeepAliveTimeout : nullptr, "SetWowlTcpKeepAliveTimeout"}, // 20.0.0+
     };
     // clang-format on
 
@@ -1010,6 +1011,24 @@ IGeneralService::IGeneralService(Core::System& system_)
 }
 
 IGeneralService::~IGeneralService() = default;
+
+void IGeneralService::SetWowlDelayedWakeTime(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto value = rp.Pop<s32>();
+    Network::EmuNetState::Get().wowl_delayed_wake_time.store(value);
+    LOG_INFO(Service_NIFM, "guest wake delay set to {} (host radio wake is not emulated)", value);
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
+void IGeneralService::SetWowlTcpKeepAliveTimeout(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto value = rp.Pop<s32>();
+    Network::EmuNetState::Get().wowl_tcp_keepalive_timeout.store(value);
+    LOG_INFO(Service_NIFM, "guest wake TCP timeout set to {} (host radio wake is not emulated)", value);
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
 
 class NetworkInterface final : public ServiceFramework<NetworkInterface> {
 public:
@@ -1028,7 +1047,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
-        rb.PushIpcInterface<IGeneralService>(ctx, system);
+        rb.PushIpcInterface<IGeneralService>(ctx, system, std::string_view{service_name} != "nifm:u");
     }
 
     void CreateGeneralService(HLERequestContext& ctx) {
@@ -1036,7 +1055,7 @@ private:
 
         IPC::ResponseBuilder rb{ctx, 2, 0, 1};
         rb.Push(ResultSuccess);
-        rb.PushIpcInterface<IGeneralService>(ctx, system);
+        rb.PushIpcInterface<IGeneralService>(ctx, system, std::string_view{service_name} != "nifm:u");
     }
 };
 

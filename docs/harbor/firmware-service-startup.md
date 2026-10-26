@@ -85,3 +85,27 @@ answers false: Harbor retains its host network and does not emulate radio sleep.
 Splatoon 3 artifacts remain in the captured RC4 run (Low accuracy). The earlier
 black screen captures did not establish a deadlock: later GPU diagnostics show
 ongoing draws and dispatches. High-accuracy game acceptance remains outstanding.
+
+## RC5 follow-up
+
+The later RC5 capture reaches BGTC EnableStayHalfAwake at 605 seconds, passes
+command 102, then fatals on missing command 101 (GetOperationMode). An earlier
+73-second capture did not exercise this path and was insufficient acceptance.
+Operation-mode values remain under investigation in the installed glue module.
+
+NIFM wake setters 43 and 57 have candidate handlers. Both marshal one 32-bit
+value in the installed npns client. Their values are retained as guest network
+configuration, with no host radio-wake or TCP socket changes. Only system/admin
+NIFM sessions register these handlers. This emulates configuration acceptance;
+hardware wake behavior and undocumented validation limits remain unsupported.
+The changed NIFM Android translation unit compiles successfully.
+
+The installed glue implementation resolves GetOperationMode via functions
+0x13AF50 -> 0x13DDE0 and returns 3 when enable_halfawake is false. The candidate
+reports that disabled mode because Harbor has no hardware half-awake support;
+WillStayHalfAwakeInsteadSleep consequently answers false even after task enable.
+The enable request is retained but does not override global availability.
+
+The configured TAS directory is created when absent before path validation.
+Existing non-directory or inaccessible targets still report failure. This removes
+the first-run missing-directory error without changing other configured paths.

@@ -21,10 +21,12 @@ void LoopProcess(Core::System& system);
 
 class IGeneralService final : public ServiceFramework<IGeneralService> {
 public:
-    explicit IGeneralService(Core::System& system_);
+    explicit IGeneralService(Core::System& system_, bool privileged = false);
     ~IGeneralService() override;
 
 private:
+    void SetWowlDelayedWakeTime(HLERequestContext& ctx);
+    void SetWowlTcpKeepAliveTimeout(HLERequestContext& ctx);
     void GetClientId(HLERequestContext& ctx);
     void CreateScanRequest(HLERequestContext& ctx);
     void CreateRequest(HLERequestContext& ctx);
