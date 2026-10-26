@@ -194,9 +194,22 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
         }
     }
 
-    if (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
-        // We handled the access successfully and are returning to guest code.
+    switch (memory.InvalidateNCE(addr, Memory::YUZU_PAGESIZE)) {
+    case Memory::NCEFaultResult::Retry:
         return true;
+    case Memory::NCEFaultResult::Emulate: {
+        auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
+        auto* fpctx = GetFloatingPointState(host_ctx);
+        if (const auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx)) {
+            host_ctx.pc = *next_pc;
+            return true;
+        }
+        LOG_ERROR(Core_ARM, "NCE: cannot emulate protected access at pc {:#x}; instruction {:#x}",
+                  static_cast<u64>(host_ctx.pc), memory.Read32(host_ctx.pc));
+        break;
+    }
+    case Memory::NCEFaultResult::Unhandled:
+        break;
     }
 
     // We couldn't handle the access.

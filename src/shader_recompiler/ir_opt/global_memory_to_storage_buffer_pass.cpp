@@ -370,7 +370,7 @@ std::optional<StorageBufferAddr> Track(const IR::Value& value, const Bias* bias)
 }
 
 /// Collects the storage buffer used by a global memory instruction and the instruction itself
-void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) {
+void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info, Stage stage) {
     // NVN puts storage buffers in a specific range, we have to bias towards these addresses to
     // avoid getting false positives
     static constexpr Bias nvn_bias{
@@ -393,7 +393,10 @@ void CollectStorageBuffers(IR::Block& block, IR::Inst& inst, StorageInfo& info) 
         storage_buffer = Track(low_addr, nullptr);
         if (!storage_buffer) {
             // If that also fails, use NVN fallbacks
-            LOG_WARNING(Shader, "Storage buffer failed to track, using global memory fallbacks");
+            LOG_WARNING(Shader,
+                        "Storage buffer failed to track, using global memory fallbacks "
+                        "(stage {}, opcode {})",
+                        stage, inst.GetOpcode());
             return;
         }
         LOG_WARNING(Shader, "Storage buffer tracked without bias, index {} offset {}",
@@ -530,7 +533,7 @@ void GlobalMemoryToStorageBufferPass(IR::Program& program, const HostTranslateIn
             if (!IsGlobalMemory(inst)) {
                 continue;
             }
-            CollectStorageBuffers(*block, inst, info);
+            CollectStorageBuffers(*block, inst, info, program.stage);
         }
     }
     for (const StorageBufferAddr& storage_buffer : info.set) {
