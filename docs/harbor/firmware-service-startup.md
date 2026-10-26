@@ -72,3 +72,16 @@ Firmware binary excerpts remain in local investigation scratch, not in this repo
   remain under investigation. Neither is proven to cause the rendering artifacts.
 
 All changed Android translation units compile. Device acceptance remains pending.
+
+## RC4 device result and follow-up
+
+RC4 confirms registration of every previously listed missing service, including
+friends, BCAT, prepo, OLSC and NPNS. ARP control-property lookup errors no longer
+appear in the captured startup. BGTC 200 succeeds, after which npns reaches
+command 102 and fatals on its unimplemented response. The installed firmware
+wrapper at NSO offset 0x4DED0 returns a boolean and aborts on error. The follow-up
+answers false: Harbor retains its host network and does not emulate radio sleep.
+
+Splatoon 3 artifacts remain in the captured RC4 run (Low accuracy). The earlier
+black screen captures did not establish a deadlock: later GPU diagnostics show
+ongoing draws and dispatches. High-accuracy game acceptance remains outstanding.

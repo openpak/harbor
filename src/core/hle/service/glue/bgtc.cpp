@@ -56,7 +56,7 @@ ITaskService::ITaskService(Core::System& system_)
         {15, &ITaskService::SchedulePeriodicTask, "SchedulePeriodicTask"},
         {16, nullptr, "Unknown16"},
         {101, nullptr, "GetOperationMode"},
-        {102, nullptr, "WillDisconnectNetworkWhenEnteringSleep"},
+        {102, &ITaskService::WillDisconnectNetworkWhenEnteringSleep, "WillDisconnectNetworkWhenEnteringSleep"},
         {103, &ITaskService::WillStayHalfAwakeInsteadSleep, "WillStayHalfAwakeInsteadSleep"},
         {200, &ITaskService::EnableStayHalfAwake, "EnableStayHalfAwake"},
     };
@@ -80,6 +80,15 @@ void ITaskService::EnableStayHalfAwake(HLERequestContext& ctx) {
     LOG_INFO(Service_BGTC, "background task enabled stay-half-awake (host remains fully awake)");
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
+}
+
+void ITaskService::WillDisconnectNetworkWhenEnteringSleep(HLERequestContext& ctx) {
+    // The firmware wrapper requests one boolean and aborts on a failed result.
+    // Harbor retains its host network; it does not implement console radio sleep.
+    LOG_DEBUG(Service_BGTC, "host network remains connected");
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push<bool>(false);
 }
 
 void ITaskService::WillStayHalfAwakeInsteadSleep(HLERequestContext& ctx) {

@@ -32,6 +32,7 @@ private:
     // background tasks: nothing is ever scheduled, so the events stay unsignalled.
     void Succeed(HLERequestContext& ctx);
     void EnableStayHalfAwake(HLERequestContext& ctx);
+    void WillDisconnectNetworkWhenEnteringSleep(HLERequestContext& ctx);
     void WillStayHalfAwakeInsteadSleep(HLERequestContext& ctx);
     bool stay_half_awake_enabled{};
     void IsInHalfAwake(HLERequestContext& ctx);
