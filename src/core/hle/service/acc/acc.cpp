@@ -227,8 +227,8 @@ public:
             {113, &IManagerForSystemService::GetServiceEntryRequirementCacheForOnlinePlay, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
             {120, &IManagerForSystemService::GetNintendoAccountId, "GetNintendoAccountId"},
             {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
-            {131, nullptr, "RefreshNintendoAccountUserResourceCacheAsync"},
-            {132, nullptr, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
+            {131, &IManagerForSystemService::RefreshUserResourceAsync, "RefreshNintendoAccountUserResourceCacheAsync"},
+            {132, &IManagerForSystemService::RefreshUserResourceIfElapsedAsync, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
             {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {134, nullptr, "RefreshNintendoAccountVerificationUrlCache"}, // 9.0.0+
             {135, nullptr, "RefreshNintendoAccountVerificationUrlCacheAsyncIfSecondsElapsed"}, // 9.0.0+
@@ -424,6 +424,26 @@ private:
     // buffer. The type-6 buffer is the module's own work memory (it refuses one under 0x800);
     // neither qlaunch nor systemWeb reads it back. Filled as the module's reader would fill it
     // from a users/me holding what the OpenPak login reply carries.
+    void RefreshUserResourceAsync(HLERequestContext& ctx) {
+        PushUserResourceRefresh(ctx, 0);
+    }
+
+    void RefreshUserResourceIfElapsedAsync(HLERequestContext& ctx) {
+        IPC::RequestParser rp{ctx};
+        PushUserResourceRefresh(ctx, rp.Pop<u32>());
+    }
+
+    void PushUserResourceRefresh(HLERequestContext& ctx, u32 minimum_seconds) {
+        IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+        rb.Push(ResultSuccess);
+        rb.PushIpcInterface<OpenPakAsyncContext>(
+            ctx, system, worker,
+            [uid = OpenPakAccount::UidString(account_id), minimum_seconds](
+                std::stop_token stop, std::vector<u8>&) {
+                return OpenPakAccount::RefreshUserResource(uid, minimum_seconds, stop);
+            });
+    }
+
     void GetNintendoAccountUserResourceCache(HLERequestContext& ctx) {
         const auto& b = ctx.BufferDescriptorB();
         const auto& c = ctx.BufferDescriptorC();

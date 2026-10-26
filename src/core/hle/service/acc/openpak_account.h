@@ -76,6 +76,12 @@ Result ApplyCode(const std::stop_token& stop, const std::string& code,
 /// Blocking.
 void KeepNamesOfLink(const std::string& uid, const std::string& id_token);
 
+/// Refresh the linked user's resource cache with its retained OAuth credential.
+/// Blocking: invoke only on an async worker. Older links without a credential
+/// report cache unavailable; they must link again to enable network refresh.
+Result RefreshUserResource(const std::string& uid, u32 minimum_seconds,
+                           const std::stop_token& stop);
+
 /// IAdministrator 250's rule, which 120/136 and ns:ec 9/11 follow too: the user is the active
 /// one and its sign-in is linked to a Nintendo Account.
 bool IsActiveLinked(const Common::UUID& uid);

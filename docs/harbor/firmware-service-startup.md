@@ -109,3 +109,21 @@ The enable request is retained but does not override global availability.
 The configured TAS directory is created when absent before path validation.
 Existing non-directory or inaccessible targets still report failure. This removes
 the first-run missing-directory error without changing other configured paths.
+
+## Account resource refresh candidate
+
+Manager commands 131/132 now return a real OpenPakAsyncContext on the shared
+worker. Command 132's seconds threshold uses a successful per-user monotonic
+refresh timestamp; zero forces a request. The job checks cancellation before
+and after the network operation, confirms the linked account ID, parses users/me,
+requires a usable birthday, and updates the names and profile fields consumed by
+136. It does not overwrite cache contents on malformed or failed responses.
+
+OAuth credentials from successful future linkage/setup flows are retained only
+in the existing secret store, scoped by firmware user. No credential or users/me
+response is logged. An older link without a retained credential, an expired
+credential, or a mismatched resource returns the existing resource-cache-missing
+result through the async object. Token renewal/relinking remains necessary for
+such users; no credential is synthesized from a BAAS token. This candidate has
+compiled on Android but successful network refresh and guest cancellation still
+need runtime acceptance with an eligible linked user.

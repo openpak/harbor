@@ -148,6 +148,20 @@ std::string NamesKey(const std::string& uid) {
     return fmt::format("nas-user-{}", uid);
 }
 
+std::string ResourceTokenKey(const std::string& uid) {
+    return fmt::format("nas-resource-token-{}", uid);
+}
+
+struct RefreshedResource {
+    oauth::User user;
+    std::chrono::steady_clock::time_point refreshed;
+};
+
+std::map<std::string, RefreshedResource>& ResourceCache() {
+    static std::map<std::string, RefreshedResource> cache;
+    return cache;
+}
+
 std::mutex& NamesMutex() {
     static std::mutex mutex;
     return mutex;
@@ -170,6 +184,7 @@ void KeepNames(const std::string& uid, const oauth::User& me) {
     }
     std::scoped_lock lock{NamesMutex()};
     NamesCache()[uid] = std::move(names);
+    ResourceCache()[uid] = {me, std::chrono::steady_clock::now()};
 }
 
 oauth::NasUserNames LoadNames(const std::string& uid) {
@@ -208,6 +223,52 @@ void KeepNamesOfLink(const std::string& uid, const std::string& id_token) {
         return;
     }
     KeepNames(uid, *me);
+    // Setup supplies this token for users/me too. Keep it only in the secret
+    // store, never in config, resource JSON, diagnostic output or logs.
+    if (!OpenPak::StoreSecret(ResourceTokenKey(uid), id_token)) {
+        LOG_WARNING(Service_ACC, "acc: resource refresh credential could not be retained");
+    }
+}
+
+Result RefreshUserResource(const std::string& uid, u32 minimum_seconds,
+                           const std::stop_token& stop) {
+    if (stop.stop_requested() || !Enabled() || !OpenPak::Session::Ensure(uid)) {
+        return ResultInternetRequestDenied;
+    }
+    const u64 account_id = OpenPak::Session::NintendoAccountId(uid);
+    if (!OpenPak::Session::Linked(uid) || account_id == 0) {
+        return ResultNetworkServiceAccountUnavailable;
+    }
+    {
+        std::scoped_lock lock{NamesMutex()};
+        if (const auto it = ResourceCache().find(uid); it != ResourceCache().end() &&
+            it->second.user.id == account_id && minimum_seconds != 0 &&
+            std::chrono::steady_clock::now() - it->second.refreshed <
+                std::chrono::seconds{minimum_seconds}) {
+            return ResultSuccess;
+        }
+    }
+    const auto credential = OpenPak::LoadSecret(ResourceTokenKey(uid));
+    if (!credential || credential->empty()) {
+        return ResultNintendoAccountUserResourceCacheNotFound;
+    }
+    if (stop.stop_requested()) {
+        return ResultInternetRequestDenied;
+    }
+    const auto reply = OpenPak::Session::Send(
+        "GET", std::string{oauth::ApiAccountsHost}, std::string{oauth::UsersMePath},
+        {{"Authorization", "Bearer " + *credential}}, {}, {});
+    if (stop.stop_requested()) {
+        return ResultInternetRequestDenied;
+    }
+    const auto me = reply.status == 200 ? oauth::ParseUsersMe(reply.body) : std::nullopt;
+    if (!me || me->id != account_id || !oauth::IsUsableBirthday(me->birthday)) {
+        LOG_WARNING(Service_ACC, "acc: resource refresh failed (status {}, valid linked resource {})",
+                    reply.status, me && me->id == account_id);
+        return ResultNintendoAccountUserResourceCacheNotFound;
+    }
+    KeepNames(uid, *me);
+    return ResultSuccess;
 }
 
 Result ApplyCode(const std::stop_token& stop, const std::string& code,
@@ -265,6 +326,9 @@ Result ApplyCode(const std::stop_token& stop, const std::string& code,
     }
 
     KeepNames(uid, *me);
+    if (!OpenPak::StoreSecret(ResourceTokenKey(uid), tokens->access_token)) {
+        LOG_WARNING(Service_ACC, "acc: resource refresh credential could not be retained");
+    }
     out.nintendo_account_id = me->id;
     out.network_service_account_id = OpenPak::Session::NetworkServiceAccountId(uid);
     out.nickname = OpenPak::Session::Nickname(uid);
@@ -313,13 +377,21 @@ std::optional<NintendoAccountInfo> NintendoAccount(const std::string& uid) {
     if (uid.empty() || !OpenPak::Session::Linked(uid)) {
         return std::nullopt;
     }
-    return NintendoAccountInfo{
+    NintendoAccountInfo info{
         .id = OpenPak::Session::NintendoAccountId(uid),
         .nickname = OpenPak::Session::Nickname(uid),
         .birthday = OpenPak::Session::Birthday(uid),
         .country = OpenPak::Session::Country(uid),
         .names = LoadNames(uid),
     };
+    std::scoped_lock lock{NamesMutex()};
+    if (const auto it = ResourceCache().find(uid); it != ResourceCache().end() &&
+        it->second.user.id == info.id) {
+        info.nickname = it->second.user.nickname;
+        info.birthday = it->second.user.birthday;
+        info.country = it->second.user.country;
+    }
+    return info;
 }
 
 std::vector<u8> FetchProfileImage(const std::string& url) {
