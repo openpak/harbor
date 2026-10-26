@@ -57,8 +57,8 @@ ITaskService::ITaskService(Core::System& system_)
         {16, nullptr, "Unknown16"},
         {101, nullptr, "GetOperationMode"},
         {102, nullptr, "WillDisconnectNetworkWhenEnteringSleep"},
-        {103, nullptr, "WillStayHalfAwakeInsteadSleep"},
-        {200, nullptr, "Unknown200"},
+        {103, &ITaskService::WillStayHalfAwakeInsteadSleep, "WillStayHalfAwakeInsteadSleep"},
+        {200, &ITaskService::EnableStayHalfAwake, "EnableStayHalfAwake"},
     };
     // clang-format on
 
@@ -71,6 +71,21 @@ void ITaskService::Succeed(HLERequestContext& ctx) {
     LOG_DEBUG(Service_BGTC, "called");
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
+}
+
+void ITaskService::EnableStayHalfAwake(HLERequestContext& ctx) {
+    // HOS 12+ cmd 200 has no arguments. npns requires this to succeed at startup.
+    // Keep the request on this task object; Harbor currently stays fully awake.
+    stay_half_awake_enabled = true;
+    LOG_INFO(Service_BGTC, "background task enabled stay-half-awake (host remains fully awake)");
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
+void ITaskService::WillStayHalfAwakeInsteadSleep(HLERequestContext& ctx) {
+    IPC::ResponseBuilder rb{ctx, 3};
+    rb.Push(ResultSuccess);
+    rb.Push(stay_half_awake_enabled);
 }
 
 void ITaskService::IsInHalfAwake(HLERequestContext& ctx) {

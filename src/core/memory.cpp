@@ -963,7 +963,7 @@ void Memory::MarkRegionDebug(Common::ProcessAddress vaddr, u64 size, bool debug)
     impl->MarkRegionDebug(GetInteger(vaddr), size, debug);
 }
 
-bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
+NCEFaultResult Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
     [[maybe_unused]] bool mapped = true;
     [[maybe_unused]] bool rasterizer = false;
 
@@ -985,12 +985,9 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
     }
 #endif
 
-    // [OpenPak] A write fault handled as "invalidated" but whose page stays read-only on the host
-    // (a cache still counts it, or the protection outlived the cache) re-faults on the same
-    // instruction forever: Duck Game's packet compressor froze core 0 that way on Android. After
-    // enough faults in a row on one page, the page is made writable so the guest moves on.
-    // ponytail: per-thread consecutive counter, not per-page cache bookkeeping; the GPU can miss
-    // that one CPU write. Trace the cache that keeps the page if this line ever shows up.
+    // Repeated faults mean cache invalidation did not release host protection.
+    // Never expose a GPU-cached page to untracked native writes. Let NCE emulate
+    // the faulting instruction through Memory's cache-aware accesses instead.
     if (mapped && ptr != nullptr && impl->current_page_table->fastmem_arena) {
         thread_local u64 last_page = ~0ULL;
         thread_local u32 repeats = 0;
@@ -998,16 +995,23 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
         repeats = page == last_page ? repeats + 1 : 0;
         last_page = page;
         if (repeats == 64) {
-            LOG_WARNING(HW_Memory, "NCE: page {:#x} faulted 64 times in a row (gpu cached {}); "
-                        "making it writable", page, rasterizer);
+            repeats = 0;
+            if (rasterizer) {
+                LOG_WARNING(HW_Memory,
+                            "NCE: cached page {:#x} remains protected after invalidation; "
+                            "emulating the faulting access",
+                            page);
+                return NCEFaultResult::Emulate;
+            }
+            LOG_WARNING(HW_Memory,
+                        "NCE: uncached page {:#x} remains protected; restoring host access", page);
             impl->host_buffer->Protect(page, YUZU_PAGESIZE,
                                        Common::MemoryPermission::Read |
                                            Common::MemoryPermission::Write);
-            repeats = 0;
         }
     }
 
-    return mapped && ptr != nullptr;
+    return mapped && ptr != nullptr ? NCEFaultResult::Retry : NCEFaultResult::Unhandled;
 }
 
 bool Memory::InvalidateSeparateHeap(void* fault_address) {

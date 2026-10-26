@@ -38,6 +38,10 @@ class MemoryManager;
 
 namespace Core::Memory {
 
+// Retrying a native instruction is only safe once host protection has been released.
+// A cached page that remains protected must use the tracked software memory path.
+enum class NCEFaultResult { Unhandled, Retry, Emulate };
+
 /**
  * Page size used by the ARM architecture. This is the smallest granularity with which memory can
  * be mapped.
@@ -493,7 +497,7 @@ public:
 
     void SetGPUDirtyManagers(std::span<Core::GPUDirtyMemoryManager> managers);
 
-    bool InvalidateNCE(Common::ProcessAddress vaddr, size_t size);
+    NCEFaultResult InvalidateNCE(Common::ProcessAddress vaddr, size_t size);
 
     bool InvalidateSeparateHeap(void* fault_address);
 

@@ -21,6 +21,10 @@ private:
     void GetApplicationControlProperty(HLERequestContext& ctx);
     void GetApplicationControlPropertyWithApplicationId(HLERequestContext& ctx);
 
+    void GetApplicationInstanceId(HLERequestContext& ctx);
+    void GetApplicationProcessProperty(HLERequestContext& ctx);
+
+    u8 firmware_major{};
     const ARPManager& manager;
 };
 

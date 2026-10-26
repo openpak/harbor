@@ -115,6 +115,13 @@ private:
     ::Common::unordered_map<std::string, SessionRequestHandlerFactory> registered_services;
     ::Common::unordered_map<std::string, Kernel::KClientPort*> service_ports;
 
+    struct PendingService {
+        std::chrono::steady_clock::time_point first_request;
+        std::chrono::steady_clock::time_point last_report;
+        u64 attempts{};
+    };
+    ::Common::unordered_map<std::string, PendingService> pending_services;
+
     /// Kernel context
     Kernel::KernelCore& kernel;
     Kernel::KEvent* deferral_event{};
