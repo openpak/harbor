@@ -36,6 +36,7 @@
 #include "harbor_setup/driver_recovery.h"
 #include "harbor_setup/harbor_setup.h"
 #include "harbor_setup/host.h"
+#include "harbor_setup/text_entry.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
@@ -49,6 +50,7 @@ namespace {
 using namespace HarborSetup;
 
 std::atomic_bool console_mode{false};
+std::atomic_bool initial_console_dark{false};
 
 /// The setup's folders as Eden's: game folders (tree URIs, scanned deep) and the DLC and update
 /// folders as external content. GameHelper.getGames() then registers everything under them.
@@ -75,6 +77,10 @@ jmethodID discard_driver = nullptr;
 jmethodID select_driver = nullptr;
 jmethodID remove_driver = nullptr;
 jmethodID finish_setup = nullptr;
+jmethodID edit_text = nullptr;
+jmethodID cancel_text = nullptr;
+std::mutex text_mutex;
+std::function<void(std::optional<std::string>)> text_finished;
 jclass sleep_class = nullptr;
 jmethodID sleep_changed = nullptr;
 jmethodID dim_changed = nullptr;
@@ -368,6 +374,25 @@ const DeviceInfo& HarborDevice() {
 
 namespace Harbor {
 
+void ApplyInitialConsoleTheme(Core::System& system) {
+    const auto settings =
+        system.ServiceManager().GetService<Service::Set::ISystemSettingsServer>("set:sys", false);
+    if (!settings) {
+        return;
+    }
+    Service::Set::InitialLaunchSettings initial{};
+    if (settings->GetInitialLaunchSettings(&initial).IsError() ||
+        initial.flags.InitialLaunchCompletionFlag.Value() != 0) {
+        return;
+    }
+    const auto color = initial_console_dark.load() ? Service::Set::ColorSet::BasicBlack
+                                                  : Service::Set::ColorSet::BasicWhite;
+    Service::Set::ColorSet current{};
+    if (settings->GetColorSetId(&current).IsSuccess() && current != color) {
+        settings->SetColorSetId(color);
+    }
+}
+
 bool ConsoleMode() {
     return console_mode.load();
 }
@@ -455,7 +480,41 @@ extern "C" JNIEXPORT int SDL_main(int argc, char* argv[]) {
     return result;
 }
 
+namespace HarborSetup {
+void OpenAndroidTextEntry(const TextEntryOptions& options,
+                         std::function<void(std::optional<std::string>)> finished) {
+    {
+        std::scoped_lock lock{text_mutex};
+        text_finished = std::move(finished);
+    }
+    // Copy only field data; the UI callback remains on the wizard thread.
+    JavaCalls().Post([title = options.title, hint = options.hint, initial = options.initial,
+                      max_length = options.max_length, secret = options.secret](JNIEnv* env) {
+        env->CallStaticVoidMethod(bridge_class, edit_text,
+            Common::Android::ToJString(env, title), Common::Android::ToJString(env, hint),
+            Common::Android::ToJString(env, initial), max_length, secret ? JNI_TRUE : JNI_FALSE);
+    });
+}
+
+void CancelAndroidTextEntry() {
+    JavaCalls().Post([](JNIEnv* env) { env->CallStaticVoidMethod(bridge_class, cancel_text); });
+}
+} // namespace HarborSetup
+
 extern "C" {
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onTextEntered(
+    JNIEnv* env, jobject, jstring text) {
+    std::function<void(std::optional<std::string>)> finished;
+    {
+        std::scoped_lock lock{text_mutex};
+        finished = std::move(text_finished);
+        text_finished = {};
+    }
+    if (finished) {
+        finished(text ? std::optional{Common::Android::GetJString(env, text)} : std::nullopt);
+    }
+}
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JNIEnv* env, jobject) {
     // Every log line reaches eden_log.txt at once (Eden buffers below Error): a crash in the setup
@@ -480,6 +539,9 @@ JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_initialize(JN
     discard_driver = env->GetStaticMethodID(bridge_class, "discardDriver", "(Ljava/lang/String;)V");
     select_driver = env->GetStaticMethodID(bridge_class, "selectDriver", "(Ljava/lang/String;)Z");
     remove_driver = env->GetStaticMethodID(bridge_class, "removeDriver", "(Ljava/lang/String;)Z");
+    edit_text = env->GetStaticMethodID(bridge_class, "editText",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IZ)V");
+    cancel_text = env->GetStaticMethodID(bridge_class, "cancelText", "()V");
     finish_setup = env->GetStaticMethodID(bridge_class, "finishSetup", "(Z)V");
     jclass sleep_local = env->FindClass("org/yuzu/yuzu_emu/harbor/HarborSleep");
     sleep_class = static_cast<jclass>(env->NewGlobalRef(sleep_local));
@@ -564,6 +626,11 @@ JNIEXPORT jboolean JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_downloadP
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_onBackPressed(JNIEnv*, jobject) {
     HarborSetup::RequestBack();
+}
+
+JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setInitialConsoleDarkTheme(
+    JNIEnv*, jobject, jboolean dark) {
+    initial_console_dark = dark == JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL Java_org_yuzu_yuzu_1emu_harbor_HarborNative_setConsoleMode(JNIEnv*, jobject,

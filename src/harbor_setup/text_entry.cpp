@@ -848,10 +848,33 @@ private:
 
 } // namespace
 
+#ifdef ANDROID
+namespace {
+bool android_text_open = false;
+}
+#endif
+
 bool OpenTextEntry(TextEntryOptions options, std::function<void(std::string)> done) {
-    if (open_page) {
+    if (TextEntryOpen()) {
         return false;
     }
+#ifdef ANDROID
+    android_text_open = true;
+    auto closed = options.closed;
+    OpenAndroidTextEntry(options, [closed = std::move(closed), done = std::move(done)](
+                                     std::optional<std::string> text) mutable {
+        brls::sync([closed = std::move(closed), done = std::move(done), text = std::move(text)]() mutable {
+            android_text_open = false;
+            if (closed) {
+                closed();
+            }
+            if (text && done) {
+                done(std::move(*text));
+            }
+        });
+    });
+    return true;
+#endif
     auto* page = new TextEntryActivity(std::move(options), std::move(done));
     open_page = page;
     brls::Application::pushActivity(page, brls::TransitionAnimation::FADE);
@@ -860,6 +883,12 @@ bool OpenTextEntry(TextEntryOptions options, std::function<void(std::string)> do
 }
 
 bool CancelTextEntry() {
+#ifdef ANDROID
+    if (android_text_open) {
+        CancelAndroidTextEntry();
+        return true;
+    }
+#endif
     if (!open_page) {
         return false;
     }
@@ -868,6 +897,11 @@ bool CancelTextEntry() {
 }
 
 bool TextEntryOpen() {
+#ifdef ANDROID
+    if (android_text_open) {
+        return true;
+    }
+#endif
     return open_page != nullptr;
 }
 

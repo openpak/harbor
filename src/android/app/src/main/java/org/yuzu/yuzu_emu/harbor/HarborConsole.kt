@@ -5,6 +5,7 @@ package org.yuzu.yuzu_emu.harbor
 
 import android.app.Activity
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.widget.Toast
 import android.os.Process
@@ -45,6 +46,10 @@ object HarborConsole {
         active = true
         HarborSleep.reset()
         HarborNative.setConsoleMode(true)
+        HarborNative.setInitialConsoleDarkTheme(
+            from.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES
+        )
         // What Eden's main screen sets up before any game: the multiplayer/network layer.
         NativeLibrary.initMultiplayer()
         thread(name = "HarborBoot") {

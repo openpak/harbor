@@ -67,7 +67,7 @@ private:
                      std::function<void()> action);
     brls::View* StatusStrip();
     brls::View* ProgressPanel();
-    /// A text field: Harbor's own Borealis keyboard page (text_entry.h), the same on Android and desktop.
+    /// A text field: Android's default keyboard, or Harbor's Borealis page on desktop (text_entry.h).
     /// A secret field (a password) shows bullets while typing.
     void EditText(const std::string& title, const std::string& hint, const std::string& initial, int max_length,
                   std::function<void(std::string)> done, bool secret = false);

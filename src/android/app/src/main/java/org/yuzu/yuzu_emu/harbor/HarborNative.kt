@@ -23,6 +23,9 @@ object HarborNative {
      */
     external fun checkConsole(): String
 
+    /** Text from the Android keyboard; null when cancelled. */
+    external fun onTextEntered(text: String?)
+
     /** A picker the native wizard opened has answered; a null uri means it was cancelled. */
     external fun onPicked(requestId: Int, uri: String?, name: String?)
 
@@ -37,6 +40,9 @@ object HarborNative {
 
     /** Whether this process boots the console (HOME menu) rather than a game from Eden's list. */
     external fun setConsoleMode(active: Boolean)
+
+    /** Device theme for the firmware's first-time setup; completed consoles keep their own theme. */
+    external fun setInitialConsoleDarkTheme(dark: Boolean)
 
     /** Every applet from the firmware, handheld; saved, since the emulation screen reloads the config. */
     external fun applyConsolePreset()

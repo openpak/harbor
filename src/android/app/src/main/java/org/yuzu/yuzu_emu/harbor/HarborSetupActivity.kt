@@ -4,13 +4,19 @@
 package org.yuzu.yuzu_emu.harbor
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
 import android.content.Intent
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.text.InputFilter
+import android.text.InputType
+import android.view.ContextThemeWrapper
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import android.window.OnBackInvokedDispatcher
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -32,6 +38,7 @@ import org.yuzu.yuzu_emu.utils.Log
  * created again), so setting up again restarts the process (HarborConsole.openSetup).
  */
 class HarborSetupActivity : SDLActivity() {
+    private var textDialog: AlertDialog? = null
     private var pendingPick = 0
     private var finishedSetup = false
 
@@ -76,6 +83,70 @@ class HarborSetupActivity : SDLActivity() {
     @Deprecated("Android back is the wizard's own Back")
     override fun onBackPressed() {
         HarborNative.onBackPressed()
+    }
+
+    fun editText(title: String, hint: String, initial: String, maxLength: Int, secret: Boolean) {
+        if (isFinishing || isDestroyed) {
+            HarborNative.onTextEntered(null)
+            return
+        }
+        val dialogContext = ContextThemeWrapper(this, HarborTheme.alertTheme(this))
+        val field = EditText(dialogContext).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or if (secret) {
+                InputType.TYPE_TEXT_VARIATION_PASSWORD
+            } else {
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            }
+            imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+                EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            // The wizard measures limits in Unicode code points, not UTF-16 code units.
+            val limit = if (maxLength > 0) maxLength else 1024
+            filters = arrayOf(InputFilter { source, start, end, dest, dstart, dend ->
+                val remaining = limit - Character.codePointCount(dest, 0, dest.length) +
+                    Character.codePointCount(dest, dstart, dend)
+                when {
+                    remaining <= 0 -> ""
+                    Character.codePointCount(source, start, end) <= remaining -> null
+                    else -> source.subSequence(start, Character.offsetByCodePoints(source, start, remaining))
+                }
+            })
+            setText(initial)
+            setSelection(text.length)
+        }
+        var confirmed = false
+        val dialog = AlertDialog.Builder(dialogContext)
+            .setTitle(title)
+            .setMessage(hint.takeIf { it.isNotEmpty() })
+            .setView(field)
+            .setPositiveButton("Done") { _, _ -> confirmed = true }
+            .setNegativeButton("Cancel", null)
+            .create()
+        textDialog = dialog
+        dialog.setOnDismissListener {
+            textDialog = null
+            val result = if (confirmed) field.text.toString() else null
+            field.text.clear()
+            HarborNative.onTextEntered(result)
+        }
+        field.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_DONE) {
+                confirmed = true
+                dialog.dismiss()
+                true
+            } else {
+                false
+            }
+        }
+        dialog.setOnShowListener {
+            field.requestFocus()
+            dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        }
+        dialog.show()
+    }
+
+    fun cancelText() {
+        textDialog?.dismiss()
     }
 
     fun pickFile(requestId: Int) {
@@ -146,6 +217,7 @@ class HarborSetupActivity : SDLActivity() {
     }
 
     override fun onDestroy() {
+        cancelText()
         super.onDestroy()
         HarborSetupBridge.activity = null
         // As before the wizard ran: Eden's own SDL use (audio) never had an SDL activity as context.

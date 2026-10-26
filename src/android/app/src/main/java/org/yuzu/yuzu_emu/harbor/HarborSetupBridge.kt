@@ -68,6 +68,21 @@ object HarborSetupBridge {
         host.runOnUiThread { host.pickFolder(requestId) }
     }
 
+    @JvmStatic
+    fun editText(title: String, hint: String, initial: String, maxLength: Int, secret: Boolean) {
+        val host = activity
+        if (host == null) {
+            HarborNative.onTextEntered(null)
+            return
+        }
+        host.runOnUiThread { host.editText(title, hint, initial, maxLength, secret) }
+    }
+
+    @JvmStatic
+    fun cancelText() {
+        activity?.let { host -> host.runOnUiThread { host.cancelText() } }
+    }
+
     /** ["ok", body] or ["error", why]. */
     @JvmStatic
     fun httpGet(url: String, maxBytes: Long): Array<String> = try {

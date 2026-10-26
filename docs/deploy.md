@@ -10,6 +10,10 @@ linked. If you sign in or create an account, the console's first user is linked 
 verification cannot finish sign-in on this page yet; choose Later and link a user in the console's settings.
 Create an account at https://openpak.org.
 
+On Android, account fields use the phone's default keyboard. The firmware's first-time Switch setup
+starts with Basic Black when the phone is in dark mode, or Basic White in light mode. Once Switch
+setup is complete, the console keeps the theme selected in its own settings.
+
 You must supply everything copyrighted yourself, from your own console:
 
 - `prod.keys` dumped from your Switch.

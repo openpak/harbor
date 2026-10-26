@@ -3,6 +3,10 @@
 
 #pragma once
 
+namespace Core {
+class System;
+}
+
 namespace Core::HID {
 class HIDCore;
 }
@@ -17,6 +21,9 @@ namespace Harbor {
 /// Whether this process boots the console (HOME menu) rather than a game picked from Eden's list.
 /// Set by the Harbor launcher through HarborNative.setConsoleMode.
 bool ConsoleMode();
+
+/// Seed the firmware's theme from Android before guest execution, until setup is complete.
+void ApplyInitialConsoleTheme(Core::System& system);
 
 /// A console starts with its Joy-Cons on the rails: the phone and whatever controller is attached
 /// to it are the handheld console. Sets the input settings so that the Handheld controller is
