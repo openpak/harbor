@@ -77,3 +77,20 @@ interpreter/decoder against instrumented software-memory callbacks under ASan an
 UBSan. Scalar stores across a page boundary, SIMD pair stores, loads, and rejection
 of unsupported instructions pass. This does not simulate live GPU cache ownership
 or the phone's signal delivery; those require the device acceptance run.
+
+## RC8 shader fallback bounds candidate
+
+The Vulkan global-memory fallback used the aligned host binding base for both
+bounds comparisons, although the guest descriptor size starts at the original
+address. For a guest base `0x1234000060`, size `0x180` and alignment `0x100`,
+this admitted padding below the guest base and rejected the last `0x60` valid
+bytes. Loads outside the test return zero; writes are discarded. The host buffer
+binding already includes the alignment padding, so offsets still subtract the
+aligned base while bounds now use the original guest base and its end.
+
+`scripts/harbor/test-spirv-ssbo.sh` compiles the actual SPIR-V emitter and checks
+all six generated load/store helpers with aligned and unaligned addresses above
+4 GiB. Its 72 boundary checks pass with the change and fail with the previous
+emitter. This establishes a shader bug, not that Splatoon 3 exercises this path
+in the corrupted scene. RC8 device acceptance is pending. No driver features,
+services or accuracy settings change in this candidate.

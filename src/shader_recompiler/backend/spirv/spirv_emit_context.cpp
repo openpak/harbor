@@ -965,8 +965,10 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
             const Id unaligned_addr{OpBitcast(U64, OpLoad(U32[2], ssbo_addr_pointer))};
             const Id ssbo_addr{OpBitwiseAnd(U64, unaligned_addr, Constant(U64, ssbo_align_mask))};
             const Id ssbo_size{OpUConvert(U64, OpLoad(U32[1], ssbo_size_pointer))};
-            const Id ssbo_end{OpIAdd(U64, ssbo_addr, ssbo_size)};
-            const Id cond{OpLogicalAnd(U1, OpUGreaterThanEqual(U1, addr, ssbo_addr),
+            // The descriptor size starts at the guest address, not the aligned host binding.
+            // Using the host base here admits padding and drops valid bytes at the end.
+            const Id ssbo_end{OpIAdd(U64, unaligned_addr, ssbo_size)};
+            const Id cond{OpLogicalAnd(U1, OpUGreaterThanEqual(U1, addr, unaligned_addr),
                                        OpULessThan(U1, addr, ssbo_end))};
             const Id then_label{OpLabel()};
             const Id else_label{OpLabel()};
