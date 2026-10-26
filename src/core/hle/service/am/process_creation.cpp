@@ -108,6 +108,7 @@ std::unique_ptr<Process> CreateApplicationProcess(std::vector<u8>& out_control, 
         auto& storage = system.GetContentProviderUnion();
         Service::Glue::ApplicationLaunchProperty launch{};
         launch.title_id = process->GetProgramId();
+        launch.program_index = static_cast<u8>(program_index);
 
         FileSys::PatchManager pm{launch.title_id, system.GetFileSystemController(), storage};
         launch.version = pm.GetGameVersion().value_or(0);

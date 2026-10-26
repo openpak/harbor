@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <memory>
 
 #include "common/logging.h"
@@ -14,6 +15,7 @@
 #include "core/hle/service/glue/errors.h"
 #include "core/hle/service/glue/glue_manager.h"
 #include "core/hle/service/ipc_helpers.h"
+#include "core/hle/service/set/system_settings_server.h"
 
 namespace Service::Glue {
 
@@ -35,6 +37,27 @@ std::optional<u64> GetTitleIDForProcessID(Core::System& system, u64 process_id) 
 
 ARP_R::ARP_R(Core::System& system_, const ARPManager& manager_)
     : ServiceFramework{system_, "arp:r"}, manager{manager_} {
+    Set::FirmwareVersionFormat firmware{};
+    if (Set::GetFirmwareVersionImpl(firmware, system, Set::GetFirmwareVersionType::Version2)
+            .IsSuccess()) {
+        firmware_major = firmware.major;
+    }
+    // Commands 1..3 changed meaning in HOS 10. Harbor uses each process ID as its
+    // application instance ID; metadata remains indexed by the process program ID.
+    if (firmware_major >= 10) {
+        static const FunctionInfo functions[] = {
+            {0, &ARP_R::GetApplicationLaunchProperty, "GetApplicationLaunchProperty"},
+            {1, &ARP_R::GetApplicationControlProperty, "GetApplicationControlProperty"},
+            {2, &ARP_R::GetApplicationProcessProperty, "GetApplicationProcessProperty"},
+            {3, &ARP_R::GetApplicationInstanceId, "GetApplicationInstanceId"},
+            {4, nullptr, "GetApplicationInstanceUnregistrationNotifier"},
+            {5, nullptr, "ListApplicationInstanceId"},
+            {6, &ARP_R::GetApplicationInstanceId, "GetMicroApplicationInstanceId"},
+            {7, nullptr, "GetApplicationCertificate"},
+        };
+        RegisterHandlers(functions);
+        return;
+    }
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &ARP_R::GetApplicationLaunchProperty, "GetApplicationLaunchProperty"},
@@ -54,6 +77,48 @@ ARP_R::ARP_R(Core::System& system_, const ARPManager& manager_)
 }
 
 ARP_R::~ARP_R() = default;
+
+void ARP_R::GetApplicationInstanceId(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto process_id = rp.PopRaw<u64>();
+    const auto title_id = GetTitleIDForProcessID(system, process_id);
+    ApplicationLaunchProperty launch{};
+    const Result result =
+        title_id ? manager.GetLaunchProperty(&launch, *title_id) : ResultProcessIdNotRegistered;
+    if (result.IsError()) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
+        return;
+    }
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push(process_id);
+}
+
+void ARP_R::GetApplicationProcessProperty(HLERequestContext& ctx) {
+    IPC::RequestParser rp{ctx};
+    const auto instance_id = rp.PopRaw<u64>();
+    const auto title_id = GetTitleIDForProcessID(system, instance_id);
+    ApplicationLaunchProperty launch{};
+    const Result result =
+        title_id ? manager.GetLaunchProperty(&launch, *title_id) : ResultProcessIdNotRegistered;
+    if (result.IsError()) {
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(result);
+        return;
+    }
+    // HOS 17 enlarged the one-byte property to 0x10 bytes. ProgramIndex is
+    // the only documented field; the remaining bytes are reserved.
+    std::array<u8, 0x10> property{};
+    property[0] = launch.program_index;
+    IPC::ResponseBuilder rb{ctx, firmware_major >= 17 ? 6U : 3U};
+    rb.Push(ResultSuccess);
+    if (firmware_major >= 17) {
+        rb.PushRaw(property);
+    } else {
+        rb.Push(launch.program_index);
+    }
+}
 
 void ARP_R::GetApplicationLaunchProperty(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};

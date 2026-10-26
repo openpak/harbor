@@ -19,8 +19,9 @@
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/sm/sm.h"
-#include "core/openpak/guest_ipc_trace.h"
 #include "core/hle/service/sm/sm_controller.h"
+#include "core/openpak/guest_ipc_trace.h"
+#include "core/openpak/real_firmware.h"
 
 namespace Service::SM {
 
@@ -35,6 +36,12 @@ ServiceManager::ServiceManager(Kernel::KernelCore& kernel_) : kernel{kernel_} {
 }
 
 ServiceManager::~ServiceManager() {
+    for (const auto& [name, pending] : pending_services) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - pending.first_request).count();
+        LOG_WARNING(Service_SM, "session ended with service {} still unregistered after {} s "
+                    "({} pending lookups)", name, elapsed, pending.attempts);
+    }
     for (auto& [name, port] : service_ports) {
         port->Close(kernel);
     }
@@ -73,6 +80,14 @@ Result ServiceManager::RegisterService(Kernel::KServerPort** out_server_port, st
 
     service_ports.emplace(name, std::addressof(port->GetClientPort()));
     registered_services.emplace(name, handler);
+    if (const auto pending = pending_services.find(name); pending != pending_services.end()) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - pending->second.first_request)
+                                 .count();
+        LOG_INFO(Service_SM, "service {} registered after {} ms ({} pending lookups)", name,
+                 elapsed, pending->second.attempts);
+        pending_services.erase(pending);
+    }
     if (deferral_event) {
         deferral_event->Signal(kernel);
     }
@@ -107,7 +122,20 @@ Result ServiceManager::GetServicePort(Kernel::KClientPort** out_client_port,
     std::scoped_lock lk{lock};
     auto it = service_ports.find(name);
     if (it == service_ports.end()) {
-        LOG_WARNING(Service_SM, "Server is not registered! service={}", name);
+        const auto now = std::chrono::steady_clock::now();
+        auto [pending, inserted] = pending_services.try_emplace(name, PendingService{now, now, 0});
+        ++pending->second.attempts;
+        if (inserted) {
+            LOG_INFO(Service_SM, "service {} is not registered yet; awaiting its provider", name);
+        } else if (now - pending->second.last_report >= std::chrono::seconds{30}) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                                     now - pending->second.first_request)
+                                     .count();
+            LOG_WARNING(Service_SM,
+                        "service {} remains unregistered after {} s ({} pending lookups)", name,
+                        elapsed, pending->second.attempts);
+            pending->second.last_report = now;
+        }
         return Service::SM::ResultNotRegistered;
     }
 
@@ -203,15 +231,26 @@ bool SM::IsAccessAllowed(HLERequestContext& ctx, std::string_view name, bool is_
         if (list && !list->empty()) {
             std::string names;
             std::string unserved;
+            std::string pending_firmware;
             for (const auto& entry : *list) {
                 names += fmt::format(" {}{}", entry.is_host ? "+" : "", entry.name);
                 if (!entry.is_host && !entry.name.ends_with('*') &&
                     !service_manager.HasService(entry.name)) {
-                    unserved += " " + entry.name;
+                    if (const auto owner =
+                            OpenPak::RealFirmware::ProgramHosting(system, entry.name)) {
+                        pending_firmware += fmt::format(" {}({:016X})", entry.name, *owner);
+                    } else {
+                        unserved += " " + entry.name;
+                    }
                 }
             }
             LOG_INFO(Service_SM, "program {:016X}: service access list (+ = host):{}", program_id,
                      names);
+            if (!pending_firmware.empty()) {
+                LOG_INFO(Service_SM,
+                         "program {:016X}: services awaiting guest firmware providers:{}",
+                         program_id, pending_firmware);
+            }
             if (!unserved.empty()) {
                 LOG_INFO(Service_SM, "program {:016X}: may open services nothing serves:{}",
                          program_id, unserved);
@@ -242,16 +281,19 @@ Result SM::GetServiceImpl(Kernel::KClientSession** out_client_session, HLEReques
     IPC::RequestParser rp{ctx};
     std::string name(PopServiceName(rp));
 
+    // Check access before probing the port. Firmware clients deliberately try
+    // lower-privilege names first; denied probes must not look like missing providers.
+    R_TRY(ValidateServiceName(name));
+    if (!IsAccessAllowed(ctx, name, false)) {
+        return Service::SM::ResultNotAllowed;
+    }
+
     // Find the named port.
     Kernel::KClientPort* client_port{};
     auto port_result = service_manager.GetServicePort(&client_port, name);
     if (port_result == Service::SM::ResultInvalidServiceName) {
         LOG_ERROR(Service_SM, "Invalid service name '{}'", name);
         return Service::SM::ResultInvalidServiceName;
-    }
-
-    if (!IsAccessAllowed(ctx, name, false)) {
-        return Service::SM::ResultNotAllowed;
     }
 
     if (port_result != ResultSuccess) {
@@ -312,6 +354,8 @@ void SM::RegisterServiceImpl(HLERequestContext& ctx, std::string name, u32 max_s
         return;
     }
 
+    LOG_INFO(Service_SM, "guest program {:016X} registered service {} ({} sessions)",
+             ctx.GetThread().GetOwnerProcess()->GetProgramId(), name, max_session_count);
     IPC::ResponseBuilder rb{ctx, 2, 0, 1, IPC::ResponseBuilder::Flags::AlwaysMoveHandles};
     rb.Push(ResultSuccess);
     rb.PushMoveObjects(ctx, server_port);
