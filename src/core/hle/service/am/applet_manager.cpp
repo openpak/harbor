@@ -397,11 +397,12 @@ void AppletManager::SetWindowSystem(WindowSystem* window_system) {
         ::Common::HarborCrash::LogSignalHandlers("at the HOME session start");
     }
 
-    // The starter also needs the firmware system programs: it initializes News through
-    // SetPassphrase, and real-firmware service ownership already suppresses the HLE ports.
-    // Keep HOME lifecycle/overlay behavior separate from this system-service bootstrap.
-    const bool firmware_session = home_session || m_pending_parameters.applet_id == AppletId::Starter;
-    if (firmware_session && m_real_firmware.empty()) {
+    // The firmware's own system programs run with every session, not just HOME and the
+    // starter: a directly booted game needs them too. Real-firmware service ownership already
+    // suppresses the HLE ports, so without the providers a game touching one of those services
+    // parks its sm:GetService forever (Rivals of Aether and ASTRONEER both stall on pctl with
+    // no frame and no crash). Keep HOME lifecycle/overlay behavior separate from this bootstrap.
+    if (m_real_firmware.empty()) {
         // bcat only accepts OpenPak's articles with its key patch in the load directory, which
         // the loader reads when the process is created.
         OpenPak::BcatKeyPatch::Install(Common::FS::GetEdenPath(Common::FS::EdenPath::LoadDir));

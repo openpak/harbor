@@ -1668,7 +1668,8 @@ u64 Device::GetDeviceLocalMemory() const {
     budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
     physical.GetMemoryProperties(&budget);
     u64 current_budget{};
-    u64 current_usage{};
+    // Only the Android budget below reads the usage.
+    [[maybe_unused]] u64 current_usage{};
     for (const size_t heap : valid_heap_memory) {
         current_budget += budget.heapBudget[heap];
         current_usage += budget.heapUsage[heap];

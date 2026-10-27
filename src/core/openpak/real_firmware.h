@@ -14,10 +14,10 @@ class System;
 }
 
 // [OpenPak] The firmware's own system programs that Harbor runs as guest processes instead of
-// re-implementing them. A program on the list is started with the HOME session, and every service
-// its NPDM lets it host is left to it: Harbor's module of the same name registers nothing of
-// those. Only pure-logic modules belong here (the ones that talk to servers and keep state);
-// anything that drives hardware stays emulated.
+// re-implementing them. A program on the list is started with every session (HOME, the starter,
+// a directly booted game), and every service its NPDM lets it host is left to it: Harbor's
+// module of the same name registers nothing of those. Only pure-logic modules belong here (the
+// ones that talk to servers and keep state); anything that drives hardware stays emulated.
 //
 // OPENPAK_REAL_PROGRAMS overrides the default list: "none", or a comma-separated list of program
 // ids (hex) or NPDM names ("friends,npns,bcat"); "default" stands for the built-in list.
