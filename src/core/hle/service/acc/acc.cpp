@@ -2362,11 +2362,11 @@ public:
             {11, &DAUTH_0::LoadEdgeTokenCache, "LoadEdgeTokenCache"},
             {12, &DAUTH_0::InvalidateEdgeTokenCache, "InvalidateEdgeTokenCache"},
             {13, &DAUTH_0::IsEdgeTokenCacheAvailable, "IsEdgeTokenCacheAvailable"},
-            {20, nullptr, "EnsureApplicationAuthenticationCacheAsync"},
-            {21, nullptr, "LoadApplicationAuthenticationTokenCache"},
+            {20, &DAUTH_0::EnsureApplicationAuthenticationCacheAsync, "EnsureApplicationAuthenticationCacheAsync"},
+            {21, &DAUTH_0::LoadApplicationAuthenticationTokenCache, "LoadApplicationAuthenticationTokenCache"},
             {22, nullptr, "LoadApplicationNetworkServiceClientConfigCache"},
-            {23, nullptr, "IsApplicationAuthenticationCacheAvailable"},
-            {24, nullptr, "InvalidateApplicationAuthenticationCache"},
+            {23, &DAUTH_0::IsApplicationAuthenticationCacheAvailable, "IsApplicationAuthenticationCacheAvailable"},
+            {24, &DAUTH_0::InvalidateApplicationAuthenticationCache, "InvalidateApplicationAuthenticationCache"},
             {30, nullptr, "EnsureGameCardAuthenticationCacheAsync"},
             {31, nullptr, "LoadGameCardAuthenticationTokenCache"},
             {32, nullptr, "IsGameCardAuthenticationCacheAvailable"},
@@ -2408,6 +2408,7 @@ private:
         std::mutex mutex;
         std::map<u64, std::string> device_tokens;
         std::map<u64, std::string> edge_tokens;
+        std::map<u64, std::string> application_tokens;
     };
 
     void Ensure(HLERequestContext& ctx, std::map<u64, std::string> State::*cache_member,
@@ -2422,8 +2423,11 @@ private:
             ctx, system, worker,
             [st = state, cache_member, client_id, caller,
              vendor](std::stop_token, std::vector<u8>&) {
-                const auto token =
-                    OpenPak::Session::DauthToken(fmt::format("{:016x}", client_id), vendor);
+                const auto id = fmt::format("{:016x}", client_id);
+                // The application cache's "client id" is the title id: aauth, not dauth.
+                const auto token = cache_member == &State::application_tokens
+                                       ? OpenPak::Session::ApplicationAuthToken(id)
+                                       : OpenPak::Session::DauthToken(id, vendor);
                 LOG_INFO(Service_ACC, "dauth: token for client {:016x}{}{} -> {}", client_id,
                          vendor.empty() ? "" : " vendor ", vendor, token.empty() ? "none" : "ok");
                 std::scoped_lock lk{st->mutex};
@@ -2478,6 +2482,21 @@ private:
     void LoadAuthenticationTokenCache(HLERequestContext& ctx) { Load(ctx, &State::device_tokens); }
     void InvalidateAuthenticationTokenCache(HLERequestContext& ctx) { Invalidate(ctx, &State::device_tokens); }
     void IsDeviceAuthenticationTokenCacheAvailable(HLERequestContext& ctx) { IsAvailable(ctx, &State::device_tokens); }
+
+    // ponytail: the title id is assumed to sit where the client id does (pid placeholder, u64);
+    // unverified against a capture. The client-config cache (22) stays unserved.
+    void EnsureApplicationAuthenticationCacheAsync(HLERequestContext& ctx) {
+        Ensure(ctx, &State::application_tokens, "");
+    }
+    void LoadApplicationAuthenticationTokenCache(HLERequestContext& ctx) {
+        Load(ctx, &State::application_tokens);
+    }
+    void InvalidateApplicationAuthenticationCache(HLERequestContext& ctx) {
+        Invalidate(ctx, &State::application_tokens);
+    }
+    void IsApplicationAuthenticationCacheAvailable(HLERequestContext& ctx) {
+        IsAvailable(ctx, &State::application_tokens);
+    }
 
     // No vendor is passed: the dauth program knows it per client, and every edge client here is
     // the CDN's ("akamai").

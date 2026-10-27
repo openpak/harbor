@@ -1814,6 +1814,64 @@ std::string DauthToken(const std::string& client_id, const std::string& vendor) 
     }
 }
 
+std::string ApplicationAuthToken(const std::string& application_id) {
+    if (!Enabled() || application_id.empty()) {
+        return {};
+    }
+    std::string version;
+    {
+        State& state = Get();
+        std::lock_guard lock{state.mutex};
+        version = state.application_version;
+    }
+    try {
+        const Endpoint endpoint = EndpointSnapshot(Get());
+        if (!EnsureClientCertificate(endpoint)) {
+            return {};
+        }
+        auto dauth = MakeClient(endpoint, DauthHost);
+        const auto challenge = Parsed(dauth->Post("/v8/challenge"), "dauth challenge");
+        if (!challenge) {
+            return {};
+        }
+        unsigned char mac[32];
+        RAND_bytes(mac, sizeof(mac));
+        const nlohmann::json request{
+            {"system_version", "22.2.0-0.0"},
+            {"fw_revision", "0"},
+            {"key_generation", 11},
+            {"challenge", Text(*challenge, "challenge")},
+            {"mac", Base64(mac, sizeof(mac))},
+            {"ist", false},
+            {"token_requests", nlohmann::json::array({{{"client_id", BaasClientId}}})},
+        };
+        const auto device_reply =
+            dauth->Post("/v8/device_auth_tokens", request.dump(), "application/json");
+        if (device_reply && NoteDeviceAnswer(device_reply->status, device_reply->body)) {
+            return {};
+        }
+        const auto device_tokens = Parsed(device_reply, "device auth tokens");
+        if (!device_tokens || !device_tokens->contains("results") ||
+            (*device_tokens)["results"].empty()) {
+            return {};
+        }
+        const std::string device_token = Text((*device_tokens)["results"][0], "device_auth_token");
+
+        auto aauth = MakeClient(endpoint, AauthHost);
+        const httplib::Params application{
+            {"application_id", application_id},
+            {"application_version", version},
+        };
+        const auto reply =
+            aauth->Post("/v5/application_auth_token", Bearer(device_token), application);
+        const auto answered = Parsed(reply, "application auth token");
+        return answered ? Text(*answered, "application_auth_token") : std::string{};
+    } catch (const std::exception& e) {
+        LOG_WARNING(WebService, "[OpenPak] application auth token: {}", e.what());
+        return {};
+    }
+}
+
 void SetInvitationHook(std::function<void(const Invitation&)> on_arrival) {
     State& state = Get();
     std::lock_guard lock{state.mutex};

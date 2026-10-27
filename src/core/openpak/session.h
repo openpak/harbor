@@ -156,6 +156,10 @@ std::optional<std::uint32_t> AauthRefusalDescription(std::string_view code);
 /// e.g. "akamai" for nim:shp). Empty on failure or with no console server. Blocking: run it from
 /// an AsyncWorker task only.
 std::string DauthToken(const std::string& client_id, const std::string& vendor);
+/// aauth's per-title token for `application_id` (16 hex digits) at the bound title's version, for
+/// dauth cmd 20 (nim asks for it before a shop-side rights check). Empty on failure, a refusal or
+/// with no console server. Blocking: run it from an AsyncWorker task only.
+std::string ApplicationAuthToken(const std::string& application_id);
 
 /// Whether `uid` has a device account at the configured server, from the secret store alone: no
 /// network, no sign-in. False with no server configured.
