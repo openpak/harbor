@@ -451,6 +451,7 @@ struct System::Impl {
         kernel.CloseServices();
         kernel.ShutdownCores();
         services.reset();
+        applet_manager.ReleaseFirmwarePrograms();
         service_manager.reset();
         fs_controller.Reset();
         cheat_engine.reset();
