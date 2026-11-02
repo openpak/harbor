@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -70,6 +71,10 @@ public:
         u32 console_plan{6};
         bool sleeps_while_playing_media{true};
         bool prevents_screen_burn_in{true};
+        // idle!handheld_dim_time_level_N, read at start as omm does (0 is no dimming).
+        std::array<std::chrono::seconds, 6> handheld_dim{
+            std::chrono::seconds{45},  std::chrono::seconds{120}, std::chrono::seconds{240},
+            std::chrono::seconds{300}, std::chrono::seconds{300}, std::chrono::seconds{300}};
     };
     static std::chrono::nanoseconds AutoSleepTime(const Settings& settings,
                                                   const IdleHandlingContext& context, bool docked);

@@ -823,6 +823,12 @@ static Settings GetSettings(Core::System* system = nullptr) {
     // [OpenPak] Not in the firmware's archive; the modules read it at start.
     ret["pl.authorization"]["function_blacklist_system_data_debug_mode"] = ToBytes(bool{false});
 
+    // [OpenPak] omm's handheld dimming time for the "Never" auto-sleep plan (plan 5; the
+    // firmware's default is 300 s). 0 is no dimming, as omm reads it: with Auto-Sleep "Never",
+    // Harbor's screen never dims on its own timer (the host owns that). The other plans keep the
+    // firmware's values.
+    ret["idle"]["handheld_dim_time_level_5"] = ToBytes(s32{0});
+
     // Mii
     ret["mii"]["is_db_test_mode_enabled"] = ToBytes(bool{false});
 

@@ -27,7 +27,10 @@ SystemSettings DefaultSystemSettings() {
     };
 
     settings.tv_settings = {
-        .flags = {0xC},
+        // [OpenPak] AllowsCec only: "Screen Burn-in Reduction" (PreventsScreenBurnIn, the docked
+        // auto-dim) is off, so the TV never dims on its own timer; System Settings > TV Output
+        // turns it on.
+        .flags = {0x4},
         .tv_resolution = TvResolution::Auto,
         .hdmi_content_type = HdmiContentType::Game,
         .rgb_range = RgbRange::Auto,
@@ -43,10 +46,13 @@ SystemSettings DefaultSystemSettings() {
         .timestamp = {},
     };
 
+    // [OpenPak] Harbor's console never sleeps on its own timer: the host owns sleep. Auto-Sleep
+    // is "Never" in both modes, as an owner can set it in System Settings > Sleep Mode; a value
+    // the user picks there is stored and used as on a console.
     settings.sleep_settings = {
         .flags = {0x3},
-        .handheld_sleep_plan = HandheldSleepPlan::Sleep10Min,
-        .console_sleep_plan = ConsoleSleepPlan::Sleep1Hour,
+        .handheld_sleep_plan = HandheldSleepPlan::Never,
+        .console_sleep_plan = ConsoleSleepPlan::Never,
     };
 
     settings.device_time_zone_location_name = Service::PSC::Time::LocationName{"UTC"};
