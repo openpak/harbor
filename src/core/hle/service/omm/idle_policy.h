@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -70,6 +72,10 @@ public:
         u32 console_plan{6};
         bool sleeps_while_playing_media{true};
         bool prevents_screen_burn_in{true};
+        // idle!handheld_dim_time_level_N, read at start as omm does (0 is no dimming).
+        std::array<std::chrono::seconds, 6> handheld_dim{
+            std::chrono::seconds{45},  std::chrono::seconds{120}, std::chrono::seconds{240},
+            std::chrono::seconds{300}, std::chrono::seconds{300}, std::chrono::seconds{300}};
     };
     static std::chrono::nanoseconds AutoSleepTime(const Settings& settings,
                                                   const IdleHandlingContext& context, bool docked);
@@ -107,6 +113,7 @@ private:
     std::chrono::steady_clock::time_point m_pending_at{};
     std::chrono::nanoseconds m_logged_sleep_time{-1};
     std::chrono::nanoseconds m_logged_dim_time{-1};
+    std::atomic<bool> m_logged_override_suppressed{};
 };
 
 // The running idle:sys (null outside a session): am's ISelfController and IGlobalStateController

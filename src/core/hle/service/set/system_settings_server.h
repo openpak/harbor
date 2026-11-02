@@ -199,6 +199,7 @@ private:
     bool LoadSettingsFile(std::filesystem::path& path, auto&& default_func);
     bool StoreSettingsFile(std::filesystem::path& path, auto& settings);
     void SetupSettings();
+    void MigrateNoSelfSleep(const std::filesystem::path& system_dir);
     void StoreSettings();
     void SetSaveNeeded();
 

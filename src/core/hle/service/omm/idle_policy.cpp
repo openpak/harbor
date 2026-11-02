@@ -44,8 +44,8 @@ constexpr std::array<std::chrono::seconds, 7> ConsoleSleep{3600s,  7200s, 10800s
                                                            43200s, 0s,    900s};
 constexpr std::array<std::chrono::seconds, 7> ConsoleSleepMedia{14400s, 14400s, 14400s, 0s,
                                                                 0s,     0s,     14400s};
-// Default dimming times by handheld plan (fwdbg idle!handheld_dim_time_level_N, 0x08619a00).
-constexpr std::array<std::chrono::seconds, 6> HandheldDim{45s, 120s, 240s, 300s, 300s, 300s};
+// Dimming times by handheld plan: fwdbg idle!handheld_dim_time_level_N (0x08619a00), read in
+// LoadAndApplySettings; the firmware's defaults are in Settings::handheld_dim.
 // Docked with "prevent screen burn-in", and the handheld fallback.
 constexpr std::chrono::seconds DefaultDim = 300s;
 
@@ -165,7 +165,7 @@ std::chrono::nanoseconds IdlePolicy::DimTime(const Settings& settings,
     } else if (docked) {
         time = settings.prevents_screen_burn_in ? DefaultDim : 0s;
     } else {
-        time = Lookup(HandheldDim, settings.handheld_plan);
+        time = Lookup(settings.handheld_dim, settings.handheld_plan);
     }
     if (context.extension == 2) {
         return 0s;
@@ -227,17 +227,31 @@ void IdlePolicy::LoadAndApplySettings() {
     Set::TvSettings tv{};
     set_sys->GetSleepSettings(&sleep);
     set_sys->GetTvSettings(&tv);
-    std::scoped_lock lk{m_lock};
-    m_settings = {
+    Settings loaded{
         .handheld_plan = static_cast<u32>(sleep.handheld_sleep_plan),
         .console_plan = static_cast<u32>(sleep.console_sleep_plan),
         .sleeps_while_playing_media = sleep.flags.SleepsWhilePlayingMedia != 0,
         .prevents_screen_burn_in = tv.flags.PreventsScreenBurnIn != 0,
     };
+    // omm reads each level at start and keeps its default when the item is absent.
+    for (size_t level = 0; level < loaded.handheld_dim.size(); ++level) {
+        s32 seconds{};
+        if (set_sys
+                ->GetSettingsItemValueImpl(seconds, "idle",
+                                           fmt::format("handheld_dim_time_level_{}", level))
+                .IsSuccess()) {
+            loaded.handheld_dim[level] = std::chrono::seconds{seconds};
+        }
+    }
+    std::scoped_lock lk{m_lock};
+    m_settings = loaded;
     m_settings_loaded = true;
-    LOG_INFO(Service_PTM, "idle: settings handheld plan {} console plan {} media {} burn-in {}",
+    LOG_INFO(Service_PTM,
+             "idle: settings handheld plan {} console plan {} media {} burn-in {} handheld dim "
+             "for this plan {} s",
              m_settings.handheld_plan, m_settings.console_plan,
-             m_settings.sleeps_while_playing_media, m_settings.prevents_screen_burn_in);
+             m_settings.sleeps_while_playing_media, m_settings.prevents_screen_burn_in,
+             Lookup(m_settings.handheld_dim, m_settings.handheld_plan).count());
 }
 
 void IdlePolicy::LoadSettingsOnce() {
@@ -315,6 +329,24 @@ void IdlePolicy::Tick() {
     // touching the input devices.
     IdleHandlingContext context{};
     window_system->GetIdleHandlingContext(context);
+    // [OpenPak] Harbor never starts sleep or dimming on a timer of its own: an applet's requested
+    // auto-sleep and dimming times (ISelfController OverrideAutoSleepTimeAndDimmingTime, e.g. HOME's lock screen asking for
+    // 10 s after a wake) are not applied; only the plan the user picked in System Settings is.
+    if (context.sleep_handheld_s > 0 || context.sleep_console_s > 0 ||
+        context.dim_handheld_s > 0 || context.dim_console_s > 0) {
+        if (!m_logged_override_suppressed.exchange(true)) {
+            LOG_INFO(Service_PTM,
+                     "idle: an applet's auto-sleep/dimming time request (sleep {}/{} s, dim {}/{} "
+                     "s handheld/docked) is not applied: Harbor does not sleep on its own timer "
+                     "(logged once)",
+                     context.sleep_handheld_s, context.sleep_console_s, context.dim_handheld_s,
+                     context.dim_console_s);
+        }
+        context.sleep_handheld_s = 0;
+        context.sleep_console_s = 0;
+        context.dim_handheld_s = 0;
+        context.dim_console_s = 0;
+    }
 
     bool auto_power_down = false;
     bool dim = false;

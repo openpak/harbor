@@ -823,6 +823,12 @@ static Settings GetSettings(Core::System* system = nullptr) {
     // [OpenPak] Not in the firmware's archive; the modules read it at start.
     ret["pl.authorization"]["function_blacklist_system_data_debug_mode"] = ToBytes(bool{false});
 
+    // [OpenPak] omm's handheld dimming time for the "Never" auto-sleep plan (plan 5; the
+    // firmware's default is 300 s). 0 is no dimming, as omm reads it: with Auto-Sleep "Never",
+    // Harbor's screen never dims on its own timer (the host owns that). The other plans keep the
+    // firmware's values.
+    ret["idle"]["handheld_dim_time_level_5"] = ToBytes(s32{0});
+
     // Mii
     ret["mii"]["is_db_test_mode_enabled"] = ToBytes(bool{false});
 
@@ -1695,6 +1701,41 @@ void ISystemSettingsServer::SetupSettings() {
     auto appln_dir = Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "system/save/8000000000000054";
     if (!LoadSettingsFile(appln_dir, []() { return DefaultApplnSettings(); })) {
         ASSERT(false);
+    }
+
+    MigrateNoSelfSleep(system_dir);
+}
+
+// [OpenPak] Harbor never sleeps or dims on its own timer (the host owns both). Every console,
+// new or existing, is moved once to what an owner can choose on a console: Auto-Sleep "Never" in
+// both modes and Screen Burn-in Reduction off (the dimming time of the Never plan is the
+// idle!handheld_dim_time_level_5 item, 0). The marker keeps it to once, so a value the user picks
+// in System Settings afterwards is stored and kept.
+void ISystemSettingsServer::MigrateNoSelfSleep(const std::filesystem::path& system_dir) {
+    const auto marker = system_dir / "harbor-no-self-sleep-v1";
+    if (Common::FS::Exists(marker)) {
+        return;
+    }
+    auto& sleep = m_system_settings.sleep_settings;
+    auto& tv = m_system_settings.tv_settings;
+    LOG_INFO(Service_SET,
+             "migration: no self-sleep: handheld plan {} -> {}, console plan {} -> {}, TV flags "
+             "{:#x} -> {:#x} (burn-in reduction off)",
+             static_cast<u32>(sleep.handheld_sleep_plan), static_cast<u32>(HandheldSleepPlan::Never),
+             static_cast<u32>(sleep.console_sleep_plan), static_cast<u32>(ConsoleSleepPlan::Never),
+             tv.flags.raw, tv.flags.raw & ~(1u << 3));
+    sleep.handheld_sleep_plan = HandheldSleepPlan::Never;
+    sleep.console_sleep_plan = ConsoleSleepPlan::Never;
+    tv.flags.PreventsScreenBurnIn.Assign(0);
+    auto dir = system_dir;
+    if (!StoreSettingsFile(dir, m_system_settings)) {
+        LOG_ERROR(Service_SET, "migration: no self-sleep: the system settings were not stored");
+        return;
+    }
+    Common::FS::IOFile file{marker, Common::FS::FileAccessMode::Write,
+                            Common::FS::FileType::TextFile};
+    if (!file.IsOpen()) {
+        LOG_ERROR(Service_SET, "migration: no self-sleep: marker not written; it runs again");
     }
 }
 
