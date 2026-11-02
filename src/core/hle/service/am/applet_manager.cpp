@@ -287,6 +287,22 @@ void AppletManager::RequestExit() {
     }
 }
 
+void AppletManager::ReleaseFirmwarePrograms() {
+    std::vector<std::unique_ptr<Process>> programs;
+    {
+        std::scoped_lock lk{m_lock};
+        programs = std::move(m_real_firmware);
+        m_real_firmware.clear();
+        m_pending_process.reset();
+    }
+    for (auto& process : programs) {
+        process->Finalize();
+    }
+    if (!programs.empty()) {
+        LOG_INFO(Service_AM, "am: {} real firmware program(s) released", programs.size());
+    }
+}
+
 void AppletManager::RequestPower(PowerRequest request) {
     m_power_request = request;
     LOG_INFO(Service_AM, "HOME menu requested {}; ending the applets first",

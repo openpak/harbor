@@ -58,6 +58,10 @@ public:
     // services that are shutting down.
     void RequestExit();
     void OperationModeChanged();
+    // The emulation stops: the firmware programs started with the session are kernel processes,
+    // so they go before the kernel does (left to this object's destructor, they were terminated
+    // after kernel shutdown, at process exit, and every quit with a game running crashed).
+    void ReleaseFirmwarePrograms();
 
 public:
     void SetWindowSystem(WindowSystem* window_system);
