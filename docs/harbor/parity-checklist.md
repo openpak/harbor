@@ -108,6 +108,12 @@ Gate 3 work that is not a retirement blocker (the Ryujinx Harbor never proved it
   M, olsc and fs.
 - Virtual Game Cards, ns 4042 (G3.SHOP.6). M, ns/nim.
 - eShop five launches in a row after the 2002-1002 fix (G3.SHOP.1). S, a run.
+- Known issue (2026-11-02, unreachable since `no-self-sleep`): an AutoPowerDown sent to HOME while its post-wake lock
+  screen is in front (the lock screen's 10 s OverrideAutoSleepTimeAndDimmingTime, auto-sleep on) started no sleep
+  sequence; the guest stopped presenting (black screen) and later power presses got no answer. Seen once on desktop
+  (run nss-1, qlaunch pid 81, thread dump at 1129 s in `scratch/harbor-eden/qc/nss-1-autopowerdown-hang.log`). idle:sys
+  no longer applies applet-requested sleep times, so the path is not taken; the HOME-side fault is not found. M, am and
+  qlaunch.
 
 ### Eden additions the Ryujinx Harbor does not have (owner decisions, 2026-10-08)
 

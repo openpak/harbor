@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -112,6 +113,7 @@ private:
     std::chrono::steady_clock::time_point m_pending_at{};
     std::chrono::nanoseconds m_logged_sleep_time{-1};
     std::chrono::nanoseconds m_logged_dim_time{-1};
+    std::atomic<bool> m_logged_override_suppressed{};
 };
 
 // The running idle:sys (null outside a session): am's ISelfController and IGlobalStateController

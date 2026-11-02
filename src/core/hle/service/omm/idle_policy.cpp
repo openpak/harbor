@@ -329,6 +329,24 @@ void IdlePolicy::Tick() {
     // touching the input devices.
     IdleHandlingContext context{};
     window_system->GetIdleHandlingContext(context);
+    // [OpenPak] Harbor never starts sleep or dimming on a timer of its own: an applet's requested
+    // auto-sleep and dimming times (ISelfController OverrideAutoSleepTimeAndDimmingTime, e.g. HOME's lock screen asking for
+    // 10 s after a wake) are not applied; only the plan the user picked in System Settings is.
+    if (context.sleep_handheld_s > 0 || context.sleep_console_s > 0 ||
+        context.dim_handheld_s > 0 || context.dim_console_s > 0) {
+        if (!m_logged_override_suppressed.exchange(true)) {
+            LOG_INFO(Service_PTM,
+                     "idle: an applet's auto-sleep/dimming time request (sleep {}/{} s, dim {}/{} "
+                     "s handheld/docked) is not applied: Harbor does not sleep on its own timer "
+                     "(logged once)",
+                     context.sleep_handheld_s, context.sleep_console_s, context.dim_handheld_s,
+                     context.dim_console_s);
+        }
+        context.sleep_handheld_s = 0;
+        context.sleep_console_s = 0;
+        context.dim_handheld_s = 0;
+        context.dim_console_s = 0;
+    }
 
     bool auto_power_down = false;
     bool dim = false;
