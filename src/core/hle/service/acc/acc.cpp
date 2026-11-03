@@ -169,15 +169,21 @@ static void LoadIdTokenCacheFor(HLERequestContext& ctx, const Common::UUID& user
     }
 
     // A real token is several times the size of the old stub's, so the buffer the guest offered
-    // is checked before anything is written into it.
-    if (!ctx.CanWriteBuffer() || token.size() > ctx.GetWriteBufferSize()) {
+    // is checked before anything is written into it. The token needs one more byte than its
+    // length: titles read the cache as a C string, so the buffer must end in a zero.
+    if (!ctx.CanWriteBuffer() || token.size() >= ctx.GetWriteBufferSize()) {
         LOG_WARNING(Service_ACC, "acc: id_token is {} bytes, guest buffer is {}", token.size(),
                     ctx.CanWriteBuffer() ? ctx.GetWriteBufferSize() : 0);
         PushResult(ctx, ResultInvalidIdTokenCacheBufferSize);
         return;
     }
 
-    ctx.WriteBuffer(token.data(), token.size());
+    // The whole guest buffer is written, zeros after the token: written without them, the title
+    // sent the token to its server with hundreds of bytes of stale buffer behind it and every
+    // login was refused as "not proven" (2306-0806 on one console, 2026-11-03).
+    std::vector<u8> buffer(ctx.GetWriteBufferSize());
+    std::memcpy(buffer.data(), token.data(), token.size());
+    ctx.WriteBuffer(buffer.data(), buffer.size());
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
     rb.Push(static_cast<u32>(token.size()));
