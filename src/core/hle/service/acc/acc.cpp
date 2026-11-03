@@ -2146,9 +2146,20 @@ void Module::Interface::CreateGuestLoginRequest(HLERequestContext& ctx) {
     rb.PushIpcInterface<IGuestLoginRequest>(ctx, system, Common::UUID{});
 }
 
+// acc:u0 130 LoadOpenContext (5.0.0+): the IManagerForApplication for a user whose open
+// context the title stored. Answered with no object, the title read a garbage object id
+// ("object_id ... is too big"), decided the user had no NSO and left its online session
+// (Castle Crashers host, Tetris 99 2122-0203, 2026-11-03).
 void Module::Interface::LoadOpenContext(HLERequestContext& ctx) {
-    LOG_WARNING(Service_ACC, "(STUBBED) called");
-    PushResult(ctx, ResultSuccess);
+    IPC::RequestParser rp{ctx};
+    auto user_id = rp.PopRaw<Common::UUID>();
+    if (user_id.IsInvalid()) {
+        user_id = profile_manager->GetLastOpenedUser();
+    }
+    LOG_DEBUG(Service_ACC, "called");
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IManagerForApplication>(ctx, system, user_id, module->worker);
 }
 
 Module::Module(Core::System& system)
