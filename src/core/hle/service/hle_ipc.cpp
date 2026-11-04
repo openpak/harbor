@@ -46,7 +46,20 @@ bool SessionRequestManager::HasSessionRequestHandler(const HLERequestContext& co
         const auto object_id = message_header.object_id;
 
         if (object_id > DomainHandlerCount()) {
-            LOG_CRITICAL(IPC, "object_id {} is too big!", object_id);
+            // Which service's session this is, for the guests that send a plain message down a
+            // session this side treats as a domain.
+            std::string names;
+            for (std::size_t i = 0; i < DomainHandlerCount() && i < 4; ++i) {
+                const auto handler = domain_handlers[i];
+                names += handler ? std::string{handler->NameForLog()} : std::string{"closed"};
+                names += ' ';
+            }
+            LOG_CRITICAL(IPC,
+                         "object_id {} is too big! (domain of {}: {}; domain command type {}, "
+                         "command {}, command type {})",
+                         object_id, DomainHandlerCount(), names,
+                         static_cast<u32>(message_header.command.Value()), context.GetCommand(),
+                         static_cast<u32>(context.GetCommandType()));
             return false;
         }
         return !DomainHandler(object_id - 1).expired();

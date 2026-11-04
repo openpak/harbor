@@ -12,6 +12,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 #include <boost/container/static_vector.hpp>
@@ -76,6 +77,11 @@ public:
      */
     virtual Result HandleSyncRequest(Kernel::KServerSession& session,
                                      HLERequestContext& context) = 0;
+
+    /// The name the handler answers to, for diagnostics.
+    virtual std::string_view NameForLog() const {
+        return "?";
+    }
 
 protected:
     Kernel::KernelCore& kernel;
