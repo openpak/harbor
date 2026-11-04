@@ -245,7 +245,7 @@ public:
             {141, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsync, "RefreshNetworkServiceLicenseCacheAsync"}, // 5.0.0+
             {142, &IManagerForSystemService::RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed, "RefreshNetworkServiceLicenseCacheAsyncIfSecondsElapsed"}, // 5.0.0+
             {143, &IManagerForSystemService::GetNetworkServiceLicenseCacheEx, "GetNetworkServiceLicenseCacheEx"}, // 15.0.0+
-            {150, nullptr, "CreateAuthorizationRequest"},
+            {150, &IManagerForSystemService::CreateAuthorizationRequest, "CreateAuthorizationRequest"},
             {160, nullptr, "RequiresUpdateNetworkServiceAccountIdTokenCache"},
             {161, nullptr, "RequireReauthenticationOfNetworkServiceAccount"},
             {170, nullptr, "CreateDeviceHistoryRequest"}, // 17.0.0+
@@ -425,6 +425,10 @@ private:
         rb.Push(ResultSuccess);
         rb.Push(account->id);
     }
+
+    // 150: the firmware's own programs (nim, for a shop service access) authorize against the
+    // signed-in user the way a title does; defined after IAuthorizationRequest.
+    void CreateAuthorizationRequest(HLERequestContext& ctx);
 
     // 121: nim asks for it before a shop service access (a title's first online step on a
     // console that sells it) and a console without it files 2511-8191. The fingerprint is only
@@ -1389,6 +1393,18 @@ private:
     std::shared_ptr<Held> held;
     u64 session_id;
 };
+
+void IManagerForSystemService::CreateAuthorizationRequest(HLERequestContext& ctx) {
+    LOG_DEBUG(Service_ACC, "called");
+    std::vector<u8> parameters;
+    if (ctx.CanReadBuffer()) {
+        parameters = ctx.ReadBufferCopy();
+    }
+    IPC::ResponseBuilder rb{ctx, 2, 0, 1};
+    rb.Push(ResultSuccess);
+    rb.PushIpcInterface<IAuthorizationRequest>(ctx, system, account_id, worker,
+                                               std::move(parameters));
+}
 
 class IManagerForApplication final : public ServiceFramework<IManagerForApplication> {
 public:
