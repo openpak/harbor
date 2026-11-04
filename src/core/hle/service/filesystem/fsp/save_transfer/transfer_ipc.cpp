@@ -236,8 +236,8 @@ ISaveDataTransferManagerVersion2::ISaveDataTransferManagerVersion2(Core::System&
         {34, nullptr, "OpenSaveDataExporterByContext"},
         {63, &ISaveDataTransferManagerVersion2::OpenSaveDataImporter, "OpenSaveDataImporter"},
         {68, nullptr, "OpenSaveDataImporterByContext"},
-        {69, nullptr, "CancelSuspendingImport"},
-        {70, nullptr, "CancelSuspendingImportByAttribute"},
+        {69, D<&ISaveDataTransferManagerVersion2::CancelSuspendingImport>, "CancelSuspendingImport"},
+        {70, D<&ISaveDataTransferManagerVersion2::CancelSuspendingImport>, "CancelSuspendingImportByAttribute"},
         {80, nullptr, "SwapSecondary"},
     };
     // clang-format on
@@ -272,6 +272,12 @@ Result ISaveDataTransferManagerVersion2::OpenSaveDataDiffExporter(
     std::shared_ptr<Exporter> exporter;
     R_TRY(manager.OpenDiffExporter(&exporter, initial_data, space, save_data_id));
     *out_exporter = std::make_shared<IDivisionExporter>(system, std::move(exporter));
+    R_SUCCEED();
+}
+
+// 69 and 70: olsc cancels an import it had suspended; nothing is ever suspended here, so there is
+// nothing to cancel (an unanswered call filed a fatal 2511-8191 over HOME).
+Result ISaveDataTransferManagerVersion2::CancelSuspendingImport() {
     R_SUCCEED();
 }
 

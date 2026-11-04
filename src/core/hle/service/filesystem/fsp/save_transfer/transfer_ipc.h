@@ -101,6 +101,7 @@ private:
     Result OpenSaveDataDiffExporter(Out<SharedPointer<IDivisionExporter>> out_exporter,
                                     InBuffer<BufferAttr_HipcMapAlias> initial_data,
                                     FileSys::SaveDataSpaceId space, u64 save_data_id);
+    Result CancelSuspendingImport();
     void OpenSaveDataImporter(HLERequestContext& ctx);
 
     TransferManager manager;
