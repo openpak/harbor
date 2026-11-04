@@ -46,8 +46,8 @@ NSD::NSD(Core::System& system_, const char* name) : ServiceFramework{system_, na
         {15, &NSD::SetChangeEnvironmentIdentifierDisabled, "SetChangeEnvironmentIdentifierDisabled"},
         {20, &NSD::Resolve, "Resolve"},
         {21, &NSD::ResolveEx, "ResolveEx"},
-        {30, nullptr, "GetNasServiceSetting"},
-        {31, nullptr, "GetNasServiceSettingEx"},
+        {30, &NSD::GetNasServiceSetting, "GetNasServiceSetting"},
+        {31, &NSD::GetNasServiceSettingEx, "GetNasServiceSettingEx"},
         {40, nullptr, "GetNasRequestFqdn"},
         {41, nullptr, "GetNasRequestFqdnEx"},
         {42, nullptr, "GetNasApiFqdn"},
@@ -121,6 +121,34 @@ void NSD::ResolveEx(HLERequestContext& ctx) {
     }
 
     ctx.WriteBuffer(fqdn_out);
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push(ResultSuccess);
+}
+
+// 30 and 31: the Nintendo Account service a title names (an input string) gives a setting of
+// 0x108 bytes. A console that has no entry for the name answers with an error, and Stumble Guys
+// turned that into 2511-8191 on its first button press. Harbor has no per-title list, so the
+// setting is all zero and the name is logged, which is what the title needs to go on and what the
+// next step to learn is.
+static void WriteNasServiceSetting(HLERequestContext& ctx) {
+    const std::string name = Common::StringFromBuffer(ctx.ReadBuffer(0));
+    LOG_WARNING(Service,
+                "unknown contract: nsd GetNasServiceSetting name='{}' (buffer {} bytes); "
+                "answered with an empty setting",
+                name, ctx.GetWriteBufferSize());
+    std::array<u8, 0x108> setting{};
+    ctx.WriteBuffer(setting.data(), std::min(setting.size(), ctx.GetWriteBufferSize()));
+}
+
+void NSD::GetNasServiceSetting(HLERequestContext& ctx) {
+    WriteNasServiceSetting(ctx);
+    IPC::ResponseBuilder rb{ctx, 2};
+    rb.Push(ResultSuccess);
+}
+
+void NSD::GetNasServiceSettingEx(HLERequestContext& ctx) {
+    WriteNasServiceSetting(ctx);
     IPC::ResponseBuilder rb{ctx, 4};
     rb.Push(ResultSuccess);
     rb.Push(ResultSuccess);

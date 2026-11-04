@@ -25,6 +25,8 @@ private:
     void ResolveEx(HLERequestContext& ctx);
     void GetEnvironmentIdentifier(HLERequestContext& ctx);
     void GetDeviceId(HLERequestContext& ctx);
+    void GetNasServiceSetting(HLERequestContext& ctx);
+    void GetNasServiceSettingEx(HLERequestContext& ctx);
     void GetApplicationServerEnvironmentType(HLERequestContext& ctx);
 };
 
