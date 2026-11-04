@@ -97,6 +97,14 @@ constexpr const char* BaasClientId = "8f849b5d34778d8e";
 
 constexpr int TimeoutSeconds = 20;
 
+// A connect that gets no answer is tried again on a fresh socket (a new source port) a few times
+// before it counts as failed. Two consoles on this PC lost whole 20 s connects at the same
+// moments while the same address answered a hundred probes in a row, so the loss is on a path or
+// a NAT entry of one four-tuple, which a new port steps around. Nothing was sent, so repeating
+// is safe for every method.
+constexpr int ConnectAttemptSeconds = 6;
+constexpr int ConnectAttempts = 3;
+
 // Three renewals inside the lease the server hands out, so one lost request is not a person
 // blinking offline.
 constexpr int HeartbeatSeconds = 10;
@@ -488,22 +496,58 @@ bool EnsureClientCertificate(const Endpoint& endpoint) {
     return ok;
 }
 
+/// httplib's client with the connect retry above on every request method.
+class RetryClient {
+public:
+    RetryClient(const char* host, int port, const std::string& cert, const std::string& key)
+        : raw(host, port, cert, key) {}
+
+    /// httplib's SSLClient is final, so it is held rather than derived from.
+    httplib::SSLClient raw;
+
+    template <class... Args>
+    httplib::Result Post(Args&&... args) {
+        return Retried([&] { return raw.Post(args...); });
+    }
+    template <class... Args>
+    httplib::Result Get(Args&&... args) {
+        return Retried([&] { return raw.Get(args...); });
+    }
+    template <class... Args>
+    httplib::Result Patch(Args&&... args) {
+        return Retried([&] { return raw.Patch(args...); });
+    }
+    httplib::Result send(const httplib::Request& request) {
+        return Retried([&] { return raw.send(request); });
+    }
+
+private:
+    template <class Call>
+    httplib::Result Retried(Call&& call) {
+        httplib::Result result = call();
+        for (int attempt = 1; attempt < ConnectAttempts && !result &&
+                              result.error() == httplib::Error::ConnectionTimeout;
+             ++attempt) {
+            LOG_WARNING(WebService, "[OpenPak] connect got no answer in {} s; retry {} of {}",
+                        ConnectAttemptSeconds, attempt, ConnectAttempts - 1);
+            result = call();
+        }
+        return result;
+    }
+};
+
 /// An HTTPS client for one Nintendo hostname that reaches the console server instead. The url
 /// keeps the Nintendo name so SNI and the Host header carry it, while the socket goes to the
 /// console server. Always verified against the pinned OpenPak CA: without one nothing connects.
-std::unique_ptr<httplib::SSLClient> MakeClient(const Endpoint& endpoint, const char* host) {
-    auto client = std::make_unique<httplib::SSLClient>(host, endpoint.port,
-                                                       DevicePath(endpoint, "pem").string(),
-                                                       DevicePath(endpoint, "key").string());
+void ConfigureClient(httplib::SSLClient& client, const Endpoint& endpoint, const char* host) {
+    client.set_hostname_addr_map({{host, endpoint.host}});
+    client.set_ca_cert_path(endpoint.ca_path);
+    client.enable_server_certificate_verification(true);
 
-    client->set_hostname_addr_map({{host, endpoint.host}});
-    client->set_ca_cert_path(endpoint.ca_path);
-    client->enable_server_certificate_verification(true);
-
-    client->set_connection_timeout(TimeoutSeconds, 0);
-    client->set_read_timeout(TimeoutSeconds, 0);
-    client->set_write_timeout(TimeoutSeconds, 0);
-    client->set_follow_location(false);
+    client.set_connection_timeout(ConnectAttemptSeconds, 0);
+    client.set_read_timeout(TimeoutSeconds, 0);
+    client.set_write_timeout(TimeoutSeconds, 0);
+    client.set_follow_location(false);
 
     httplib::Headers headers;
     if (std::string header = Platform::ClientHeader(); !header.empty()) {
@@ -513,10 +557,16 @@ std::unique_ptr<httplib::SSLClient> MakeClient(const Endpoint& endpoint, const c
         headers.emplace("X-OpenPak-Console-Session", ConsoleSession());
     }
     if (!headers.empty()) {
-        client->set_default_headers(std::move(headers));
+        client.set_default_headers(std::move(headers));
     }
+}
 
-    return client;
+std::unique_ptr<RetryClient> MakeClient(const Endpoint& endpoint, const char* host) {
+    auto holder = std::make_unique<RetryClient>(host, endpoint.port,
+                                                DevicePath(endpoint, "pem").string(),
+                                                DevicePath(endpoint, "key").string());
+    ConfigureClient(holder->raw, endpoint, host);
+    return holder;
 }
 
 httplib::Headers Bearer(const std::string& token) {
@@ -660,7 +710,8 @@ std::optional<nlohmann::json> Parsed(const httplib::Result& result, std::string_
     if (!result) {
         LOG_WARNING(WebService, "[OpenPak] {} did not reach the server: {}", what,
                     httplib::to_string(result.error()));
-        if (result.error() == httplib::Error::Connection) {
+        if (result.error() == httplib::Error::Connection ||
+            result.error() == httplib::Error::ConnectionTimeout) {
             LogConnectFailure();
         }
         return std::nullopt;
@@ -1296,7 +1347,11 @@ std::unique_ptr<httplib::SSLClient> detail::MakeClientFor(const std::string& hos
     State& state = Get();
     const Endpoint endpoint = EndpointSnapshot(state);
     EnsureClientCertificate(endpoint);
-    return MakeClient(endpoint, host.c_str());
+    auto client = std::make_unique<httplib::SSLClient>(host, endpoint.port,
+                                                       DevicePath(endpoint, "pem").string(),
+                                                       DevicePath(endpoint, "key").string());
+    ConfigureClient(*client, endpoint, host.c_str());
+    return client;
 }
 
 std::string detail::ServerKey() {
