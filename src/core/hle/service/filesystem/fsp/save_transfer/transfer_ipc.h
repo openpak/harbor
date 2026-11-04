@@ -61,6 +61,7 @@ private:
     Result OpenSaveDataDiffChunkIterator(Out<SharedPointer<IChunkIterator>> out_iterator);
     Result OpenSaveDataChunkExporter(Out<SharedPointer<IChunkExporter>> out_exporter, u32 id);
     Result CancelExport();
+    Result SuspendExport();
     Result GetInitialDataMac(Out<Key128> out_mac);
     Result FinalizeExport();
     Result GetInitialDataMacKeyGeneration(Out<s32> out_generation);

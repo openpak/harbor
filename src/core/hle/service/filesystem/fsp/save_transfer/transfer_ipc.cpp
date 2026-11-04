@@ -83,7 +83,7 @@ IDivisionExporter::IDivisionExporter(Core::System& system_, std::shared_ptr<Expo
         {16, D<&IDivisionExporter::OpenSaveDataDiffChunkIterator>, "OpenSaveDataDiffChunkIterator"},
         {48, D<&IDivisionExporter::OpenSaveDataChunkExporter>, "OpenSaveDataChunkExporter"},
         {66, D<&IDivisionExporter::CancelExport>, "CancelExport"},
-        {67, nullptr, "SuspendExport"},
+        {67, D<&IDivisionExporter::SuspendExport>, "SuspendExport"},
         {71, D<&IDivisionExporter::GetInitialDataMac>, "GetInitialDataMac"},
         {72, D<&IDivisionExporter::FinalizeExport>, "FinalizeExport"},
         {73, D<&IDivisionExporter::GetInitialDataMacKeyGeneration>, "GetInitialDataMacKeyGeneration"},
@@ -123,6 +123,12 @@ Result IDivisionExporter::OpenSaveDataChunkExporter(
 }
 
 Result IDivisionExporter::CancelExport() {
+    R_SUCCEED();
+}
+
+// olsc suspends an export it will not finish now (a failed upload); nothing is held that needs
+// stopping, and answering it keeps the firmware from filing a fatal 2511-8191 over HOME.
+Result IDivisionExporter::SuspendExport() {
     R_SUCCEED();
 }
 
