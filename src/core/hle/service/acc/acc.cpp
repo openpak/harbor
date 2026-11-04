@@ -232,7 +232,7 @@ public:
             {112, nullptr, "InvalidateTokenCache"}, // 4.0.0 - 6.2.0
             {113, &IManagerForSystemService::GetServiceEntryRequirementCacheForOnlinePlay, "GetServiceEntryRequirementCacheForOnlinePlay"}, // 6.1.0+
             {120, &IManagerForSystemService::GetNintendoAccountId, "GetNintendoAccountId"},
-            {121, nullptr, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
+            {121, &IManagerForSystemService::CalculateNintendoAccountAuthenticationFingerprint, "CalculateNintendoAccountAuthenticationFingerprint"}, // 9.0.0+
             {131, &IManagerForSystemService::RefreshUserResourceAsync, "RefreshNintendoAccountUserResourceCacheAsync"},
             {132, &IManagerForSystemService::RefreshUserResourceIfElapsedAsync, "RefreshNintendoAccountUserResourceCacheAsyncIfSecondsElapsed"},
             {133, nullptr, "GetNintendoAccountVerificationUrlCache"}, // 9.0.0+
@@ -424,6 +424,37 @@ private:
         IPC::ResponseBuilder rb{ctx, 4};
         rb.Push(ResultSuccess);
         rb.Push(account->id);
+    }
+
+    // 121: nim asks for it before a shop service access (a title's first online step on a
+    // console that sells it) and a console without it files 2511-8191. The fingerprint is only
+    // compared with itself, so it is a fixed 16 bytes made from the Nintendo Account id; the
+    // layout of the reply is not documented, so the bytes go in the raw data (0x20, more than any
+    // fingerprint size) and in an output buffer when the client sent one.
+    void CalculateNintendoAccountAuthenticationFingerprint(HLERequestContext& ctx) {
+        std::optional<OpenPakAccount::NintendoAccountInfo> account;
+        const Result result = NintendoAccountOf(account_id, account);
+        LOG_DEBUG(Service_ACC, "called, linked={}", result.IsSuccess());
+        if (result.IsError()) {
+            PushResult(ctx, result);
+            return;
+        }
+        const u64 id = account->id;
+        std::array<u64, 4> fingerprint{
+            id ^ 0x9E3779B97F4A7C15ULL,
+            (id << 21 | id >> 43) * 0xC2B2AE3D27D4EB4FULL,
+            (id << 7 | id >> 57) ^ 0x165667B19E3779F9ULL,
+            (id << 33 | id >> 31) * 0x27D4EB2F165667C5ULL,
+        };
+        if (ctx.CanWriteBuffer() && ctx.GetWriteBufferSize() > 0) {
+            ctx.WriteBuffer(fingerprint.data(),
+                            std::min<std::size_t>(sizeof(fingerprint), ctx.GetWriteBufferSize()));
+        }
+        IPC::ResponseBuilder rb{ctx, 10};
+        rb.Push(ResultSuccess);
+        for (const u64 word : fingerprint) {
+            rb.Push(word);
+        }
     }
 
     // 136: the Nintendo Account id plus the module's users/me cache as a NasUserBase in the 0x1A
