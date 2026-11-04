@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 tobagin
 // SPDX-License-Identifier: AGPL-3.0-only
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 
@@ -18,6 +19,7 @@ std::atomic_bool active{false};
 std::atomic_bool changed{false};
 std::atomic_bool blackout{false};
 std::atomic<float> dim_level{0.0f};
+std::atomic<float> brightness_dim{0.0f};
 } // namespace
 
 void Show() {
@@ -58,7 +60,7 @@ std::atomic_bool has_overlay{false};
 } // namespace
 
 bool AnyLayer() {
-    return active.load() || has_overlay.load() || blackout.load() || dim_level.load() > 0.0f;
+    return active.load() || has_overlay.load() || blackout.load() || DimLevel() > 0.0f;
 }
 
 void Publish(std::shared_ptr<const Frame> frame) {
@@ -129,7 +131,7 @@ std::shared_ptr<const Frame> FrameAt(u64 address) {
         frame->width = 1;
         frame->height = 1;
         // Premultiplied black: only the alpha says how much of the picture is covered.
-        const float level = blackout ? 1.0f : dim_level.load();
+        const float level = blackout ? 1.0f : DimLevel();
         frame->rgba = {0, 0, 0, static_cast<u8>(level * 255.0f + 0.5f)};
         return frame;
     }
@@ -156,8 +158,14 @@ void SetDim(float level) {
     }
 }
 
+void SetBrightnessDim(float level) {
+    if (brightness_dim.exchange(level) != level) {
+        changed = true;
+    }
+}
+
 float DimLevel() {
-    return dim_level.load();
+    return std::max(dim_level.load(), brightness_dim.load());
 }
 
 Tegra::FramebufferConfig MakeShadeLayer() {

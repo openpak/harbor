@@ -86,6 +86,9 @@ void SetBlackout(bool blackout);
 bool Blackout();
 /// idle's dimming: a black layer at `level` (0 none .. 1 black) over the console's picture.
 void SetDim(float level);
+/// lbl's brightness setting as a dim level (0 full brightness .. 1 black), kept apart from idle's
+/// dimming so neither undoes the other. DimLevel() is the larger of the two.
+void SetBrightnessDim(float level);
 float DimLevel();
 /// The shade layer: opaque black for the blackout, premultiplied black at the dim level otherwise.
 Tegra::FramebufferConfig MakeShadeLayer();

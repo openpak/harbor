@@ -105,6 +105,10 @@ void PrepareFaultDump();
 /// frame-pointer backtrace) for `who`. Returns where it starts in the file, for DiscardFaultDump.
 long DumpFault(int sig, void* info, void* ucontext, const char* who);
 
+/// Async-signal-safe: the process is dying of a fault; if the dying path wedges, SIGALRM ends it
+/// in 5 s. Called by the fatal-signal handler and by dynarmic's unhandled-fault path.
+void ArmDeathWatchdog();
+
 /// Async-signal-safe: the fault was handled after all; its dump is dropped.
 void DiscardFaultDump(long start);
 

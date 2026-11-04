@@ -4,15 +4,21 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 
+#include "common/fs/fs_paths.h"
+#include "common/fs/path_util.h"
 #include "common/logging.h"
 #include "core/hle/service/ipc_helpers.h"
 #include "core/hle/service/lbl/lbl.h"
 #include "core/hle/service/server_manager.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
+#include "video_core/host_screen.h"
 
 namespace Service::LBL {
 
@@ -55,6 +61,7 @@ public:
         // clang-format on
 
         RegisterHandlers(functions);
+        LoadFromFile();
     }
 
 private:
@@ -63,15 +70,40 @@ private:
         On = 1,
     };
 
+    // The brightness setting lives in a small file in the console's NAND directory, so each
+    // console keeps its own. The slider dims the host screen (HostScreen::SetBrightnessDim);
+    // the darkest setting stays readable.
+    static std::filesystem::path SettingPath() {
+        return Common::FS::GetEdenPath(Common::FS::EdenPath::NANDDir) / "lbl_brightness";
+    }
+
+    void ApplyToHost() {
+        VideoCore::HostScreen::SetBrightnessDim((1.0f - std::clamp(applied_brightness, 0.0f, 1.0f)) *
+                                                0.8f);
+    }
+
+    void LoadFromFile() {
+        std::ifstream in(SettingPath());
+        float value{};
+        if (in >> value && std::isfinite(value)) {
+            current_brightness = std::clamp(value, 0.0f, 1.0f);
+            applied_brightness = current_brightness;
+        }
+        ApplyToHost();
+    }
+
     void SaveCurrentSetting(HLERequestContext& ctx) {
-        LOG_WARNING(Service_LBL, "(STUBBED) called");
+        LOG_DEBUG(Service_LBL, "called brightness={}", current_brightness);
+        std::ofstream out(SettingPath(), std::ios::trunc);
+        out << current_brightness << '\n';
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
     }
 
     void LoadCurrentSetting(HLERequestContext& ctx) {
-        LOG_WARNING(Service_LBL, "(STUBBED) called");
+        LOG_DEBUG(Service_LBL, "called");
+        LoadFromFile();
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);
@@ -114,6 +146,7 @@ private:
         LOG_DEBUG(Service_LBL, "called");
 
         applied_brightness = current_brightness;
+        ApplyToHost();
 
         IPC::ResponseBuilder rb{ctx, 2};
         rb.Push(ResultSuccess);

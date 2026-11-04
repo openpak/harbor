@@ -878,7 +878,20 @@ long DumpFaultImpl(int sig, siginfo_t* info, void* raw_context, const char* who)
     return start;
 }
 
+/// A fatal signal must end the process. Anything in the dying path can wedge (a log or loader lock
+/// held by the thread that faulted, a slow fsync); SIGALRM at its default action is the backstop
+/// that kills the process after a few seconds whatever that thread is stuck in.
+void ArmDeathWatchdogImpl() {
+    signal(SIGALRM, SIG_DFL);
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGALRM);
+    pthread_sigmask(SIG_UNBLOCK, &set, nullptr);
+    ::alarm(5);
+}
+
 void FatalSignalHandler(int sig, siginfo_t* info, void* raw_context) {
+    ArmDeathWatchdogImpl();
     std::size_t index = 0;
     while (index < FatalSignals.size() && FatalSignals[index] != sig) {
         ++index;
@@ -1269,6 +1282,12 @@ long DumpFault(int sig, void* info, void* ucontext, const char* who) {
     return DumpFaultImpl(sig, static_cast<siginfo_t*>(info), ucontext, who);
 #else
     return -1;
+#endif
+}
+
+void ArmDeathWatchdog() {
+#ifndef _WIN32
+    ArmDeathWatchdogImpl();
 #endif
 }
 
