@@ -837,6 +837,10 @@ static Settings GetSettings(Core::System* system = nullptr) {
 
     // Error
     ret["err"]["applet_auto_close"] = ToBytes(bool{false});
+    // The firmware's nim authenticates an application to the shop (a Nintendo Account authorization,
+    // acc 150) before a title's first shop service access; there is no Nintendo shop here and the
+    // authorization is not implemented, so nim is told to skip it (Stumble Guys: 2511-8191).
+    ret["nim.config"]["skip_application_authentication_on_shop_service_access"] = ToBytes(bool{true});
 
     // [OpenPak] Everything the firmware defines and Harbor does not override.
     if (system != nullptr) {
