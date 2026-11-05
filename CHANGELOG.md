@@ -3,6 +3,10 @@
 Only OpenPak's changes are listed; everything else is upstream Eden. `git log` stays the
 source of truth. Tags are `vX.Y.Z`; rc tags never build.
 
+## v0.3.6 — 2026-11-05
+
+- fsp: ISaveDataDivisionExporter::SuspendExport and ISaveDataTransferManagerVersion2 CancelSuspendingImport answer success (olsc no longer raises 2511-8191 over HOME)
+
 ## v0.3.5 — 2026-11-04
 
 - Account: authorization request shared with the title, Nintendo Account fingerprint, open
