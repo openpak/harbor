@@ -210,6 +210,18 @@ state and wait reason, PC/LR/SP and up to 16 backtrace frames. Lines start with 
 thread running on a core is read live from the core (marked `live context`), others from their saved
 context. Frames show `unknown+0x...` for modules without a symbol table (qlaunch has none).
 
+### Reading what a guest says without its log (`OPENPAK_DUMP_STRINGS`)
+
+A Unity / IL2CPP title writes its log nowhere Harbor can see (no `lm` or `OutputDebugString` traffic), but the
+managed strings it built (exception messages, stack traces, its own log lines) stay in the guest heap until the next
+garbage collection. With `OPENPAK_DUMP_STRINGS=<program id hex>:<text>[,<text>...][;<program id hex>:...]` set when
+Harbor starts (`run-desktop.sh` passes it on), every `threads` dump also scans that program's readable memory for each
+text as UTF-16LE (managed strings; a text starting with `a:` is searched as ASCII too) and logs up to 40 hits per text
+with 500 characters around them: `string scan: <program id> "<text>" utf16 at <address>: ...`, then a
+`string scan: ... N hit(s)` line per text. Run `threads` right after the failure, with texts such as `Exception:`, `[0x0`
+(Mono-style stack frames), `Object reference` or a fragment of the message you expect. `OPENPAK_DUMP_SCAN=<program id
+hex>:<u64 hex>[:<before>:<after>]` does the same for one 64-bit value. Both are off unless set.
+
 Every `svcBreak` logs one `svcBreak:` line first: reason, notification-only flag, info1/info2, the
 Result (as `2xxx-yyyy`) or the buffer contents (up to 0x100 bytes, when the size is at most 0x400),
 and the process, thread, PC and LR.

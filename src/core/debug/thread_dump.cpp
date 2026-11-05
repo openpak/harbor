@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/format.h>
@@ -181,6 +182,104 @@ void ScanGuestMemory(Kernel::KProcess& process) {
     }
 }
 
+// [OpenPak] OPENPAK_DUMP_STRINGS=<program id hex>:<text>[,<text>...][;...]: with the thread dump, find every
+// UTF-16LE (managed strings; ASCII copies too when the text starts with "a:") copy of each text in the program's readable memory and log up to 40
+// hits per text with the surrounding text. For reading what a Unity / IL2CPP guest says without its log
+// (exception messages stay in the managed heap until the next collection): scan for "Exception" or a message
+// fragment right after the failure.
+void ScanGuestStrings(Kernel::KProcess& process, const char* spec) {
+    char* end = nullptr;
+    const u64 program_id = std::strtoull(spec, &end, 16);
+    if (*end != ':' || program_id != process.GetProgramId()) {
+        return;
+    }
+    std::vector<std::string> texts;
+    for (std::size_t pos = 0, next; pos <= std::strlen(end + 1); pos = next + 1) {
+        const std::string rest{end + 1};
+        next = rest.find(',', pos);
+        if (next == std::string::npos) {
+            next = rest.size();
+        }
+        if (next > pos) {
+            texts.push_back(rest.substr(pos, next - pos));
+        }
+    }
+    auto& page_table = process.GetPageTable();
+    auto& memory = process.GetMemory();
+    std::vector<u8> buf;
+    constexpr std::size_t kContext = 500; // characters kept around a hit
+    for (auto text : texts) {
+        bool ascii = false;
+        if (text.rfind("a:", 0) == 0) {
+            ascii = true;
+            text = text.substr(2);
+        }
+        std::string wide;
+        for (const char c : text) {
+            wide.push_back(c);
+            wide.push_back('\0');
+        }
+        u64 addr = GetInteger(page_table.GetAddressSpaceStart());
+        const u64 space_end = addr + page_table.GetAddressSpaceSize();
+        int hits = 0;
+        while (addr < space_end && hits < 40) {
+            Kernel::KMemoryInfo info{};
+            Kernel::Svc::PageInfo page_info{};
+            if (page_table.QueryInfo(&info, &page_info, addr).IsError()) {
+                break;
+            }
+            const auto svc = info.GetSvcMemoryInfo();
+            const u64 next = svc.base_address + svc.size;
+            if (svc.state != Kernel::Svc::MemoryState::Free &&
+                svc.state != Kernel::Svc::MemoryState::Inaccessible &&
+                True(svc.permission & Kernel::Svc::MemoryPermission::Read) && svc.size < (3ULL << 30)) {
+                buf.resize(svc.size);
+                if (memory.ReadBlock(svc.base_address, buf.data(), svc.size)) {
+                    const std::string_view hay{reinterpret_cast<const char*>(buf.data()), buf.size()};
+                    for (int wideness = 1; wideness >= (ascii ? 0 : 1) && hits < 40; --wideness) {
+                        const std::string& needle = wideness ? wide : text;
+                        for (std::size_t at = hay.find(needle); at != std::string_view::npos && hits < 40;
+                             at = hay.find(needle, at + 1)) {
+                            std::string out;
+                            const std::size_t from = at > kContext * (wideness + 1) / 2 ? at - kContext * (wideness + 1) / 2 : 0;
+                            for (std::size_t i = from; i < buf.size() && out.size() < kContext * 2; i += wideness + 1) {
+                                const u8 c = buf[i];
+                                out.push_back(c >= 0x20 && c < 0x7f ? static_cast<char>(c) : '.');
+                            }
+                            LOG_INFO(Core, "string scan: {:016x} \"{}\" {} at {:#x}: {}", program_id, text,
+                                     wideness ? "utf16" : "ascii", svc.base_address + at, out);
+                            ++hits;
+                        }
+                    }
+                }
+            }
+            if (next <= addr) {
+                break;
+            }
+            addr = next;
+        }
+        LOG_INFO(Core, "string scan: {:016x} \"{}\" {} hit(s)", program_id, text, hits);
+    }
+}
+
+void ScanGuestStrings(Kernel::KProcess& process) {
+    const char* specs = std::getenv("OPENPAK_DUMP_STRINGS");
+    if (specs == nullptr) {
+        return;
+    }
+    std::string all{specs};
+    std::size_t start = 0;
+    while (start < all.size()) {
+        const auto stop = all.find(';', start);
+        const std::string one = all.substr(start, stop == std::string::npos ? std::string::npos : stop - start);
+        ScanGuestStrings(process, one.c_str());
+        if (stop == std::string::npos) {
+            break;
+        }
+        start = stop + 1;
+    }
+}
+
 } // namespace
 
 void LogGuestThreads(System& system) {
@@ -206,6 +305,7 @@ void LogGuestThreads(System& system) {
             LOG_INFO(Core, "{}", DescribeThread(kernel, *process, thread));
         }
         ScanGuestMemory(*process);
+        ScanGuestStrings(*process);
     }
     LOG_INFO(Core, "thread dump: end");
 }

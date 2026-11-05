@@ -3,6 +3,11 @@
 Only OpenPak's changes are listed; everything else is upstream Eden. `git log` stays the
 source of truth. Tags are `vX.Y.Z`; rc tags never build.
 
+## v0.3.7 — 2026-11-05
+
+- Test harness: `OPENPAK_DUMP_STRINGS` (with `threads`) scans a guest program's memory for text, UTF-16 or ASCII, to read
+  exception messages and stack traces a Unity title never logs; `run-desktop.sh` passes it and `OPENPAK_DUMP_SCAN` on
+
 ## v0.3.6 — 2026-11-05
 
 - fsp: ISaveDataDivisionExporter::SuspendExport and ISaveDataTransferManagerVersion2 CancelSuspendingImport answer success (olsc no longer raises 2511-8191 over HOME)
